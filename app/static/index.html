@@ -376,6 +376,16 @@
     <!-- Full-viewport overlay shown while user holds a drag over the window.
          It receives the drop event and hands off to the JS drop handler.
          aria-hidden keeps it invisible to screen readers when inactive. -->
+    <!-- ═══ Embed Progress Banner ═══ -->
+    <!-- Shown (fixed bottom bar) while Phase-2 metadata embedding is running.
+         Keeps the user informed even if they scroll away from the status bar.
+         JS manages visibility via .hidden class. -->
+    <div id="embed-banner" class="embed-banner hidden" role="status" aria-live="polite" aria-atomic="false">
+        <span class="embed-spinner" aria-hidden="true"></span>
+        <span id="embed-banner-text">Embedding metadata…</span>
+        <span class="embed-banner-warning">⚠ Do not close or navigate away</span>
+    </div>
+
     <div id="drop-overlay" class="drop-overlay" aria-hidden="true">
         <div class="drop-overlay-inner">
             <svg class="drop-overlay-icon" viewBox="0 0 64 64" fill="none"

@@ -683,6 +683,40 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 })();
 
+// ═══ Embed-in-progress guard ═══
+// Tracks whether Phase-2 metadata embedding is currently running.
+// Used to:
+//   1. Show/update the sticky bottom banner.
+//   2. Warn before the user closes or navigates away (beforeunload).
+//   3. Prefix the window title so it's visible in the taskbar.
+let _embedInProgress = false;
+const _ORIG_TITLE = document.title;
+
+// Register once at startup. The handler is a no-op when no embed is running.
+window.addEventListener('beforeunload', (e) => {
+    if (!_embedInProgress) return;
+    // Standard pattern: preventDefault + returnValue triggers the browser's
+    // built-in "Leave site?" dialog. Custom messages are blocked by all
+    // modern browsers for security reasons.
+    e.preventDefault();
+    e.returnValue = '';
+});
+
+function _setEmbedBanner(text) {
+    const banner = document.getElementById('embed-banner');
+    const label  = document.getElementById('embed-banner-text');
+    if (!banner || !label) return;
+    label.textContent = text;
+    banner.classList.remove('hidden');
+}
+
+function _clearEmbedBanner() {
+    const banner = document.getElementById('embed-banner');
+    if (banner) banner.classList.add('hidden');
+    document.title = _ORIG_TITLE;
+    _embedInProgress = false;
+}
+
 // ═══ Privacy Mode ═══
 function togglePrivacyMode() {
     privacyMode = !privacyMode;
@@ -1587,6 +1621,11 @@ async function _pollEmbedStatus(jobId, total) {
     const MAX_POLLS   = 300;  // 10 minutes safety cap (300 × 2 s)
     let polls = 0;
 
+    // Mark embedding as active — enables beforeunload guard and banner
+    _embedInProgress = true;
+    _setEmbedBanner(`Embedding metadata — 0 of ${total} files…`);
+    document.title = `⏳ Embedding (0/${total}) — Adult Media Manager`;
+
     async function tick() {
         polls++;
         try {
@@ -1597,12 +1636,14 @@ async function _pollEmbedStatus(jobId, total) {
                 return;
             }
             const job = await res.json();
-            showStatus(
-                t('status.embedding', { done: job.done, total: job.total }),
-                'info'
-            );
+            const statusText = t('status.embedding', { done: job.done, total: job.total });
+            showStatus(statusText, 'info');
             progressFill.style.width =
                 job.total > 0 ? `${Math.round((job.done / job.total) * 100)}%` : '100%';
+
+            // Keep the banner and title in sync with progress
+            _setEmbedBanner(`Embedding metadata — ${job.done} of ${job.total} files…`);
+            document.title = `⏳ Embedding (${job.done}/${job.total}) — Adult Media Manager`;
 
             if (job.complete || polls >= MAX_POLLS) {
                 _finishEmbedPolling(job.warnings);
@@ -1625,6 +1666,8 @@ async function _pollEmbedStatus(jobId, total) {
  * @param {Array|null} warnings  - Array of {path, warning} or null
  */
 function _finishEmbedPolling(warnings) {
+    // Dismiss the sticky banner and release the beforeunload guard
+    _clearEmbedBanner();
     statusBar.classList.add('hidden');
     progressFill.style.width = '0%';
 
