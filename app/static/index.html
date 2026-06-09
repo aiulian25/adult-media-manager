@@ -1,0 +1,396 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Adult Media Manager</title>
+    <link rel="icon" type="image/svg+xml" href="/Adult%20Media%20Manager.png">
+    <link rel="stylesheet" href="/static/style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+</head>
+<body>
+    <!-- Background -->
+    <div class="bg-blobs">
+        <div class="blob blob-1"></div>
+        <div class="blob blob-2"></div>
+        <div class="blob blob-3"></div>
+    </div>
+
+    <div class="app">
+        <!-- ═══ Top Bar ═══ -->
+        <header class="glass-panel topbar">
+            <div class="topbar-left">
+                <img src="/Adult%20Media%20Manager.png" alt="Adult Media Manager" class="logo-icon" width="28" height="28" style="border-radius:6px; display:none;" onerror="this.style.display='none'">
+                <span class="topbar-title" id="btn-home" title="New scan / Reset">🔞 Adult Media Manager</span>
+            </div>
+            <div class="topbar-center">
+                <div class="toolbar">
+                    <div class="toolbar-group">
+                        <label class="toolbar-label" data-i18n="toolbar.source">Source</label>
+                        <select id="datasource" class="glass-select">
+                            <option value="tpdb">ThePornDB</option>
+                            <option value="stashdb" selected>StashDB</option>
+                        </select>
+                    </div>
+                    <div class="toolbar-group">
+                        <label class="toolbar-label" data-i18n="toolbar.action">Action</label>
+                        <select id="action" class="glass-select">
+                            <option value="test" data-i18n="toolbar.action.test">Test (Dry Run)</option>
+                            <option value="move" data-i18n="toolbar.action.move">Move</option>
+                            <option value="copy" data-i18n="toolbar.action.copy">Copy</option>
+                            <option value="hardlink" data-i18n="toolbar.action.hardlink">Hard Link</option>
+                            <option value="symlink" data-i18n="toolbar.action.symlink">Symlink</option>
+                        </select>
+                    </div>
+                    <div class="toolbar-group template-group">
+                        <label class="toolbar-label" data-i18n="toolbar.template">Template</label>
+                        <input type="text" id="template" class="glass-input mono"
+                               value="{site}/{performer}/{site}.{date}.{scene}.{quality}" spellcheck="false">
+                        <div class="template-presets">
+                            <button class="preset-btn" data-template="{site}/{performer}/{site}.{date}.{scene}.{quality}" title="Site/Date Organized">Site</button>
+                            <button class="preset-btn" data-template="{performer}/{site} - {scene} ({date})" title="Performer Focus">Performer</button>
+                            <button class="preset-btn" data-template="{site}/{year}/{date}.{scene}" title="Studio Organized">Studio</button>
+                            <button class="preset-btn" data-template="{performer} - {scene} ({site})" title="Simple">Simple</button>
+                        </div>
+                    </div>
+                    <div class="toolbar-group" style="align-self:flex-end;padding-bottom:2px;">
+                        <label class="toolbar-label" style="display:flex;align-items:center;gap:6px;cursor:pointer;user-select:none;">
+                            <input type="checkbox" id="flat-rename" checked style="accent-color:var(--primary);width:14px;height:14px;">
+                            <span data-i18n="toolbar.no_subfolders">No subfolders</span>
+                        </label>
+                    </div>
+                </div>
+            </div>
+            <div class="topbar-right">
+<!-- lang-select intentionally has only English; the element is kept so
+                     the JS locale loader still functions if more locales are added later. -->
+                <select id="lang-select" class="glass-btn" title="Language" style="cursor:pointer;padding:.35rem .6rem;font-size:.8rem;background:transparent;border:1px solid rgba(255,255,255,.18);color:inherit;border-radius:8px;display:none;">
+                    <option value="en">EN</option>
+                </select>
+                <button id="btn-settings" class="glass-btn" title="API Key Settings">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="12" cy="12" r="3"/>
+                        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+                    </svg>
+                    <span>Settings</span>
+                </button>
+                <button id="btn-privacy" class="glass-btn" title="Toggle privacy mode (blur thumbnails)">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+                        <circle cx="12" cy="12" r="3"/>
+                    </svg>
+                    <span data-i18n="nav.privacy">Privacy</span>
+                </button>
+                <button id="btn-history" class="glass-btn" title="View rename history">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M3 3v5h5M3.05 13A9 9 0 1 0 6 5.3L3 8"/>
+                        <path d="M12 7v5l4 2"/>
+                    </svg>
+                    <span data-i18n="nav.history">History</span>
+                </button>
+                <button id="btn-rename" class="glass-btn btn-rename" disabled>
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                        <path d="M20 6 9 17l-5-5"/>
+                    </svg>
+                    <span data-i18n="nav.rename">Rename</span>
+                </button>
+            </div>
+        </header>
+
+        <!-- ═══ Scan Bar ═══ -->
+        <div class="glass-panel scanbar">
+            <svg class="scanbar-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+            </svg>
+            <input type="text" id="scan-path" class="scanbar-input" data-i18n-attr="placeholder" data-i18n="scan.placeholder" placeholder="Enter folder path (/mnt/your-media)…" value="/mnt" spellcheck="false">
+            <button id="btn-browse" class="glass-btn" title="Browse server folders">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+                    <circle cx="12" cy="13" r="2"/>
+                </svg>
+                <span data-i18n="nav.browse">Browse</span>
+            </button>
+            <label class="cb-label"><input type="checkbox" id="recursive" checked><span data-i18n="scan.recursive">Recursive</span></label>
+            <button id="btn-scan" class="glass-btn btn-scan" data-i18n="nav.scan">Scan</button>
+            <button id="btn-match" class="glass-btn btn-match" data-i18n="nav.match" disabled>Match</button>
+        </div>
+
+        <!-- ═══ Status ═══ -->
+        <div id="status-bar" class="statusbar hidden">
+            <span id="status-text"></span>
+            <div class="progress-track"><div class="progress-fill" id="progress-fill"></div></div>
+        </div>
+
+        <!-- ═══ Results Area ═══ -->
+        <div class="results-container" id="results-container">
+            <div class="welcome-message">
+                <h2>🔞 Welcome to Adult Media Manager</h2>
+                <p>Scan a folder to get started organizing your adult media collection.</p>
+                <p class="privacy-notice">⚠️ <strong>Privacy Mode:</strong> Thumbnails are blurred by default. Click the Privacy button to toggle.</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- ═══ Settings Modal ═══ -->
+    <div id="settings-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="settings-modal-title">
+        <div class="modal-content glass-panel settings-modal-card">
+            <div class="modal-header">
+                <h3 id="settings-modal-title">API Key Settings</h3>
+                <button class="modal-close" id="settings-modal-close" aria-label="Close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p class="settings-hint" id="settings-hint-text">
+                    Keys take effect immediately — no restart needed.
+                </p>
+
+                <!-- TPDB -->
+                <div class="settings-key-row">
+                    <div class="settings-key-header">
+                        <span class="settings-key-label">ThePornDB (TPDB) API key</span>
+                        <span id="settings-tpdb-badge" class="settings-badge settings-badge-inactive">Inactive</span>
+                    </div>
+                    <p class="settings-key-desc">
+                        Required for TPDB metadata matching.
+                        Get a free key at <a href="https://theporndb.net/" target="_blank" rel="noopener">theporndb.net</a>.
+                    </p>
+                    <div class="settings-input-wrap">
+                        <input type="password" id="settings-tpdb-key"
+                               class="glass-input settings-key-input"
+                               placeholder="••••••• (leave blank to keep current)"
+                               autocomplete="off" spellcheck="false">
+                        <button type="button" class="settings-eye-btn" data-target="settings-tpdb-key" aria-label="Show/hide key">
+                            <svg class="eye-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+                                <circle cx="12" cy="12" r="3"/>
+                            </svg>
+                        </button>
+                    </div>
+                    <p id="settings-tpdb-source" class="settings-source-note"></p>
+                </div>
+
+                <!-- StashDB -->
+                <div class="settings-key-row">
+                    <div class="settings-key-header">
+                        <span class="settings-key-label">StashDB API key</span>
+                        <span id="settings-stashdb-badge" class="settings-badge settings-badge-inactive">Inactive</span>
+                    </div>
+                    <p class="settings-key-desc">
+                        Free, community-driven database.
+                        Register at <a href="https://stashdb.org/register" target="_blank" rel="noopener">stashdb.org</a>
+                        (invite code: <code>3bf7c4b8-b7a6-45b8-a8a6-8b38c10b8fa6</code>).
+                        After login, click your username → copy the API key.
+                    </p>
+                    <div class="settings-input-wrap">
+                        <input type="password" id="settings-stashdb-key"
+                               class="glass-input settings-key-input"
+                               placeholder="••••••• (leave blank to keep current)"
+                               autocomplete="off" spellcheck="false">
+                        <button type="button" class="settings-eye-btn" data-target="settings-stashdb-key" aria-label="Show/hide key">
+                            <svg class="eye-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+                                <circle cx="12" cy="12" r="3"/>
+                            </svg>
+                        </button>
+                    </div>
+                    <p id="settings-stashdb-source" class="settings-source-note"></p>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button id="settings-cancel" class="btn btn-secondary">Cancel</button>
+                <button id="settings-save" class="btn btn-primary">Save &amp; Apply</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ═══ Confirm Modal ═══ -->
+    <div id="confirm-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="confirm-modal-title">
+        <div class="modal-content glass-panel" style="max-width:420px">
+            <div class="modal-header">
+                <h3 id="confirm-modal-title" data-i18n="confirm.title">Confirm</h3>
+            </div>
+            <div class="modal-body">
+                <p id="confirm-modal-message" style="margin:0 0 1.2rem;white-space:pre-wrap"></p>
+                <div style="display:flex;gap:.8rem;justify-content:flex-end">
+                    <button id="confirm-modal-cancel" class="btn btn-secondary" data-i18n="confirm.cancel">Cancel</button>
+                    <button id="confirm-modal-ok" class="btn btn-primary" data-i18n="confirm.ok">Confirm</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ═══ Rename Preview Modal ═══ -->
+    <!-- Shown automatically before any non-test rename so the user sees
+         every From→To path before committing. Replaces window.confirm(). -->
+    <div id="preview-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="preview-modal-title">
+        <div class="modal-content glass-panel" style="max-width:780px;width:95vw">
+            <div class="modal-header">
+                <h3 id="preview-modal-title" data-i18n="preview_modal.title">Preview — paths that will change</h3>
+                <button class="modal-close" id="preview-modal-close" aria-label="Cancel">&times;</button>
+            </div>
+            <div class="modal-body" style="padding:0">
+                <div id="preview-modal-summary" style="padding:.6rem 1.2rem;font-size:.85rem;color:var(--text-muted);border-bottom:1px solid rgba(255,255,255,.08)"></div>
+                <div id="preview-modal-list" style="max-height:55vh;overflow-y:auto;padding:1rem 1.2rem;display:flex;flex-direction:column;gap:.5rem"></div>
+            </div>
+            <div class="modal-footer" style="display:flex;gap:.8rem;justify-content:flex-end;padding:.8rem 1.2rem">
+                <button id="preview-modal-cancel" class="btn btn-secondary" data-i18n="preview_modal.cancel">Cancel</button>
+                <button id="preview-modal-confirm" class="btn btn-primary" data-i18n="preview_modal.proceed">Proceed</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ═══ Browse Modal ═══ -->
+    <div id="browse-modal" class="modal hidden">
+        <div class="modal-content glass-panel">
+            <div class="modal-header">
+                <h3 data-i18n="modal.browse_title">Browse</h3>
+                <button class="modal-close" id="modal-close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="browse-mode-toggle" style="margin-bottom: 15px; display: flex; gap: 10px;">
+                    <button id="browse-mode-folder" class="glass-btn active" onclick="updateBrowseSelectionMode('folder')" style="flex: 1;" data-i18n="modal.browse_select_folder">📁 Select Folder</button>
+                    <button id="browse-mode-files" class="glass-btn" onclick="updateBrowseSelectionMode('files')" style="flex: 1;" data-i18n="modal.browse_select_files">📄 Select Files</button>
+                </div>
+                <div style="display:flex;align-items:center;gap:8px;margin-bottom:15px;">
+                    <button id="browse-back" class="glass-btn" onclick="browseBack()" style="padding:5px 11px;font-size:15px;line-height:1;" title="Go back" disabled>&#8592;</button>
+                    <div id="browse-path" class="browse-path" style="margin-bottom:0;flex:1;"></div>
+                </div>
+                <div id="selection-counter" style="display:none; padding: 8px; margin-bottom: 10px; background: rgba(178, 75, 243, 0.2); border-radius: 8px; text-align: center; font-size: 14px;"></div>
+                <div id="browse-list" class="browse-list"></div>
+            </div>
+            <div class="modal-footer">
+                <button id="browse-cancel" class="glass-btn" data-i18n="modal.browse_cancel">Cancel</button>
+                <button id="browse-select" class="glass-btn btn-primary" data-i18n="modal.browse_select">Select Folder</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ═══ History Modal ═══ -->
+    <div id="history-modal" class="modal hidden">
+        <div class="modal-content glass-panel">
+            <div class="modal-header">
+                <h3 data-i18n="modal.history_title">Rename History</h3>
+                <button class="modal-close" id="history-close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div id="history-list" class="history-list"></div>
+            </div>
+            <div class="modal-footer">
+                <button id="history-undo" class="glass-btn" data-i18n="history.undo">Undo Last</button>
+                <button id="history-ok" class="glass-btn btn-primary" data-i18n="modal.history_close">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ═══ Manual Edit Modal ═══ -->
+    <div id="manual-edit-modal" class="modal hidden">
+        <div class="modal-content glass-panel" style="max-width: 800px;">
+            <div class="modal-header">
+                <h3 data-i18n="modal.manual_edit_title">Manual Metadata Entry</h3>
+                <button class="modal-close" id="manual-edit-close">&times;</button>
+            </div>
+            <div class="modal-body" style="max-height: 70vh; overflow-y: auto;">
+                <div style="margin-bottom: 20px;">
+                    <label style="display: block; margin-bottom: 5px; color: var(--text-secondary);">File:</label>
+                    <div id="manual-edit-filename" style="padding: 10px; background: rgba(178, 75, 243, 0.1); border-radius: 8px; font-size: 14px;"></div>
+                </div>
+
+                <div style="margin-bottom: 15px;">
+                    <label style="display: block; margin-bottom: 5px; color: var(--text-secondary);">Scene Title *</label>
+                    <input type="text" id="manual-title" class="glass-input" placeholder="Enter scene title" required>
+                </div>
+
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 15px;">
+                    <div>
+                        <label style="display: block; margin-bottom: 5px; color: var(--text-secondary);">Site/Studio</label>
+                        <div style="position: relative;">
+                            <input type="text" id="manual-site" class="glass-input" placeholder="Type to search studios…" autocomplete="off">
+                            <ul id="site-suggestions" style="display:none; padding:0; list-style:none; background:rgba(20,0,40,0.97); border:1px solid var(--glass-border); border-radius:8px; max-height:200px; overflow-y:auto;"></ul>
+                        </div>
+                    </div>
+                    <div>
+                        <label style="display: block; margin-bottom: 5px; color: var(--text-secondary);">Release Date</label>
+                        <input type="date" id="manual-date" class="glass-input">
+                    </div>
+                </div>
+
+                <div style="margin-bottom: 15px;">
+                    <label style="display: block; margin-bottom: 5px; color: var(--text-secondary);">Performers</label>
+                    <div style="display: flex; gap: 8px; margin-bottom: 8px;">
+                        <input type="text" id="manual-performer-input" class="glass-input" placeholder="Enter performer name" style="flex: 1;">
+                        <button id="manual-add-performer" class="glass-btn">+ Add</button>
+                    </div>
+                    <div id="manual-performers-list" style="display: flex; flex-wrap: wrap; gap: 8px;"></div>
+                </div>
+
+                <div style="margin-bottom: 15px;">
+                    <label style="display: block; margin-bottom: 5px; color: var(--text-secondary);">Tags/Genres</label>
+                    <div style="display: flex; gap: 8px; margin-bottom: 8px; position: relative;">
+                        <input type="text" id="manual-tag-input" class="glass-input" placeholder="Type or pick a tag…" style="flex: 1;" autocomplete="off">
+                        <button id="manual-add-tag" class="glass-btn">+ Add</button>
+                        <ul id="tag-suggestions" style="display:none; padding:0; list-style:none; background:rgba(20,0,40,0.97); border:1px solid var(--glass-border); border-radius:8px; max-height:200px; overflow-y:auto;"></ul>
+                    </div>
+                    <div id="manual-tags-list" style="display: flex; flex-wrap: wrap; gap: 8px;"></div>
+                </div>
+
+                <div style="margin-bottom: 15px;">
+                    <label style="display: block; margin-bottom: 5px; color: var(--text-secondary);">Quality</label>
+                    <select id="manual-quality" class="glass-select">
+                        <option value="">Select quality</option>
+                        <option value="480p">480p</option>
+                        <option value="720p">720p</option>
+                        <option value="1080p">1080p</option>
+                        <option value="1440p">1440p (2K)</option>
+                        <option value="2160p">2160p (4K)</option>
+                    </select>
+                </div>
+
+                <div id="manual-thumbnails-section" style="margin-bottom: 15px; display: none;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                        <label style="color: var(--text-secondary);">Select Thumbnail</label>
+                        <button id="manual-generate-thumbnails" class="glass-btn" style="font-size: 12px;">🎬 Generate Thumbnails</button>
+                    </div>
+                    <div id="manual-thumbnails-grid" style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px;"></div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button id="manual-edit-cancel" class="glass-btn" data-i18n="modal.manual_edit_cancel">Cancel</button>
+                <button id="manual-edit-save" class="glass-btn btn-primary" data-i18n="modal.manual_edit_save">Save Metadata</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ═══ Background Job Indicator ═══ -->
+    <div id="bg-job-indicator" class="bg-job-indicator hidden">
+        <div class="spinner"></div>
+        <div>
+            <div class="bg-job-label">Processing…</div>
+            <div class="bg-job-filename" id="bg-job-filename"></div>
+        </div>
+    </div>
+
+    <!-- ═══ Toast Notification Container ═══ -->
+    <div id="toast-container" class="toast-container"></div>
+
+    <!-- ═══ Drag-and-Drop Overlay ═══ -->
+    <!-- Full-viewport overlay shown while user holds a drag over the window.
+         It receives the drop event and hands off to the JS drop handler.
+         aria-hidden keeps it invisible to screen readers when inactive. -->
+    <div id="drop-overlay" class="drop-overlay" aria-hidden="true">
+        <div class="drop-overlay-inner">
+            <svg class="drop-overlay-icon" viewBox="0 0 64 64" fill="none"
+                 stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <!-- folder shape -->
+                <path d="M4 16a4 4 0 0 1 4-4h14l4 5h30a4 4 0 0 1 4 4v27a4 4 0 0 1-4 4H8a4 4 0 0 1-4-4V16z"/>
+                <!-- arrow -->
+                <line x1="32" y1="44" x2="32" y2="28"/>
+                <polyline points="24 36 32 28 40 36"/>
+            </svg>
+            <p class="drop-overlay-title">Drop here to scan</p>
+            <p class="drop-overlay-subtitle">Folder or video file(s)</p>
+        </div>
+    </div>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>

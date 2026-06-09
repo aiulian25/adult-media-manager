@@ -1,0 +1,121 @@
+{
+  "app.title": "Adult Media Manager",
+
+  "nav.privacy": "Privacy",
+  "nav.history": "History",
+  "nav.rename": "Rename",
+  "nav.browse": "Browse",
+  "nav.scan": "Scan",
+  "nav.match": "Match",
+
+  "toolbar.source": "Source",
+  "toolbar.action": "Action",
+  "toolbar.template": "Template",
+  "toolbar.no_subfolders": "No subfolders",
+  "toolbar.action.test": "Test (Dry Run)",
+  "toolbar.action.move": "Move",
+  "toolbar.action.copy": "Copy",
+  "toolbar.action.hardlink": "Hard Link",
+  "toolbar.action.symlink": "Symlink",
+
+  "scan.placeholder": "Enter folder path (/mnt/your-media)…",
+  "scan.recursive": "Recursive",
+
+  "home.empty_title": "Ready to Organize",
+  "home.empty_subtitle": "Select a folder and click Scan to detect media files",
+  "home.welcome_title": "Welcome to Adult Media Manager",
+  "home.welcome_subtitle": "Scan a folder to get started organizing your adult media collection.",
+  "home.privacy_notice": "⚠️ Privacy Mode: Thumbnails are blurred by default. Click the Privacy button to toggle.",
+
+  "status.scanning": "Scanning folder…",
+  "status.found": "Found {count} files",
+  "status.matching_start": "Matching file 0 / {total}…",
+  "status.matching_file": "Matching file {done} / {total} — {filename}",
+  "status.matched": "Matched {matched} / {total} files",
+  "status.building_preview": "Building preview…",
+  "status.previewing": "Previewing files…",
+  "status.renaming": "Renaming files…",
+  "status.preview_result": "Preview: {success} / {total} files",
+  "status.renamed_result": "Renamed: {success} / {total} files",
+  "status.renaming_chunk": "Renaming… chunk {chunk} / {total_chunks} ({done} / {total} files)",
+  "status.renamed_total": "Renamed: {success} / {total} files",
+  "status.done_remaining": "Done. {count} file(s) still need manual editing.",
+  "status.embedding": "Embedding metadata… {done} / {total}",
+  "status.no_rename": "No files to rename",
+  "status.browse_select_required": "Please select at least one file or switch to folder mode",
+
+  "error.no_path": "Please enter a path",
+  "error.rename_failed": "Error: {message}",
+  "error.preview": "Preview error: {message}",
+  "error.match_failed": "Match failed — connection error",
+  "error.save_timeout": "Error saving metadata: Request timed out — the file may be too large or the server is busy. Try again.",
+  "error.save_network": "Error saving metadata: Could not reach the server. Check that the container is running and try again.",
+  "error.save_generic": "Error saving metadata: {message}",
+
+  "match.no_match": "No match found",
+  "match.manual_badge": "(Manual)",
+  "match.confidence": "{pct}% match",
+  "match.edit_btn": "Edit",
+  "match.select_all": "Select All",
+
+  "privacy.on": "Privacy ON",
+  "privacy.off": "Privacy OFF",
+
+  "confirm.title": "Confirm",
+  "confirm.cancel": "Cancel",
+  "confirm.ok": "Confirm",
+
+  "preview_modal.title": "Preview — paths that will change",
+  "preview_modal.cancel": "Cancel",
+  "preview_modal.proceed": "Proceed",
+
+  "modal.browse_title": "Browse",
+  "modal.browse_select_folder": "📁 Select Folder",
+  "modal.browse_select_files": "📄 Select Files",
+  "modal.browse_select_folder_btn": "Select Folder",
+  "modal.browse_select_files_btn": "Select Files",
+  "modal.browse_cancel": "Cancel",
+  "modal.browse_select": "Select Folder",
+
+  "modal.history_title": "Rename History",
+  "modal.history_close": "Close",
+
+  "history.undo": "Undo Last",
+  "history.no_entries": "No history yet",
+
+  "modal.manual_edit_title": "Manual Metadata Entry",
+  "modal.manual_edit_cancel": "Cancel",
+  "modal.manual_edit_save": "Save Metadata",
+  "manual.file_label": "File:",
+  "manual.scene_title_label": "Scene Title *",
+  "manual.site_label": "Site/Studio",
+  "manual.site_placeholder": "Type to search studios…",
+  "manual.date_label": "Release Date",
+  "manual.performers_label": "Performers",
+  "manual.performers_placeholder": "Enter performer name",
+  "manual.performers_add": "+ Add",
+  "manual.tags_label": "Tags/Genres",
+  "manual.tags_placeholder": "Type or pick a tag…",
+  "manual.tags_add": "+ Add",
+  "manual.quality_label": "Quality",
+  "manual.quality_placeholder": "Select quality",
+  "manual.thumbnails_label": "Select Thumbnail",
+  "manual.thumbnails_generate": "🎬 Generate Thumbnails",
+  "manual.title_placeholder": "Enter scene title",
+
+  "thumbnail.generating": "Generating thumbnails from video…",
+  "thumbnail.error": "Error: {message}",
+
+  "tag.create_new": "Create \"{tag}\"",
+
+  "resume.banner_msg": "A previous rename was interrupted — {count} file{plural} still in queue ({action}).",
+  "resume.btn_resume": "Resume",
+  "resume.btn_discard": "Discard",
+
+  "show_remaining.singular": "Show {count} remaining file",
+  "show_remaining.plural": "Show {count} remaining files",
+
+  "undo.success": "Rename undone successfully!",
+  "undo.none": "No operations to undo"
+}
+

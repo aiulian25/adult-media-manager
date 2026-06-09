@@ -1,0 +1,46 @@
+services:
+  adult-media-manager:
+    image: aiulian25/adult-media-manager:latest
+    container_name: adult-media-manager
+    ports:
+      - "${AMM_PORT:-8887}:${AMM_PORT:-8887}"
+    environment:
+      - PUID=${PUID:-1000}
+      - PGID=${PGID:-1000}
+      - UMASK=${UMASK:-002}
+      # API keys — optional here; add them via the ⚙ Settings page in the UI instead.
+      # Keys set here always take priority over the Settings page.
+      - TPDB_API_KEY=${TPDB_API_KEY:-}
+      - STASHDB_API_KEY=${STASHDB_API_KEY:-}
+      - PRIVACY_MODE=${PRIVACY_MODE:-false}
+      - AMM_HOST=0.0.0.0
+      - AMM_PORT=${AMM_PORT:-8887}
+      - DATA_DIR=/data
+    volumes:
+      # Persistent data: history, settings, API keys saved via UI, embed staging
+      - adult-media-manager-data:/data
+
+      # ── Media directories ──────────────────────────────────────────────────
+      # Mount your media directories here. Use the same path inside and outside
+      # the container so the scan path you type in the UI matches what the
+      # server sees. Add as many mounts as you need.
+
+      # Single directory:
+      # - /path/to/your/media:/path/to/your/media
+
+      # Multiple directories:
+      # - /mnt/nas/adult:/mnt/nas/adult
+      # - /home/user/Downloads:/home/user/Downloads
+
+      # Network mount (NFS/SMB):
+      # - /mnt/nas:/mnt/nas:rw
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  adult-media-manager-data:
+    driver: local

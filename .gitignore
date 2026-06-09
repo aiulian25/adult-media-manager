@@ -1,0 +1,62 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+ENV/
+develop-eggs/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Environment — contains real API keys, never commit
+.env
+.env.local
+.env.*.local
+docker-compose.dev.yml
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Data
+/data/
+*.db
+*.sqlite
+
+# Logs
+*.log
+
+# Node
+node_modules/
+npm-debug.log*
+
+# Build artifacts (distributed via GitHub Releases)
+dist/
+
+# Bundled runtime — downloaded by prepare-build.sh, never committed
+bundled-python/
+bundled-packages/
+
+# Docker override
+docker-compose.override.yml

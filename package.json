@@ -1,0 +1,70 @@
+{
+  "name": "adult-media-manager",
+  "version": "1.0.0",
+  "desktopName": "adult-media-manager.desktop",
+  "description": "Adult Media Manager — Smart metadata organizer for adult content",
+  "main": "electron/main.js",
+  "author": {
+    "name": "Adult Media Manager",
+    "email": "app@adult-media-manager.local"
+  },
+  "homepage": "https://github.com/adult-media-manager/adult-media-manager",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder --linux"
+  },
+  "build": {
+    "appId": "com.adult-media-manager.app",
+    "productName": "Adult Media Manager",
+    "linux": {
+      "target": [
+        { "target": "AppImage", "arch": ["x64"] },
+        { "target": "deb",      "arch": ["x64"] }
+      ],
+      "icon": "build/icons",
+      "category": "AudioVideo",
+      "description": "Adult Media Manager — Scan, match and rename adult media files with metadata from TPDB and StashDB",
+      "syncDesktopName": true
+    },
+    "deb": {
+      "depends": [
+        "libgtk-3-0",
+        "libnotify4",
+        "libnss3",
+        "libxss1",
+        "libxtst6",
+        "xdg-utils",
+        "libatspi2.0-0",
+        "libuuid1",
+        "ffmpeg"
+      ],
+      "afterInstall": "build/postinst.sh",
+      "afterRemove":  "build/postrm.sh"
+    },
+    "files": [
+      "electron/**/*",
+      "app/**/*",
+      "build/icons/**/*",
+      "!app/__pycache__/**",
+      "!**/*.pyc",
+      "!**/__pycache__/**"
+    ],
+    "extraResources": [
+      {
+        "from": "bundled-python",
+        "to":   "bundled-python",
+        "filter": ["**/*"]
+      },
+      {
+        "from": "bundled-packages",
+        "to":   "bundled-packages",
+        "filter": ["**/*"]
+      }
+    ],
+    "asar": false
+  },
+  "devDependencies": {
+    "electron":         "^42.3.3",
+    "electron-builder": "^26.15.2"
+  }
+}
