@@ -67,6 +67,14 @@ query FindByFingerprints($fingerprints: [[FingerprintQueryInput!]!]!) {{
 }}
 """
 
+_Q_FIND_SCENE = f"""
+query FindScene($id: ID!) {{
+  findScene(id: $id) {{
+    {_SCENE_FIELDS}
+  }}
+}}
+"""
+
 
 # ─── OSHash (pure Python, no extra deps) ───────────────────────────────────────
 
@@ -103,6 +111,68 @@ def compute_oshash(file_path: Path) -> Optional[str]:
 
 # ─── pHash via ffmpeg ──────────────────────────────────────────────────────────
 
+def _phash_from_gray_frame(raw: bytes) -> Optional[str]:
+    """
+    Compute a 64-bit DCT perceptual hash from a raw 32×32 greyscale frame.
+
+    Pure CPU work, factored out of compute_phash_ffmpeg so it can be run via
+    asyncio.to_thread and never block the event loop.
+
+    Two optimisations vs. the previous inline implementation, both of which
+    leave the output **bit-identical** for the same input bytes:
+      • Only the top-left 8×8 DCT block is used for the hash, so we compute just
+        those 64 coefficients instead of the full 32×32 matrix (~16× less work).
+        The discarded coefficients never influenced the result.
+      • The cosine factors are precomputed once (8 frequencies × 32 samples =
+        256 cosines) instead of being recomputed inside the innermost loop
+        (~2 million math.cos calls before).
+    The per-term multiply order (img · cos_u · cos_v) and the x→y accumulation
+    order are preserved exactly, so floating-point results match the old code.
+    """
+    import math
+
+    n = 32          # frame is 32×32
+    k = 8           # only the top-left 8×8 DCT block is needed for the hash
+    if len(raw) < n * n:
+        return None
+    pixels = raw[:n * n]
+    img = [[float(pixels[r * n + c]) for c in range(n)] for r in range(n)]
+
+    # cos_t[f][i] = cos(pi * f * (2i+1) / (2n)); same formula on both axes.
+    cos_t = [
+        [math.cos(math.pi * f * (2 * i + 1) / (2 * n)) for i in range(n)]
+        for f in range(k)
+    ]
+
+    # 2D DCT-II restricted to the 8×8 low-frequency block.
+    dct = [[0.0] * k for _ in range(k)]
+    for u in range(k):
+        cu = math.sqrt(1 / n) if u == 0 else math.sqrt(2 / n)
+        cos_u = cos_t[u]
+        for v in range(k):
+            cv = math.sqrt(1 / n) if v == 0 else math.sqrt(2 / n)
+            cos_v = cos_t[v]
+            s = 0.0
+            for x in range(n):
+                row = img[x]
+                cux = cos_u[x]
+                for y in range(n):
+                    s += row[y] * cux * cos_v[y]
+            dct[u][v] = cu * cv * s
+
+    low = [dct[u][v] for u in range(k) for v in range(k)]
+    low_no_dc = low[1:]  # skip DC term at [0][0]
+    median_val = sorted(low_no_dc)[len(low_no_dc) // 2]
+
+    # Binary hash: 64 bits from the full 8×8 block.
+    bits = [1 if val >= median_val else 0 for val in low]
+    hash_int = 0
+    for bit in bits:
+        hash_int = (hash_int << 1) | bit
+
+    return str(hash_int)  # StashDB stores pHash as a decimal integer string
+
+
 async def compute_phash_ffmpeg(file_path: Path) -> Optional[str]:
     """
     Compute a perceptual hash (pHash) of a video by extracting a frame
@@ -112,8 +182,6 @@ async def compute_phash_ffmpeg(file_path: Path) -> Optional[str]:
     or None on error.  Requires ffmpeg in PATH.
     """
     try:
-        import math
-
         # ── Step 1: get duration from ffprobe ────────────────────────────
         probe_cmd = [
             "ffprobe", "-v", "quiet", "-print_format", "json",
@@ -153,38 +221,11 @@ async def compute_phash_ffmpeg(file_path: Path) -> Optional[str]:
         if ff.returncode != 0 or len(raw) < 1024:
             return None
 
-        pixels = list(raw[:1024])  # exactly 32×32
-
-        # ── Step 3: DCT-based pHash ──────────────────────────────────────
-        # Build 32×32 float array
-        n = 32
-        img = [[float(pixels[r * n + c]) for c in range(n)] for r in range(n)]
-
-        # Apply 2D DCT (type-II)
-        dct = [[0.0] * n for _ in range(n)]
-        for u in range(n):
-            cu = (math.sqrt(1 / n) if u == 0 else math.sqrt(2 / n))
-            for v in range(n):
-                cv = (math.sqrt(1 / n) if v == 0 else math.sqrt(2 / n))
-                s = 0.0
-                for x in range(n):
-                    for y in range(n):
-                        s += img[x][y] * math.cos(math.pi * u * (2 * x + 1) / (2 * n)) \
-                                       * math.cos(math.pi * v * (2 * y + 1) / (2 * n))
-                dct[u][v] = cu * cv * s
-
-        # Use top-left 8×8 (excluding DC term at [0][0])
-        low = [dct[u][v] for u in range(8) for v in range(8)]
-        low_no_dc = low[1:]  # skip DC
-        median_val = sorted(low_no_dc)[len(low_no_dc) // 2]
-
-        # Binary hash: 64 bits from the full 8×8 block
-        bits = [1 if v >= median_val else 0 for v in low]
-        hash_int = 0
-        for bit in bits:
-            hash_int = (hash_int << 1) | bit
-
-        return str(hash_int)  # StashDB stores pHash as decimal integer string
+        # ── Step 3: DCT-based pHash (CPU-bound — run off the event loop) ──
+        # The frame is exactly 32×32 greyscale bytes; the hash uses only the
+        # 8×8 low-frequency block.  Offloaded to a worker thread so it never
+        # blocks the loop (matching runs several files concurrently).
+        return await asyncio.to_thread(_phash_from_gray_frame, raw)
 
     except Exception:
         return None
@@ -254,6 +295,16 @@ class StashDBClient:
         except Exception as exc:
             print(f"StashDB search error: {exc}")
             return []
+
+    async def find_scene_by_id(self, scene_id: str) -> Optional[StashDBScene]:
+        """Fetch a single scene by its StashDB UUID (e.g. from a scene URL).
+
+        Returns the parsed scene, or None if it doesn't exist. Raises on a
+        transport/GraphQL error so the caller can surface a clear message.
+        """
+        data = await self._query(_Q_FIND_SCENE, {"id": scene_id})
+        scene = data.get("findScene")
+        return self._parse(scene) if scene else None
 
     async def find_by_fingerprint(
         self,

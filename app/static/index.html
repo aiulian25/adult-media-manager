@@ -43,6 +43,15 @@
                             <option value="symlink" data-i18n="toolbar.action.symlink">Symlink</option>
                         </select>
                     </div>
+                    <div class="toolbar-group">
+                        <label class="toolbar-label" data-i18n="toolbar.metadata">Metadata</label>
+                        <select id="embed-mode" class="glass-select"
+                                title="How metadata is written. Embed in file + NFO (default): write tags INTO the video via FFmpeg AND a matching .nfo sidecar. Smart in-place + NFO: faster in-place tagging for MKV/MP4 where possible (remux otherwise), plus the .nfo. NFO sidecar only: write just the .nfo and leave the video untouched.">
+                            <option value="embed" data-i18n="toolbar.metadata.embed">Embed in file + NFO</option>
+                            <option value="smart" data-i18n="toolbar.metadata.smart">Smart in-place + NFO</option>
+                            <option value="nfo_only" data-i18n="toolbar.metadata.nfo_only">NFO sidecar only</option>
+                        </select>
+                    </div>
                     <div class="toolbar-group template-group">
                         <label class="toolbar-label" data-i18n="toolbar.template">Template</label>
                         <input type="text" id="template" class="glass-input mono"
@@ -53,6 +62,8 @@
                             <button class="preset-btn" data-template="{site}/{year}/{date}.{scene}" title="Studio Organized">Studio</button>
                             <button class="preset-btn" data-template="{performer} - {scene} ({site})" title="Simple">Simple</button>
                         </div>
+                        <div id="template-preview" class="template-preview" aria-live="polite"></div>
+                        <div id="template-warning" class="template-warning" aria-live="polite"></div>
                     </div>
                     <div class="toolbar-group" style="align-self:flex-end;padding-bottom:2px;">
                         <label class="toolbar-label" style="display:flex;align-items:center;gap:6px;cursor:pointer;user-select:none;">
@@ -63,24 +74,15 @@
                 </div>
             </div>
             <div class="topbar-right">
-<!-- lang-select intentionally has only English; the element is kept so
-                     the JS locale loader still functions if more locales are added later. -->
-                <select id="lang-select" class="glass-btn" title="Language" style="cursor:pointer;padding:.35rem .6rem;font-size:.8rem;background:transparent;border:1px solid rgba(255,255,255,.18);color:inherit;border-radius:8px;display:none;">
-                    <option value="en">EN</option>
-                </select>
-                <button id="btn-settings" class="glass-btn" title="API Key Settings">
+<!-- Language is now chosen in the Settings panel (gated behind one Save
+                     button) together with theme + API keys, so the standalone
+                     toolbar selector was removed. -->
+                <button id="btn-settings" class="glass-btn" title="Settings">
                     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                         <circle cx="12" cy="12" r="3"/>
                         <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
                     </svg>
-                    <span>Settings</span>
-                </button>
-                <button id="btn-privacy" class="glass-btn" title="Toggle privacy mode (blur thumbnails)">
-                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
-                        <circle cx="12" cy="12" r="3"/>
-                    </svg>
-                    <span data-i18n="nav.privacy">Privacy</span>
+                    <span data-i18n="nav.settings">Settings</span>
                 </button>
                 <button id="btn-history" class="glass-btn" title="View rename history">
                     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -103,8 +105,8 @@
             <svg class="scanbar-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
             </svg>
-            <input type="text" id="scan-path" class="scanbar-input" data-i18n-attr="placeholder" data-i18n="scan.placeholder" placeholder="Enter folder path (/mnt/your-media)…" value="/mnt" spellcheck="false">
-            <button id="btn-browse" class="glass-btn" title="Browse server folders">
+            <input type="text" id="scan-path" class="scanbar-input" data-i18n-attr="placeholder" data-i18n="scan.placeholder" placeholder="Enter folder path or drag &amp; drop…" spellcheck="false">
+            <button id="btn-browse" class="glass-btn" title="Browse folders">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
                     <circle cx="12" cy="13" r="2"/>
@@ -112,7 +114,10 @@
                 <span data-i18n="nav.browse">Browse</span>
             </button>
             <label class="cb-label"><input type="checkbox" id="recursive" checked><span data-i18n="scan.recursive">Recursive</span></label>
+            <label class="cb-label" title="" data-i18n-attr="title" data-i18n="scan.skip_organized_hint"><input type="checkbox" id="skip-organized"><span data-i18n="scan.skip_organized">Skip organized</span></label>
+            <label class="cb-label" title="" data-i18n-attr="title" data-i18n="match.rematch_hint"><input type="checkbox" id="ignore-cache"><span data-i18n="match.rematch">Re-match</span></label>
             <button id="btn-scan" class="glass-btn btn-scan" data-i18n="nav.scan">Scan</button>
+            <button id="btn-stop-scan" class="glass-btn btn-stop-scan hidden" data-i18n="nav.stop_scan">Stop</button>
             <button id="btn-match" class="glass-btn btn-match" data-i18n="nav.match" disabled>Match</button>
         </div>
 
@@ -127,7 +132,6 @@
             <div class="welcome-message">
                 <h2>🔞 Welcome to Adult Media Manager</h2>
                 <p>Scan a folder to get started organizing your adult media collection.</p>
-                <p class="privacy-notice">⚠️ <strong>Privacy Mode:</strong> Thumbnails are blurred by default. Click the Privacy button to toggle.</p>
             </div>
         </div>
     </div>
@@ -136,10 +140,36 @@
     <div id="settings-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="settings-modal-title">
         <div class="modal-content glass-panel settings-modal-card">
             <div class="modal-header">
-                <h3 id="settings-modal-title">API Key Settings</h3>
+                <h3 id="settings-modal-title" data-i18n="settings.title">Settings</h3>
                 <button class="modal-close" id="settings-modal-close" aria-label="Close">&times;</button>
             </div>
             <div class="modal-body">
+                <!-- ── General preferences ──────────────────────────────── -->
+                <h4 class="settings-section-title" data-i18n="settings.section_general">General</h4>
+
+                <div class="settings-pref-row">
+                    <label class="settings-pref-label" for="settings-lang" data-i18n="settings.language">Language</label>
+                    <select id="settings-lang" class="glass-input settings-select">
+                        <option value="en">English</option>
+                        <option value="de">Deutsch</option>
+                        <option value="es">Español</option>
+                        <option value="fr">Français</option>
+                        <option value="ja">日本語</option>
+                        <option value="pt">Português</option>
+                    </select>
+                </div>
+
+                <div class="settings-pref-row">
+                    <label class="settings-pref-label" for="settings-theme" data-i18n="settings.theme">Theme</label>
+                    <select id="settings-theme" class="glass-input settings-select">
+                        <option value="default" data-i18n="settings.theme_default">Purple Night (default)</option>
+                        <option value="midnight-teal" data-i18n="settings.theme_midnight_teal">Midnight Teal</option>
+                    </select>
+                    <p class="settings-pref-hint" data-i18n="settings.theme_hint">More themes coming soon.</p>
+                </div>
+
+                <!-- ── API keys ─────────────────────────────────────────── -->
+                <h4 class="settings-section-title" data-i18n="settings.section_api">API Keys</h4>
                 <p class="settings-hint" id="settings-hint-text">
                     Keys take effect immediately — no restart needed.
                 </p>
@@ -197,8 +227,8 @@
                 </div>
             </div>
             <div class="modal-footer">
-                <button id="settings-cancel" class="btn btn-secondary">Cancel</button>
-                <button id="settings-save" class="btn btn-primary">Save &amp; Apply</button>
+                <button id="settings-cancel" class="btn btn-secondary" data-i18n="settings.cancel">Cancel</button>
+                <button id="settings-save" class="btn btn-primary" data-i18n="settings.save">Save</button>
             </div>
         </div>
     </div>
@@ -296,6 +326,24 @@
                 </div>
 
                 <div style="margin-bottom: 15px;">
+                    <label style="display: block; margin-bottom: 5px; color: var(--text-secondary);" data-i18n="manual.stashdb_url_label">StashDB Scene URL</label>
+                    <div style="display: flex; gap: 8px;">
+                        <input type="text" id="manual-stashdb-url" class="glass-input" style="flex: 1;" autocomplete="off" data-i18n-attr="placeholder" data-i18n="manual.stashdb_url_placeholder" placeholder="https://stashdb.org/scenes/…">
+                        <button id="manual-stashdb-fetch" class="glass-btn" data-i18n="manual.stashdb_fetch">Fetch</button>
+                    </div>
+                    <small id="manual-stashdb-status" class="manual-stashdb-status" aria-live="polite"></small>
+                </div>
+
+                <div style="margin-bottom: 15px;">
+                    <label style="display: block; margin-bottom: 5px; color: var(--text-secondary);" data-i18n="manual.tpdb_url_label">ThePornDB Scene URL</label>
+                    <div style="display: flex; gap: 8px;">
+                        <input type="text" id="manual-tpdb-url" class="glass-input" style="flex: 1;" autocomplete="off" data-i18n-attr="placeholder" data-i18n="manual.tpdb_url_placeholder" placeholder="https://theporndb.net/scenes/…">
+                        <button id="manual-tpdb-fetch" class="glass-btn" data-i18n="manual.tpdb_fetch">Fetch</button>
+                    </div>
+                    <small id="manual-tpdb-status" class="manual-stashdb-status" aria-live="polite"></small>
+                </div>
+
+                <div style="margin-bottom: 15px;">
                     <label style="display: block; margin-bottom: 5px; color: var(--text-secondary);">Scene Title *</label>
                     <input type="text" id="manual-title" class="glass-input" placeholder="Enter scene title" required>
                 </div>
@@ -305,12 +353,13 @@
                         <label style="display: block; margin-bottom: 5px; color: var(--text-secondary);">Site/Studio</label>
                         <div style="position: relative;">
                             <input type="text" id="manual-site" class="glass-input" placeholder="Type to search studios…" autocomplete="off">
-                            <ul id="site-suggestions" style="display:none; padding:0; list-style:none; background:rgba(20,0,40,0.97); border:1px solid var(--glass-border); border-radius:8px; max-height:200px; overflow-y:auto;"></ul>
+                            <ul id="site-suggestions" style="display:none;"></ul>
                         </div>
                     </div>
                     <div>
                         <label style="display: block; margin-bottom: 5px; color: var(--text-secondary);">Release Date</label>
-                        <input type="date" id="manual-date" class="glass-input">
+                        <input type="date" id="manual-date" class="glass-input" min="1900-01-01">
+                        <small id="manual-date-error" class="field-error" aria-live="polite"></small>
                     </div>
                 </div>
 
@@ -328,7 +377,7 @@
                     <div style="display: flex; gap: 8px; margin-bottom: 8px; position: relative;">
                         <input type="text" id="manual-tag-input" class="glass-input" placeholder="Type or pick a tag…" style="flex: 1;" autocomplete="off">
                         <button id="manual-add-tag" class="glass-btn">+ Add</button>
-                        <ul id="tag-suggestions" style="display:none; padding:0; list-style:none; background:rgba(20,0,40,0.97); border:1px solid var(--glass-border); border-radius:8px; max-height:200px; overflow-y:auto;"></ul>
+                        <ul id="tag-suggestions" style="display:none;"></ul>
                     </div>
                     <div id="manual-tags-list" style="display: flex; flex-wrap: wrap; gap: 8px;"></div>
                 </div>
@@ -401,6 +450,61 @@
         </div>
     </div>
 
-    <script src="/static/app.js"></script>
+    <!-- ═══ Match-row templates (review item R3) ═══ -->
+    <!-- Static row structure lives here (markup + CSS classes, no inline styles)
+         and is cloned per result in displayMatches(), instead of building one
+         giant innerHTML string. Dynamic text is set via textContent (XSS-safe by
+         construction) and handlers via addEventListener (no inline on* / JSON
+         string-escaping). [data-*] hooks mark the fill points. -->
+    <template id="tpl-match-row">
+        <div class="match-item glass-panel selectable">
+            <div class="match-checkbox-wrap">
+                <input type="checkbox" class="match-cb" checked>
+            </div>
+            <div class="match-thumbnail" data-thumb hidden><img alt=""></div>
+            <div class="match-info">
+                <div class="scene-title"><span data-title></span><span class="manual-tag" data-manual hidden></span></div>
+                <div class="scene-meta">
+                    <span class="badge site-badge" data-site></span>
+                    <span class="performers" data-performers hidden></span>
+                    <span class="date" data-date hidden></span>
+                </div>
+                <div class="scene-tags" data-tags hidden></div>
+                <div class="file-name match-original" data-original></div>
+            </div>
+            <div class="match-confidence">
+                <span class="conf-badge-slot" data-badge hidden></span>
+                <span class="conf-band" data-band></span>
+                <div class="confidence-bar" data-bar></div>
+                <span class="conf-evidence-slot" data-evidence hidden></span>
+                <button class="glass-btn match-action-btn match-edit-btn" data-edit></button>
+                <button class="glass-btn match-action-btn" data-nfo></button>
+            </div>
+        </div>
+    </template>
+    <template id="tpl-match-nomatch">
+        <div class="match-item glass-panel unselected match-nomatch">
+            <div class="match-checkbox-wrap">
+                <input type="checkbox" class="match-cb" disabled>
+            </div>
+            <div class="match-info">
+                <div class="scene-title" data-nomatch></div>
+                <div class="file-name match-original match-original-nomatch" data-original></div>
+                <button class="glass-btn match-edit-manual" data-edit></button>
+            </div>
+        </div>
+    </template>
+
+    <!-- App modules (review item R3): split from the former monolithic app.js by
+         concern. Plain ordered scripts (no bundler/build step) sharing global
+         scope, so inline on* handlers keep working. core.js first (shared state,
+         i18n, helpers, bootstrap); feature modules after. -->
+    <script src="/static/js/core.js"></script>
+    <script src="/static/js/scan.js"></script>
+    <script src="/static/js/match.js"></script>
+    <script src="/static/js/rename.js"></script>
+    <script src="/static/js/browse.js"></script>
+    <script src="/static/js/manual.js"></script>
+    <script src="/static/js/ui.js"></script>
 </body>
 </html>

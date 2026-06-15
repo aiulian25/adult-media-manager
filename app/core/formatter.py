@@ -8,6 +8,17 @@ from pathlib import Path
 from typing import Optional, Any
 
 
+# Canonical set of placeholder names apply_template can resolve (the union of
+# the bindings from extract_template_vars and the derived keys computed below).
+# This is the SINGLE SOURCE OF TRUTH for UI validation — it is surfaced via
+# /api/templates and /api/preview-paths so the client never hardcodes a list
+# that could silently drift from the formatter and produce false warnings.
+TEMPLATE_VARS: frozenset[str] = frozenset({
+    "site", "network", "performer", "performers", "scene", "title", "id",
+    "clean_name", "date", "year", "month", "day", "quality", "vf", "source", "group",
+})
+
+
 # Default templates — date is embedded as file metadata, NOT in filename
 TEMPLATES = {
     "site_date":        "{site}/{performer}/{site}.{scene}.{quality}",

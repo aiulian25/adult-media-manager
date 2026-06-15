@@ -14,7 +14,6 @@ ENV PYTHONUNBUFFERED=1 \
     AMM_PORT=8887 \
     PUID=1000 \
     PGID=1000 \
-    PRIVACY_MODE=true \
     DATA_DIR=/data
 
 # Install system dependencies
@@ -24,6 +23,8 @@ RUN apt-get update && \
         curl \
         gosu \
         ffmpeg \
+        mkvtoolnix \
+        atomicparsley \
     && rm -rf /var/lib/apt/lists/*
 
 # Create application directory

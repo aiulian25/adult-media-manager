@@ -20,14 +20,20 @@ By using this software you confirm you are of legal age to access adult content 
 |---|---|
 | 🎯 Smart detection | 7 filename pattern formats — parses site, date, performers, quality automatically |
 | 🔍 Two databases | [ThePornDB](https://theporndb.net/) and [StashDB](https://stashdb.org/) — use one or both |
-| 📝 Naming templates | 6 built-in + fully custom with variables like `{site}`, `{performer}`, `{date}` |
-| 🏷️ Metadata embedding | Writes title, performers, studio, date into MP4/MKV tags via FFmpeg |
-| 📄 NFO sidecars | Writes Kodi/Jellyfin-compatible `.nfo` files alongside renamed files |
+| 🔗 Paste a scene link | Paste a `stashdb.org/scenes/…` or `theporndb.net/scenes/…` URL in manual edit and **Fetch** full metadata in one click |
+| 🧬 Fingerprint matching | OSHash + perceptual-hash (pHash) lookups for exact, "✓ Verified" matches |
+| ⚡ Live streaming scan & match | Results appear as they're found, with a **Stop** button that keeps partial results |
+| 💾 Match cache | Confirmed matches are remembered (by content hash) — rescans are instant and skip the API; **Re-match** forces a refresh |
+| 🗂️ Incremental rescan & duplicates | A catalog tracks organised files so re-scans skip them; same-content duplicates are detected |
+| 🎚️ Confidence bands & review queue | High / Medium / Low colour bands + filters to batch-confirm strong matches and focus on the ambiguous middle |
+| 📝 Naming templates | 6 built-in + fully custom with a **live preview** and unknown-variable warnings |
+| 🏷️ Metadata write modes | **Embed in file + NFO**, **Smart in-place** (`mkvpropedit`/`AtomicParsley`, no remux), or **NFO only** |
+| 📄 NFO sidecars | Writes Kodi/Jellyfin/Plex-compatible `.nfo` files alongside renamed files |
 | 🖱️ Drag & drop | Drop files or folders directly onto the browser window |
-| ⚙️ Settings UI | Add API keys in the browser — no config file editing required |
-| 🔒 Privacy mode | One-click thumbnail blurring for discretion |
+| 🎨 Themes | Selectable colour themes (Purple Night, Midnight Teal) |
+| ⚙️ Settings UI | Add API keys, pick language & theme in the browser — no config file editing required |
 | 🌍 6 languages | English, German, French, Spanish, Portuguese, Japanese |
-| 📜 History & undo | Every rename is logged and fully reversible |
+| 📜 History & per-row revert | Every action is logged; move/copy/hardlink/symlink can each be reverted individually |
 | 🐳 Docker | Single-container, named volume, PUID/PGID support |
 | 📦 Native Linux | Self-installing AppImage + `.deb` package — no Python required |
 
@@ -113,10 +119,10 @@ No Docker required. Ships a self-contained Python 3.12 runtime — no system Pyt
 
 ### AppImage (recommended — no root required)
 
-1. Download `Adult.Media.Manager-1.0.0.AppImage`
+1. Download `Adult.Media.Manager-1.1.0.AppImage`
 2. Make it executable:
    ```bash
-   chmod +x Adult.Media.Manager-1.0.0.AppImage
+   chmod +x Adult.Media.Manager-1.1.0.AppImage
    ```
 3. Double-click it (or run it from the terminal)
 
@@ -130,7 +136,7 @@ From that point, launch it from your application menu. The original downloaded f
 ### .deb Package (Debian / Ubuntu / Mint)
 
 ```bash
-sudo apt install ./adult-media-manager_1.0.0_amd64.deb
+sudo apt install ./adult-media-manager_1.1.0_amd64.deb
 ```
 
 Launch **Adult Media Manager** from your application menu, or:
@@ -151,22 +157,31 @@ Launch **Adult Media Manager** from your application menu, or:
 Scan → Match → Review → Rename
 ```
 
-1. **Scan** — Enter a folder path (or drag & drop files/folders onto the window). Enable **Recursive** to include subfolders. Click **Scan**.
+1. **Scan** — Enter a folder path (or drag & drop files/folders onto the window). Enable **Recursive** to include subfolders. Click **Scan**. Results stream in live; a **Stop** button appears so you can halt a long scan and keep whatever was found so far. Enable **Skip organized** to exclude files AMM has already processed (incremental rescan).
 
-2. **Match** — Select a datasource (TPDB or StashDB) and click **Match**. The app searches the database and shows confidence scores, thumbnails, and performers for each file.
+2. **Match** — Select a datasource (TPDB or StashDB) and click **Match**. Matches stream in with confidence scores, thumbnails, and performers. The app first tries exact **fingerprint** lookups (OSHash / perceptual hash) — those show a **✓ Verified** badge. Previously confirmed matches are served instantly from the local cache (**⚡ Cached** / **★ Confirmed** badges); tick **Re-match** to ignore the cache and re-query the API.
 
-3. **Review** — Check matches. Files already organised (detected via `.nfo` sidecars) are shown in a collapsed section and skipped by default.
+3. **Review** — Confidence is shown as **High / Medium / Low** colour bands. Use the filter bar to view only the *review* (ambiguous middle), *high*, *confirmed*, or *unmatched* items, and **Select high-confidence** to batch-confirm strong matches at once. Files already organised (via `.nfo` sidecar) appear in a collapsed section and are skipped by default. To edit by hand, open **Manual edit** — you can paste a **StashDB** or **ThePornDB** scene URL and click **Fetch** to auto-fill all fields.
 
-4. **Choose a template** — Pick from the presets or enter a custom template.
+4. **Choose a template** — Pick a preset or type a custom template. A **live preview** shows the resulting path as you type, and unknown `{variables}` are flagged before you commit.
 
-5. **Rename** — Choose an action and click **Rename**:
-   - **TEST** — Preview output without touching any files *(always try this first)*
-   - **MOVE** — Move files to the new location
-   - **COPY** — Copy files, leaving originals in place
-   - **HARDLINK** — Space-efficient links (same filesystem only)
-   - **SYMLINK** — Symbolic links
+5. **Rename** — Pick the **Metadata** write mode and an **Action**, then click **Rename**:
+   - **Action:** TEST *(preview only — always try first)* · MOVE · COPY · HARDLINK *(same filesystem)* · SYMLINK
+   - **Metadata:** **Embed in file + NFO** *(default — FFmpeg tags + sidecar)* · **Smart in-place + NFO** *(instant `mkvpropedit`/`AtomicParsley` tagging where possible, no full remux)* · **NFO sidecar only**
 
-After rename, FFmpeg embeds metadata (title, performers, studio, release date) into MP4/MKV files in the background. A `.nfo` sidecar is written alongside each file for Kodi/Jellyfin/Plex compatibility.
+Metadata is written in the background after the files move; a progress banner tracks it and survives a page refresh. A `.nfo` sidecar is written alongside each file for Kodi/Jellyfin/Plex.
+
+### Metadata Write Modes
+
+| Mode | What it does | When to use |
+|---|---|---|
+| **Embed in file + NFO** | Re-muxes tags into the container with FFmpeg **and** writes a `.nfo` | Maximum compatibility (default) |
+| **Smart in-place + NFO** | Tags MKV via `mkvpropedit` / MP4 via `AtomicParsley` **in place** (no remux), falls back to FFmpeg otherwise, plus `.nfo` | Large files / slow NAS — near-instant, minimal bandwidth |
+| **NFO sidecar only** | Writes just the `.nfo`, leaves the video untouched | Players that read sidecars (Jellyfin/Plex/Kodi); avoids rewriting files |
+
+### Review Queue & Confidence
+
+Each match shows a colour-coded confidence band (High ≥ 80 · Medium 50–79 · Low < 50) plus provenance badges (**✓ Verified** fingerprint, **⚡ Cached**, **★ Confirmed**). The filter bar lets you triage at scale: batch-confirm the **high** band, then spend your attention on the **review** band. Confirming or renaming a match records it in the cache so a future rescan trusts it automatically.
 
 ### Drag & Drop
 
@@ -177,15 +192,15 @@ Drop files or folders directly onto the browser window at any time.
 
 ### Settings
 
-Click **⚙** (top-right) to open Settings. Each API key row shows its current status:
+Click **⚙** (top-right) to open Settings. There you can set your **interface language** (6 supported) and **colour theme** (Purple Night, Midnight Teal), and manage API keys. Each API key row shows its current status:
 
 - 🟢 **Saved** — key stored in the app's settings file
 - 🟣 **Set via environment** — key comes from `.env` / shell environment (read-only in UI)
 - ⚪ **Not configured** — no key set
 
-### Privacy Mode
+### History & Undo
 
-Click the **🔒** button to blur all thumbnails. The setting persists across sessions. Individual thumbnails can be revealed by clicking them.
+Click **History** to see every action AMM has performed. Each move/copy/hardlink/symlink row has its own **Revert** button — a move is moved back; a copy/link deletes the created file and leaves the original untouched. (Embedded tags and `.nfo` sidecars are not removed by a revert.)
 
 ---
 
@@ -224,7 +239,6 @@ Click the **🔒** button to blur all thumbnails. The setting persists across se
 
 ## 🔒 Privacy & Security
 
-- **Thumbnail blurring** — toggleable per-session, off by default
 - **API keys** — stored in `.env` (Docker) or `~/.local/share/adult-media-manager/settings.json` (native); never returned in API responses
 - **Path validation** — every path is checked against an allowlist of permitted roots before any file operation; paths outside the allowlist are rejected with 403
 - **NAS / FUSE safety** — metadata embedding uses a 3-phase commit: FFmpeg writes to a local staging area, the result is verified, then atomically swapped into place — no partial writes land on your network share
@@ -236,16 +250,30 @@ Click the **🔒** button to blur all thumbnails. The setting persists across se
 
 | Method | Endpoint | Description |
 |---|---|---|
-| `POST` | `/api/scan` | Scan a directory or comma-separated file list |
+| `POST` | `/api/scan` | Scan a directory or comma-separated file list (non-streaming) |
+| `POST` | `/api/scan-session` → `GET` `/api/scan-stream` | Cancellable streaming scan (live results, stoppable) |
 | `POST` | `/api/match` | Match scanned files against TPDB / StashDB |
+| `POST` | `/api/match-session` → `GET` `/api/match-stream` | Streaming match with live progress (SSE) |
+| `POST` | `/api/stashdb/scene` | Resolve a StashDB scene URL / UUID to full metadata |
+| `POST` | `/api/tpdb/scene` | Resolve a ThePornDB scene URL / slug to full metadata |
+| `POST` | `/api/preview-paths` | Preview templated output paths (no filesystem changes) |
 | `POST` | `/api/rename` | Execute rename (test / move / copy / hardlink / symlink) |
 | `GET` | `/api/embed-status/{job_id}` | Poll background metadata embed progress |
-| `GET` | `/api/history` | List rename history |
-| `POST` | `/api/history/undo` | Undo last rename |
+| `POST` | `/api/save-manual-metadata` | Save manually entered metadata (NFO + optional embed) |
+| `POST` | `/api/write-nfo` | Write a `.nfo` sidecar for a matched file |
+| `POST` | `/api/extract-thumbnails` | Generate candidate thumbnails for a file |
+| `GET` | `/api/thumbnail/{stem}/{file}` | Serve a generated thumbnail |
+| `GET` | `/api/catalog/stats` | Catalog totals (tracked / organised / confirmed / duplicates) |
+| `GET` | `/api/catalog/duplicates` | Groups of files sharing the same content fingerprint |
+| `GET` | `/api/history` | List action history |
+| `POST` | `/api/history/undo` | Undo the last revertible action |
+| `POST` | `/api/history/revert` | Revert a specific history entry by id |
 | `GET` | `/api/browse` | Server-side directory browser |
-| `GET` | `/api/templates` | List available naming templates |
-| `GET` | `/api/settings` | Get API key status (values are never returned) |
-| `POST` | `/api/settings` | Save API keys |
+| `GET` | `/api/templates` | List naming templates + valid variables |
+| `GET` / `POST` / `DELETE` | `/api/tags` | Manage the user tag list |
+| `GET` / `POST` | `/api/search-sites`, `/api/known-sites` | Studio/site autocomplete |
+| `GET` | `/api/settings` | Get language/theme + API key status (key values never returned) |
+| `POST` | `/api/settings` | Save language, theme, and API keys |
 | `GET` | `/api/health` | Health check |
 
 ---
@@ -259,8 +287,14 @@ Click the **🔒** button to blur all thumbnails. The setting persists across se
 | `AMM_PORT` | `8887` | Host port for the web UI |
 | `PUID` | `1000` | User ID for file ownership |
 | `PGID` | `1000` | Group ID for file ownership |
-| `PRIVACY_MODE` | `false` | Start with thumbnails blurred |
-| `DATA_DIR` | `/data` | Persistent data directory (history, settings, embed staging) |
+| `DATA_DIR` | `/data` | Persistent data directory (history, settings, catalog, cache, embed staging) |
+| `AMM_SCAN_PROBE_DURATION` | `1` | Probe each video's duration at scan time (`ffprobe`) to sharpen match scoring. Set `0` to skip on very large libraries / slow mounts |
+| `AMM_MATCH_CACHE_MAX` | `50000` | Max entries in the persistent match cache (`match_cache.json`). `0` = unlimited. Confirmed matches are never evicted |
+| `AMM_DATE_TOLERANCE_DAYS` | `7` | How many days apart a file's date and a scene's date may be and still score as a date match |
+| `AMM_HISTORY_MAX` | `10000` | Max entries kept in `history.json`. `0` = unlimited |
+| `AMM_EXTRA_ROOTS` | *(blank)* | Extra colon-separated paths to add to the scan/browse allowlist (e.g. `/mnt/a:/mnt/b`) |
+| `AMM_MKVPROPEDIT` / `AMM_ATOMICPARSLEY` | *(auto)* | Override paths to the in-place tagging binaries used by **Smart** mode (auto-resolved on PATH / bundled in packages) |
+| `AMM_ALLOW_MULTIWORKER` | `0` | Acknowledge a multi-worker deployment (AMM is single-worker by design; see DEPLOYMENT.md) |
 
 ---
 
@@ -275,6 +309,10 @@ Click the **🔒** button to blur all thumbnails. The setting persists across se
 
 **Metadata not embedding**
 - FFmpeg must be installed. Docker bundles it. The `.deb` package lists it as a dependency. For the AppImage, install FFmpeg on your system: `sudo apt install ffmpeg`.
+- **Smart in-place mode** uses `mkvpropedit` (MKV) and `AtomicParsley` (MP4). These ship in Docker and the `.deb`, and are bundled in the AppImage; if missing, Smart mode automatically falls back to the FFmpeg remux, so the result is identical.
+
+**Embedding seems stuck / "interrupted"**
+- Metadata is embedded in the background after files move. The progress banner re-attaches after a page refresh and survives brief server hiccups. If the server restarted mid-embed, the `.nfo` sidecars are already written; re-run the embed for any files that still need it.
 
 **No results from TPDB / StashDB**
 - Verify your API key in **⚙ Settings** — the badge shows whether the key is saved or env-managed.

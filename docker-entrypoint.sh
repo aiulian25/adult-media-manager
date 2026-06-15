@@ -59,11 +59,17 @@ echo "Set TPDB_API_KEY environment variable"
 echo "Get your key at: https://theporndb.net/"
 echo "========================================="
 
-# Start application with port from AMM_PORT, or execute a custom command if provided
+# Start application with port from AMM_PORT, or execute a custom command if provided.
+#
+# --workers 1 is REQUIRED, not just the uvicorn default: AMM keeps match
+# sessions and embed-job progress in process-local memory, so >1 worker would
+# break the SSE match stream and embed-status polling (see review item P7).
+# Pinning it explicitly also guards against a future change to uvicorn's default.
 if [ $# -eq 0 ]; then
     exec gosu amm python -m uvicorn app.main:app \
         --host "${AMM_HOST:-0.0.0.0}" \
-        --port "${AMM_PORT:-8887}"
+        --port "${AMM_PORT:-8887}" \
+        --workers 1
 else
     exec gosu amm "$@"
 fi

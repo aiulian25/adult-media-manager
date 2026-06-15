@@ -9,6 +9,8 @@ from dataclasses import dataclass, field
 from typing import Optional
 from enum import Enum
 
+from app.core.matcher import normalize
+
 
 class MediaType(str, Enum):
     SCENE = "scene"
@@ -30,6 +32,12 @@ class AdultDetectionResult:
     video_format: Optional[str] = None  # x264, x265, HEVC
     group: Optional[str] = None
     original_filename: str = ""
+    # Derived signals (review item D4) — surfaced for matching/search:
+    #   normalized_name: lowercased, separators→spaces, scene-release junk
+    #                    (XXX/1080p/WEB-DL/x265/-GROUP…) stripped.
+    #   tokens:          unique word tokens of normalized_name (cheap pre-filter).
+    normalized_name: str = ""
+    tokens: list[str] = field(default_factory=list)
 
 
 # Video file extensions — all formats the scanner will consider
@@ -132,6 +140,65 @@ FORMAT_PATTERN = re.compile(r'\b(x264|x265|HEVC|H\.264|H\.265|AVC)\b', re.IGNORE
 # Release group pattern
 GROUP_PATTERN = re.compile(r'-([A-Z0-9]+)$', re.IGNORECASE)
 
+# Scene-release junk tokens — resolution / source / codec / audio / misc flags
+# that are NOT part of the title. Stripped before building the normalized name
+# and token set so search and similarity work on the meaningful words only.
+SCENE_TAG_RE = re.compile(
+    r'\b(?:'
+    r'xxx|'
+    r'480p|540p|576p|720p|1080p|1440p|2160p|4k|uhd|hdr|hd|sd|'
+    r'web-?dl|web-?rip|webcap|bluray|blu-?ray|brrip|bdrip|dvdrip|hdtv|hdrip|'
+    r'x ?264|x ?265|h ?264|h ?265|hevc|avc|xvid|divx|'
+    r'aac|ac3|dts|mp3|flac|opus|2 ?0|5 ?1|'
+    r'multi|internal|proper|repack|uncut|remux'
+    r')\b',
+    re.IGNORECASE,
+)
+
+# "Site - Title (YYYY-MM-DD)" / "Site - Title" — a very common naming style the
+# pattern table doesn't cover. Consolidated here (from main._extract_site_title)
+# so BOTH datasources get site/title/date from these files (review item D4).
+_SITE_TITLE_RE = re.compile(r'^(?P<site>.+?)\s+[-–]\s+(?P<title>.+?)\s*$')
+_DATE_SUFFIX_RE = re.compile(r'\s*\((\d{4})[-./](\d{2})[-./](\d{2})\)\s*$')
+
+
+def normalize_filename(name: str) -> str:
+    """Return a clean, comparable form of a filename.
+
+    Separators → spaces, scene-release junk + trailing ``-GROUP`` stripped, then
+    run through ``matcher.normalize`` (accents/case/punctuation) so the detector
+    and the matcher share ONE normalization definition.
+    """
+    s = re.sub(r'[._]', ' ', name)
+    s = SCENE_TAG_RE.sub(' ', s)
+    s = re.sub(r'-[A-Za-z0-9]+\s*$', ' ', s)   # trailing release group
+    return normalize(s)
+
+
+def _try_site_title(filename: str):
+    """Parse 'Site - Title (YYYY-MM-DD)' / 'Site - Title'.
+
+    Returns ``(site, title, release_date|None, year|None)`` or ``None``.
+    """
+    text = filename.strip()
+    release_date = None
+    year = None
+    dm = _DATE_SUFFIX_RE.search(text)
+    if dm:
+        y, mo, d = dm.groups()
+        release_date = f"{y}-{mo}-{d}"
+        year = int(y)
+        text = _DATE_SUFFIX_RE.sub("", text).strip()
+
+    m = _SITE_TITLE_RE.match(text)
+    if not m:
+        return None
+    site = m.group("site").strip()
+    title = clean_text(m.group("title"))
+    if not site or not title:
+        return None
+    return site, title, release_date, year
+
 
 def is_video_file(path: Path) -> bool:
     """Check if file is a video file."""
@@ -199,102 +266,68 @@ def detect(path: Path) -> AdultDetectionResult:
     filename = path.stem  # Remove extension
     original = filename
     
-    # Try each pattern in priority order
-    for pattern in ADULT_PATTERNS:
+    # Try each pattern in priority order. Dispatch by the pattern's INDEX (each
+    # has a known, fixed group layout) rather than guessing from group
+    # shape/content — the old shape-guessing crashed on optional/None groups and
+    # mis-handled several patterns (review item D4: "brittle detector").
+    for idx, pattern in enumerate(ADULT_PATTERNS):
         match = pattern.match(filename)
-        if match:
-            groups = match.groups()
-            
-            # Pattern 1: Site.YY.MM.DD.Performer.Scene.XXX.Quality
-            if len(groups) >= 7 and groups[1].isdigit() and groups[2].isdigit():
-                site = groups[0]
-                date_str = f"{groups[1]}.{groups[2]}.{groups[3]}"
-                release_date, year = parse_date(date_str)
-                performers = extract_performers(groups[4])
-                scene_title = clean_text(groups[5])
-                quality = groups[6] if len(groups) > 6 else None
-                
-                return _build_result(
-                    original, site, performers, scene_title,
-                    release_date, year, quality, filename
-                )
-            
-            # Pattern 2: [Site] Performer - Scene (YYYY-MM-DD)
-            elif len(groups) >= 4 and '-' in groups[3]:
-                site = groups[0].strip()
-                performers = extract_performers(groups[1])
-                scene_title = clean_text(groups[2])
-                release_date = groups[3]
+        if not match:
+            continue
+        g = match.groups()
+        try:
+            if idx == 0:
+                # Site.YY.MM.DD.Performer.Scene.XXX.Quality
+                release_date, year = parse_date(f"{g[1]}.{g[2]}.{g[3]}")
+                return _build_result(original, g[0], extract_performers(g[4]),
+                                     clean_text(g[5]), release_date, year, g[6], filename)
+            if idx in (1, 3):
+                # [Site] Performer - Scene (YYYY-MM-DD)  /  Site - Performer - Scene (Date)
+                release_date = g[3]
                 year = int(release_date[:4]) if release_date else None
-                
-                return _build_result(
-                    original, site, performers, scene_title,
-                    release_date, year, None, filename
-                )
-            
-            # Pattern 3: Site_Performer_Scene_XXX_Quality
-            elif len(groups) >= 4 and '_' in original:
-                site = groups[0]
-                performers = extract_performers(groups[1])
-                scene_title = clean_text(groups[2])
-                quality = groups[3]
-                
-                return _build_result(
-                    original, site, performers, scene_title,
-                    None, None, quality, filename
-                )
-            
-            # Pattern 4: Site - Performer - Scene (Date)
-            elif len(groups) >= 4:
-                site = groups[0].strip()
-                performers = extract_performers(groups[1])
-                scene_title = clean_text(groups[2])
-                release_date = groups[3]
-                year = int(release_date[:4]) if release_date else None
-                
-                return _build_result(
-                    original, site, performers, scene_title,
-                    release_date, year, None, filename
-                )
-            
-            # Pattern 5: YYYY.MM.DD.Site.Performer.Scene.Quality
-            elif len(groups) >= 7 and groups[0].isdigit() and len(groups[0]) == 4:
-                date_str = f"{groups[0]}.{groups[1]}.{groups[2]}"
-                release_date, year = parse_date(date_str)
-                site = groups[3]
-                performers = extract_performers(groups[4])
-                scene_title = clean_text(groups[5])
-                quality = groups[6] if len(groups) > 6 else None
-                
-                return _build_result(
-                    original, site, performers, scene_title,
-                    release_date, year, quality, filename
-                )
-    
-    # Fallback: couldn't parse with patterns, do basic extraction
+                return _build_result(original, g[0].strip(), extract_performers(g[1]),
+                                     clean_text(g[2]), release_date, year, None, filename)
+            if idx == 2:
+                # Site_Performer_Scene_XXX_Quality
+                return _build_result(original, g[0], extract_performers(g[1]),
+                                     clean_text(g[2]), None, None, g[3], filename)
+            if idx == 4:
+                # YYYY.MM.DD.Site.Performer.Scene.Quality
+                release_date, year = parse_date(f"{g[0]}.{g[1]}.{g[2]}")
+                return _build_result(original, g[3], extract_performers(g[4]),
+                                     clean_text(g[5]), release_date, year, g[6], filename)
+            if idx == 5:
+                # Performer.Scene.Title.XXX.Quality  (no site)
+                return _build_result(original, None, extract_performers(g[0]),
+                                     clean_text(g[1]), None, None, g[2], filename)
+            if idx == 6:
+                # Site.Performer.Scene[.XXX][.Quality]  (quality optional → may be None)
+                quality = g[3] if len(g) > 3 else None
+                return _build_result(original, g[0], extract_performers(g[1]),
+                                     clean_text(g[2]), None, None, quality, filename)
+        except (IndexError, ValueError, TypeError):
+            # Malformed match for this layout — fall through to the next pattern.
+            continue
+
+    # "Site - Title (Date)" / "Site - Title" — consolidated here so both
+    # datasources benefit (was an ad-hoc fallback in main.py).
+    st = _try_site_title(filename)
+    if st:
+        site, scene_title, release_date, year = st
+        return _build_result(
+            original, site, [], scene_title, release_date, year, None, filename
+        )
+
+    # Fallback: couldn't parse with patterns, do basic extraction. Routed through
+    # _build_result so source/format/group AND the derived fields are still
+    # populated (previously they were left blank here).
     clean = clean_text(filename)
-    
-    # Extract quality
-    quality_match = QUALITY_PATTERN.search(filename)
-    quality = quality_match.group(1) if quality_match else None
-    
-    # Extract year
+
     year_match = re.search(r'\b(19|20)\d{2}\b', filename)
     year = int(year_match.group(0)) if year_match else None
-    
-    return AdultDetectionResult(
-        media_type=MediaType.SCENE,
-        clean_name=clean,
-        site=None,
-        performers=[],
-        scene_title=clean,
-        release_date=None,
-        year=year,
-        quality=quality,
-        source=None,
-        video_format=None,
-        group=None,
-        original_filename=original,
+
+    return _build_result(
+        original, None, [], clean, None, year, None, filename
     )
 
 
@@ -328,7 +361,13 @@ def _build_result(
         quality = quality_match.group(1) if quality_match else None
     
     clean_name = scene_title or clean_text(filename)
-    
+
+    # Derived signals (D4): a junk-stripped normalized name + unique token set,
+    # computed once here so every detection path (patterns, site-title, fallback)
+    # carries them consistently.
+    normalized_name = normalize_filename(filename)
+    tokens = list(dict.fromkeys(normalized_name.split()))
+
     return AdultDetectionResult(
         media_type=MediaType.SCENE,
         clean_name=clean_name,
@@ -342,4 +381,6 @@ def _build_result(
         video_format=video_format,
         group=group,
         original_filename=original,
+        normalized_name=normalized_name,
+        tokens=tokens,
     )

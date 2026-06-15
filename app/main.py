@@ -6,10 +6,13 @@ Serves web UI and provides API endpoints for scanning, matching, and renaming ad
 import os
 import re
 import json
+import copy
 import asyncio
+import threading
 import subprocess
 import tempfile
 import base64
+import shutil
 from pathlib import Path
 from typing import Optional
 
@@ -25,17 +28,24 @@ from app.core.detector import (
     detect, MediaType, is_video_file, is_subtitle_file,
     VIDEO_EXTENSIONS, SUBTITLE_EXTENSIONS,
 )
-from app.core.matcher import adult_cascade_score, find_best_match, name_similarity
-from app.core.formatter import apply_template, build_new_path, TEMPLATES, extract_template_vars
+from app.core.matcher import score_match, find_best_match
+from app.core.formatter import (
+    apply_template, build_new_path, TEMPLATES, TEMPLATE_VARS, extract_template_vars,
+)
 from app.core.renamer import execute_rename, RenameAction, RenameResult
 from app.core.history import RenameHistory, HistoryEntry
+from app.core.catalog import Catalog
+from app.core.jobs import JobStore
+from app.core.embedder import (
+    validate_embed_mode, ffmpeg_metadata_args, build_mkv_tags_xml, plan_embed,
+)
 from app.api.tpdb import TPDBClient
 from app.api.stashdb import StashDBClient, compute_oshash, compute_phash_ffmpeg
 
 
 app = FastAPI(
     title="Adult Media Manager",
-    version="1.0.0",
+    version="1.1.0",
     description="Professional metadata organizer for adult content"
 )
 
@@ -47,6 +57,12 @@ app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 DATA_DIR = Path(os.getenv("DATA_DIR", "/data"))
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 history = RenameHistory(DATA_DIR / "history.json")
+
+# File→match catalog (review item R1): SQLite, in the same secured DATA_DIR. An
+# additive store that tracks what AMM has seen/organised so re-scans are
+# incremental (skip already-organised files) and duplicate content is detectable.
+# Best-effort — if it can't initialise it self-disables and the app still works.
+catalog = Catalog(DATA_DIR / "catalog.db")
 
 # ── FFmpeg staging directory ─────────────────────────────────────────────────
 # Work files are written here (local Docker named volume, /data) rather than
@@ -68,8 +84,48 @@ for _f in list(_EMBED_STAGING_DIR.iterdir()):  # purge crash leftovers
 # Keyed by job_id (hex uuid4). Each value:
 #   {"total": int, "done": int, "warnings": list[dict], "complete": bool, "created": float}
 # Cleaned up automatically when older than EMBED_JOB_TTL seconds.
+# PROCESS-LOCAL: shared with _match_sessions; requires single-worker deployment
+# (enforced by the launchers + _startup_single_worker_check). See review item P7.
+#
+# DURABILITY (review item R2): the in-memory dict stays the hot path while the
+# process lives, but every create/progress/finish is written through to a SQLite
+# JobStore so a page refresh can re-attach to an in-flight job and a server
+# restart returns the last-known state (interrupted) instead of a 404. The store
+# lives in the same secured DATA_DIR as history/catalog.
 _embed_jobs: dict[str, dict] = {}
 EMBED_JOB_TTL = 600  # 10 minutes
+_job_store = JobStore(DATA_DIR / "jobs.db")
+
+
+def _job_create(job_id: str, total: int, kind: str = "embed") -> dict:
+    """Register a background embed job in memory AND in the durable store."""
+    complete = total == 0  # trivially complete if there's nothing to embed
+    job = {
+        "total": total, "done": 0, "warnings": [],
+        "complete": complete, "created": _time.monotonic(),
+    }
+    _embed_jobs[job_id] = job
+    _job_store.create(job_id, kind, total, complete=complete)
+    return job
+
+
+def _job_progress(job_id: str, warning: Optional[dict] = None) -> None:
+    """Record one unit of progress (and an optional warning) for a job."""
+    job = _embed_jobs.get(job_id)
+    if job is None:
+        return
+    job["done"] += 1
+    if warning:
+        job["warnings"].append(warning)
+    _job_store.progress(job_id, job["done"], job["warnings"])
+
+
+def _job_finish(job_id: str) -> None:
+    """Mark a job complete in memory AND in the durable store."""
+    job = _embed_jobs.get(job_id)
+    if job is not None:
+        job["complete"] = True
+    _job_store.finish(job_id, "complete")
 
 # ── Persistent user settings (API keys saved via the UI) ──────────────────────
 # Keys set through environment variables ALWAYS take precedence.
@@ -79,6 +135,27 @@ EMBED_JOB_TTL = 600  # 10 minutes
 # They are NEVER returned to the browser; only an "active / source" status is.
 _SETTINGS_FILE: Path = DATA_DIR / "settings.json"
 _SETTINGS_KEY_MAX_LEN = 512   # sanity cap — real keys are well under this
+
+# UI preferences persisted alongside the API keys.  These are NOT secrets, so
+# (unlike keys) they are safely returned to the browser.  Both are whitelisted
+# on write AND read because `locale` is interpolated into the static path
+# `/static/locales/<locale>.json` on the client — an unvalidated value would be
+# a path-injection vector.  Keep these in sync with the locale files that ship
+# under app/static/locales/ and the <option>s in the Settings UI.
+_ALLOWED_LOCALES: frozenset[str] = frozenset({"en", "de", "es", "fr", "ja", "pt"})
+_ALLOWED_THEMES:  frozenset[str] = frozenset({"default", "midnight-teal"})
+_DEFAULT_LOCALE = "en"
+_DEFAULT_THEME  = "default"
+
+
+def _effective_locale() -> str:
+    val = _load_settings().get("locale")
+    return val if val in _ALLOWED_LOCALES else _DEFAULT_LOCALE
+
+
+def _effective_theme() -> str:
+    val = _load_settings().get("theme")
+    return val if val in _ALLOWED_THEMES else _DEFAULT_THEME
 
 
 def _load_settings() -> dict:
@@ -139,15 +216,26 @@ def _init_stashdb() -> "StashDBClient | None":
 tpdb    = _init_tpdb()
 stashdb = _init_stashdb()
 
+# When running as a native desktop app (DEB/AppImage), the Electron main process
+# sets AMM_NATIVE=1. In this mode the Docker-centric path allowlist is lifted so
+# users can browse and scan any directory on their own machine. Docker deployments
+# keep the restriction to prevent host-filesystem exposure.
+_AMM_NATIVE: bool = os.getenv("AMM_NATIVE", "0") == "1"
+
 # Allowed roots for filesystem access — never include "/" (root of the whole filesystem).
-# The native Electron build sets AMM_EXTRA_ROOTS (colon-separated) to add user
-# home dirs and removable-media mount points on top of the Docker defaults.
+# Only used in Docker mode. Native mode bypasses this list entirely.
 _default_roots: set[Path] = {
     Path("/media"),
     Path("/mnt"),
     Path("/data"),
     Path("/downloads"),
     Path("/organized"),
+    Path("/home"),       # User home directories (DEB/AppImage native installs)
+    Path("/root"),       # Root user home
+    Path("/srv"),        # NAS/network mounts
+    Path("/nas"),        # NAS mount point
+    Path("/storage"),    # Additional storage mount point
+    Path("/run/media"),  # Removable media (systemd automount)
 }
 _extra_roots: set[Path] = set()
 for _r in os.getenv("AMM_EXTRA_ROOTS", "").split(":"):
@@ -158,12 +246,71 @@ ALLOWED_ROOTS: frozenset[Path] = frozenset(_default_roots | _extra_roots)
 
 
 def _is_allowed_path(p: Path) -> bool:
-    """Return True only when *p* is inside one of the ALLOWED_ROOTS."""
+    """Return True only when *p* is inside one of the ALLOWED_ROOTS.
+
+    Native mode (AMM_NATIVE=1) skips the allowlist — the user is browsing
+    their own machine, so any absolute path is valid.
+    """
+    if _AMM_NATIVE:
+        return p.resolve().is_absolute()
     rp = p.resolve()
     return any(
         rp == root or str(rp).startswith(str(root) + "/")
         for root in ALLOWED_ROOTS
     )
+
+
+@app.on_event("startup")
+async def _startup_single_worker_check():
+    """
+    AMM keeps match sessions (_match_sessions), embed-job progress
+    (_embed_jobs) and the embed concurrency semaphore (_embed_sem) in
+    PROCESS-LOCAL memory.  None of it can be shared across worker processes, so
+    the app MUST run with a single worker: with >1 worker the SSE match stream
+    and the embed-status poller would reach a different process than the one
+    holding the state and fail (session-not-found / progress stuck).
+
+    The shipped launchers already guarantee one worker (the Docker entrypoint
+    passes ``--workers 1``; the Electron deb/AppImage spawns uvicorn with the
+    default single worker).  This is a best-effort safety net for custom
+    deployments: warn loudly when a conventional multi-worker env knob is set
+    above 1.  ``AMM_ALLOW_MULTIWORKER=1`` silences the warning (the flows still
+    won't work — that needs the shared-store refactor, review item R2).
+
+    Identical behaviour on every build target — pure env inspection, no
+    platform-specific code.
+    """
+    # Durable jobs (R2): any embed job still marked "running" belongs to a
+    # previous process whose FFmpeg work died with it — flip it to "interrupted"
+    # so a re-attaching client sees a terminal state, and prune old terminal jobs.
+    try:
+        interrupted = _job_store.interrupt_running()
+        if interrupted:
+            print(f"INFO: marked {interrupted} interrupted embed job(s) from a previous run.")
+        _job_store.prune(EMBED_JOB_TTL)
+    except Exception as e:
+        print(f"WARNING: job store startup maintenance failed: {e}")
+
+    if os.getenv("AMM_ALLOW_MULTIWORKER", "0") == "1":
+        return
+    for var in ("AMM_WORKERS", "WEB_CONCURRENCY", "UVICORN_WORKERS", "GUNICORN_WORKERS"):
+        raw = os.getenv(var, "").strip()
+        if not raw:
+            continue
+        try:
+            n = int(raw)
+        except ValueError:
+            continue
+        if n > 1:
+            print(
+                f"WARNING: {var}={raw} requests multiple workers, but Adult Media "
+                "Manager stores match sessions and embed-job progress in "
+                "process-local memory. Matching (SSE) and embed-progress polling "
+                "WILL break across workers. Run a single worker (the shipped "
+                "default), or set AMM_ALLOW_MULTIWORKER=1 to acknowledge."
+            )
+            break
+    print(f"INFO: Adult Media Manager started (single-worker mode, pid={os.getpid()}).")
 
 
 @app.on_event("shutdown")
@@ -201,6 +348,11 @@ async def logo():
 class ScanRequest(BaseModel):
     path: str
     recursive: bool = True
+    # Incremental rescan (review item R1): when true, files the catalog already
+    # records as organised by AMM are excluded from the results, so a re-scan of a
+    # large library only surfaces new/unorganised work. Default false → unchanged
+    # behaviour.
+    skip_organized: bool = False
 
     @field_validator("path")
     @classmethod
@@ -223,11 +375,65 @@ class MatchRequest(BaseModel):
     datasource: str = "tpdb"
     template: Optional[str] = None
     auto_match: bool = True
+    # When True, ignore the persistent match cache and re-query the API (D3).
+    # The fresh results still update the cache.
+    refresh: bool = False
+
+
+# Metadata write modes (Phase 2 of a rename, and manual save). The mode names are
+# the stable API/UI contract; the actual per-container strategy is decided by the
+# pluggable planner in app/core/embedder.py (review item R4):
+#   "embed"    – FFmpeg remux for every container AND an NFO sidecar (default;
+#                preserves historical behaviour).
+#   "smart"    – fast IN-PLACE tagging where the container supports it
+#                (mkvpropedit for Matroska, AtomicParsley for MP4/M4V/MOV);
+#                every other container, or a missing/failed in-place tool, falls
+#                back to the FFmpeg remux, so the outcome always matches "embed".
+#   "nfo_only" – write only the NFO sidecar; skip embedding entirely.
+#                Jellyfin/Plex read the sidecar, so metadata still shows, but we
+#                avoid the heavy read+local-write+NAS-copy-back per file.
+# (EMBED_MODES / validate_embed_mode now live in app/core/embedder.py.)
+_validate_embed_mode = validate_embed_mode
+
+
+# In-place tagging tools. Each ships the same way across targets so behaviour is
+# consistent; if a tool is missing the planner falls back to the FFmpeg remux:
+#   • Docker   — installed in the image (Dockerfile apt-get).
+#   • deb      — declared in package.json deb.depends.
+#   • AppImage — bundled by prepare-build.sh into bundled-tools/ and pointed at via
+#                AMM_MKVPROPEDIT / AMM_ATOMICPARSLEY (set by electron/main.js);
+#                if the bundle is absent it resolves on PATH, then remuxes.
+
+
+def _mkvpropedit_path() -> Optional[str]:
+    """Resolve the mkvpropedit binary (Matroska in-place tagging).
+
+    AMM_MKVPROPEDIT lets a packager point at a bundled binary; otherwise we look
+    it up on PATH.  Returns None when unavailable so callers can fall back.
+    """
+    override = os.getenv("AMM_MKVPROPEDIT", "").strip()
+    if override:
+        return override if Path(override).exists() else None
+    return shutil.which("mkvpropedit")
+
+
+def _atomicparsley_path() -> Optional[str]:
+    """Resolve the AtomicParsley binary (MP4/M4V/MOV in-place tagging).
+
+    AMM_ATOMICPARSLEY lets a packager point at a bundled binary; otherwise we look
+    it up on PATH (the Debian package name is ``atomicparsley`` but the binary is
+    ``AtomicParsley`` — accept either casing). Returns None so callers fall back.
+    """
+    override = os.getenv("AMM_ATOMICPARSLEY", "").strip()
+    if override:
+        return override if Path(override).exists() else None
+    return shutil.which("AtomicParsley") or shutil.which("atomicparsley")
 
 
 class RenameRequest(BaseModel):
     operations: list[dict]
     action: str = "test"
+    embed_mode: str = "embed"
 
     @field_validator("action")
     @classmethod
@@ -236,6 +442,11 @@ class RenameRequest(BaseModel):
         if v not in valid:
             raise ValueError(f"Invalid action: {v}. Must be one of: {valid}")
         return v
+
+    @field_validator("embed_mode")
+    @classmethod
+    def validate_embed_mode(cls, v: str) -> str:
+        return _validate_embed_mode(v)
 
 
 class ManualMetadataRequest(BaseModel):
@@ -247,6 +458,12 @@ class ManualMetadataRequest(BaseModel):
     tags: list[str] = []
     quality: Optional[str] = None
     thumbnail_index: Optional[int] = None  # Which generated thumbnail to use
+    embed_mode: str = "embed"             # embed | smart | nfo_only (embedder.EMBED_MODES)
+
+    @field_validator("embed_mode")
+    @classmethod
+    def validate_embed_mode(cls, v: str) -> str:
+        return _validate_embed_mode(v)
 
 
 def _parse_nfo(nfo_path: Path) -> dict | None:
@@ -287,78 +504,340 @@ def _parse_nfo(nfo_path: Path) -> dict | None:
 
 # ─── Scan Endpoint ─────────────────────────────────────────────────────
 
+# Probe each scanned video's duration via ffprobe so the matcher can use runtime
+# as a disambiguator (review item D1). On by default; set AMM_SCAN_PROBE_DURATION=0
+# to skip it on very large libraries / slow mounts where the extra per-file
+# ffprobe is not worth the scan-time cost. Purely a performance knob — matching
+# degrades gracefully to the previous behaviour when duration is absent. This is
+# a config/env concern, so it lives here rather than in core scoring logic, and
+# behaves identically on Docker/deb/AppImage.
+_SCAN_PROBE_DURATION: bool = os.getenv("AMM_SCAN_PROBE_DURATION", "1") == "1"
+
+
+def _probe_duration_seconds(path: Path) -> Optional[float]:
+    """Return media duration in seconds via ffprobe, or None on any failure.
+
+    Best-effort and never raises: a missing ffprobe, an unreadable/corrupt file,
+    or a slow mount simply yields None and duration-based scoring is skipped for
+    that file. Reads only the container header (format=duration), so it does not
+    scan the whole file. ffprobe is provisioned identically across build targets
+    (same binary used for thumbnails/phash), so behaviour does not diverge.
+    """
+    try:
+        out = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+             "-of", "default=noprint_wrappers=1:nokey=1", str(path)],
+            capture_output=True, text=True, timeout=8,
+        )
+        val = float(out.stdout.strip())
+        return val if val > 0 else None
+    except Exception:
+        return None
+
+
+def _resolve_scan_paths_req(req: "ScanRequest") -> tuple[list[Path], Optional[str]]:
+    """Resolve a scan request into a candidate file list, honouring ``recursive``.
+
+    Returns (paths, error). ``error`` is non-None only for the directory access /
+    not-found cases the UI surfaces distinctly. Shared by the batch ``/api/scan``
+    and the streaming ``/api/scan-stream`` so the two never diverge in what they
+    enumerate.
+    """
+    if ',' in req.path:
+        file_paths = [Path(p.strip()) for p in req.path.split(',')]
+        return [p for p in file_paths if p.exists()], None
+    base = Path(req.path)
+    if base.is_file():
+        return [base], None
+    if base.is_dir():
+        try:
+            paths = sorted(base.rglob("*")) if req.recursive else sorted(base.iterdir())
+        except (OSError, PermissionError) as e:
+            return [], f"Cannot access directory: {e}"
+        return paths, None
+    return [], f"Path not found: {req.path}"
+
+
+_SCAN_MEDIA_EXTS = VIDEO_EXTENSIONS | SUBTITLE_EXTENSIONS
+
+
+def _build_file_entry(p: Path) -> Optional[dict]:
+    """Build the scan ``file_entry`` for one path, or None to skip it.
+
+    All blocking filesystem/CPU work for a single file (existence/stat, NFO XML
+    parse, regex detection, oshash, optional ffprobe) lives here so it can be run
+    in a worker thread by the streaming endpoint and reused verbatim by the batch
+    endpoint — one implementation, identical across Docker/deb/AppImage.
+    """
+    # Double-check file still exists (race condition with deletion)
+    try:
+        if not p.is_file():
+            return None
+    except (OSError, PermissionError):
+        return None
+
+    # Skip hidden files: .fuse_hidden* stubs, .DS_Store, .Trash, etc.
+    if p.name.startswith('.'):
+        return None
+    if p.suffix.lower() not in _SCAN_MEDIA_EXTS:
+        return None
+
+    try:
+        det = detect(p)
+    except Exception as e:
+        print(f"WARNING: Could not detect {p}: {e}")
+        return None
+
+    # NFO sidecar detection (read-only) — presence means "already organised".
+    nfo_path = p.with_suffix(".nfo")
+    nfo_meta = _parse_nfo(nfo_path) if nfo_path.is_file() else None
+
+    try:
+        file_size = p.stat().st_size
+    except (OSError, PermissionError):
+        return None
+
+    duration_seconds = None
+    oshash = None
+    if is_video_file(p):
+        oshash = compute_oshash(p)
+        if _SCAN_PROBE_DURATION:
+            duration_seconds = _probe_duration_seconds(p)
+
+    return {
+        "path":             str(p),
+        "filename":         p.name,
+        "size":             file_size,
+        "oshash":           oshash,
+        "duration_seconds": duration_seconds,
+        "media_type":       det.media_type.value,
+        "clean_name":       det.clean_name,
+        "normalized_name":  det.normalized_name,   # junk-stripped (D4)
+        "tokens":           det.tokens,            # cheap pre-filter set (D4)
+        "site":             det.site,
+        "performers":       det.performers,
+        "scene_title":      det.scene_title,
+        "release_date":     det.release_date,
+        "year":             det.year,
+        "quality":          det.quality,
+        "source":           det.source,
+        "video_format":     det.video_format,
+        "group":            det.group,
+        # NFO-derived flags — None when no sidecar found
+        "already_organized": nfo_meta is not None,
+        "nfo_metadata":      nfo_meta,
+    }
+
+
+def _annotate_catalog_states(files: list[dict]) -> None:
+    """Fold the catalog's organised/confirmed knowledge into scanned entries.
+
+    Mutates each entry in place: adds ``user_confirmed`` / ``canonical_scene_id``
+    / ``catalog_organized``, and self-heals stale ``organized`` rows (catalog says
+    organised but no NFO on disk → clear it). The on-disk NFO is authoritative.
+    Best-effort: a catalog hiccup must never break a scan.
+    """
+    if not files:
+        return
+    try:
+        states = catalog.get_states([f["path"] for f in files])
+        for f in files:
+            st = states.get(f["path"])
+            if not st:
+                continue
+            f["user_confirmed"] = st["user_confirmed"]
+            f["canonical_scene_id"] = st["canonical_scene_id"]
+            nfo_present = bool(f.get("already_organized"))
+            if st["organized"] and not nfo_present:
+                catalog.set_organized(f["path"], False)
+                f["catalog_organized"] = False
+            else:
+                f["catalog_organized"] = st["organized"]
+    except Exception as e:
+        print(f"WARNING: catalog state annotation failed: {e}")
+
+
 @app.post("/api/scan")
-async def scan_directory(req: ScanRequest):
+def scan_directory(req: ScanRequest):
     """
     Scan a directory for adult media files and auto-detect metadata.
-    Supports:
-    - Single directory path
-    - Single file path
-    - Comma-separated file paths
+    Supports a single directory, a single file, or comma-separated file paths.
+
+    Plain ``def`` (not ``async def``) on purpose: all work here is blocking
+    filesystem/CPU work with no awaits, so FastAPI runs it in its anyio worker
+    threadpool and a slow scan over a large NAS/FUSE mount never blocks the event
+    loop. Identical across Docker/deb/AppImage — pure stdlib, no platform code.
+
+    This non-streaming endpoint is retained for compatibility and the small/
+    scripted cases; the UI uses the cancellable streaming pair
+    (/api/scan-session + /api/scan-stream) so users can stop a long scan and keep
+    the partial results.
     """
-    media_exts = VIDEO_EXTENSIONS | SUBTITLE_EXTENSIONS
-    files = []
-    
-    # Check if path contains comma-separated file paths
-    if ',' in req.path:
-        # Multiple file paths
-        file_paths = [Path(p.strip()) for p in req.path.split(',')]
-        paths = [p for p in file_paths if p.exists()]
-    else:
-        # Single path (directory or file)
-        base = Path(req.path)
-        if base.is_file():
-            paths = [base]
-        elif base.is_dir():
-            if req.recursive:
-                paths = sorted(base.rglob("*"))
-            else:
-                paths = sorted(base.iterdir())
-        else:
-            return {"count": 0, "files": [], "error": f"Path not found: {req.path}"}
+    paths, error = _resolve_scan_paths_req(req)
+    if error:
+        return {"count": 0, "files": [], "error": error}
 
-    for p in paths:
-        if not p.is_file():
-            continue
-        # Skip hidden files: .fuse_hidden* stubs left by FUSE rename-on-open,
-        # .DS_Store, .Trash, and any other dot-prefixed filesystem artefact.
-        if p.name.startswith('.'):
-            continue
-        if p.suffix.lower() not in media_exts:
-            continue
+    files = [e for e in (_build_file_entry(p) for p in paths) if e is not None]
 
-        det = detect(p)
-
-        # ── NFO sidecar detection ──────────────────────────────────────
-        # If a companion .nfo exists this file was already organised by the
-        # app (or compatible software).  We parse the NFO to pre-populate
-        # metadata and flag the file so the UI can show it separately.
-        # This is read-only — nothing about the video file is changed.
-        nfo_path = p.with_suffix(".nfo")
-        nfo_meta = _parse_nfo(nfo_path) if nfo_path.is_file() else None
-
-        file_entry: dict = {
-            "path":             str(p),
-            "filename":         p.name,
-            "size":             p.stat().st_size,
-            "media_type":       det.media_type.value,
-            "clean_name":       det.clean_name,
-            "site":             det.site,
-            "performers":       det.performers,
-            "scene_title":      det.scene_title,
-            "release_date":     det.release_date,
-            "year":             det.year,
-            "quality":          det.quality,
-            "source":           det.source,
-            "video_format":     det.video_format,
-            "group":            det.group,
-            # NFO-derived flags — None when no sidecar found
-            "already_organized": nfo_meta is not None,
-            "nfo_metadata":      nfo_meta,
-        }
-        files.append(file_entry)
+    # ── Catalog (R1): record this scan + apply incremental rescan ───────────
+    try:
+        catalog.upsert_scanned(files)
+    except Exception as e:
+        print(f"WARNING: catalog upsert_scanned failed: {e}")
+    _annotate_catalog_states(files)
+    if req.skip_organized:
+        files = [f for f in files if not f.get("already_organized")]
 
     return {"count": len(files), "files": files}
+
+
+# ─── Scan — SSE streaming endpoint (cancellable) ───────────────────────
+#
+# Mirrors the match SSE two-step handshake so the file list/flags are POSTed
+# (no URL-size limits) and the GET only carries an opaque token:
+#   1. POST /api/scan-session  →  { session_id }
+#   2. GET  /api/scan-stream?session_id=…  →  SSE stream of per-file results
+#
+# The stream lets the UI show results incrementally AND lets the user STOP the
+# scan: closing the EventSource disconnects the request, the server detects it
+# between files and stops walking, keeping whatever was already scanned. Sessions
+# are in-memory and single-use (process-local — same single-worker constraint as
+# the match stream, review item P7).
+_SCAN_SESSION_TTL = 120  # seconds before an unused scan session expires
+_scan_sessions: dict[str, dict] = {}  # { session_id: { "expires": float, "body": ScanRequest } }
+
+
+@app.post("/api/scan-session")
+async def create_scan_session(req: ScanRequest):
+    """Stage 1: stash the scan request and return a short-lived session token."""
+    session_id = uuid.uuid4().hex
+    _scan_sessions[session_id] = {
+        "expires": _time.monotonic() + _SCAN_SESSION_TTL,
+        "body": req,
+    }
+    # Opportunistically evict expired sessions (cheap; sessions are rare).
+    expired = [k for k, v in _scan_sessions.items() if _time.monotonic() > v["expires"]]
+    for k in expired:
+        _scan_sessions.pop(k, None)
+    return {"session_id": session_id}
+
+
+@app.get("/api/scan-stream")
+async def scan_stream(request: Request, session_id: str = Query(...)):
+    """
+    Stage 2: stream one result per scanned file so the UI can render
+    incrementally and the user can STOP at any time (closing the EventSource).
+
+    Events:
+      event: progress  data: {"done": N, "total": M, "filename": "..."}
+      event: result    data: {"file": {…file_entry…}}
+      event: error     data: {"detail": "..."}                  (path errors)
+      event: done      data: {"scanned": N, "total": M, "stopped": bool}
+
+    Per-file work runs in a worker thread (asyncio.to_thread) so the event loop
+    stays responsive and the disconnect check between files can fire promptly.
+    Identical across Docker/deb/AppImage — pure stdlib + FastAPI, no platform code.
+    """
+    session = _scan_sessions.pop(session_id, None)
+    if session is None or _time.monotonic() > session["expires"]:
+        async def _serr():
+            yield "event: error\ndata: {\"detail\": \"Session not found or expired\"}\n\n"
+        return StreamingResponse(_serr(), media_type="text/event-stream")
+
+    req: ScanRequest = session["body"]
+
+    async def _event_stream():
+        # Resolve the candidate file list (blocking rglob/iterdir → thread).
+        paths, error = await asyncio.to_thread(_resolve_scan_paths_req, req)
+        if error:
+            yield f"event: error\ndata: {json.dumps({'detail': error})}\n\n"
+            return
+
+        total = len(paths)
+        scanned = 0
+        stopped = False
+        batch: list[dict] = []   # accumulate for a single catalog upsert
+
+        async def _flush_upsert():
+            if batch:
+                # Persist scan-derived columns for everything processed so far,
+                # even on stop, so the catalog stays consistent. Best-effort.
+                try:
+                    await asyncio.to_thread(catalog.upsert_scanned, list(batch))
+                except Exception as e:
+                    print(f"WARNING: catalog upsert (stream) failed: {e}")
+                batch.clear()
+
+        try:
+            for i, p in enumerate(paths):
+                # Stop point: the client closed the stream → keep partial results.
+                if await request.is_disconnected():
+                    stopped = True
+                    break
+
+                entry = await asyncio.to_thread(_build_file_entry, p)
+                if entry is None:
+                    # Non-media / hidden / unreadable — advance progress only.
+                    yield (
+                        "event: progress\ndata: "
+                        + json.dumps({"done": i + 1, "total": total, "filename": p.name})
+                        + "\n\n"
+                    )
+                    continue
+
+                # Annotate from catalog (organised/confirmed) for this one entry,
+                # then queue it for the batched on-disk upsert.
+                await asyncio.to_thread(_annotate_catalog_states, [entry])
+                batch.append(entry)
+                if len(batch) >= 50:
+                    await _flush_upsert()
+
+                # Incremental rescan: hide already-organised files from the list
+                # (still counted + upserted), matching /api/scan?skip_organized.
+                if req.skip_organized and entry.get("already_organized"):
+                    yield (
+                        "event: progress\ndata: "
+                        + json.dumps({"done": i + 1, "total": total, "filename": entry["filename"]})
+                        + "\n\n"
+                    )
+                    continue
+
+                scanned += 1
+                yield (
+                    "event: progress\ndata: "
+                    + json.dumps({"done": i + 1, "total": total, "filename": entry["filename"]})
+                    + "\n\n"
+                )
+                yield "event: result\ndata: " + json.dumps({"file": entry}) + "\n\n"
+        finally:
+            await _flush_upsert()
+
+        yield (
+            "event: done\ndata: "
+            + json.dumps({"scanned": scanned, "total": total, "stopped": stopped})
+            + "\n\n"
+        )
+
+    return StreamingResponse(
+        _event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+# ─── Catalog Endpoints (R1) ────────────────────────────────────────────
+
+@app.get("/api/catalog/stats")
+async def catalog_stats():
+    """Aggregate catalog counts for the UI (total / organised / confirmed /
+    duplicate groups). Read-only; safe defaults if the catalog is disabled."""
+    return catalog.stats()
+
+
+@app.get("/api/catalog/duplicates")
+async def catalog_duplicates():
+    """Groups of files sharing a content fingerprint (same oshash, ≥2 copies)."""
+    return {"groups": catalog.find_duplicates()}
 
 
 # ─── Match Endpoint ────────────────────────────────────────────────────
@@ -373,30 +852,199 @@ def _stashdb_scene_to_dict(s) -> dict:
         "performers": s.performers,
         "release_date": s.release_date,
         "tags": s.tags,
+        "duration": s.duration,  # seconds — used for duration match scoring (D1)
         "poster_url": s.poster_url,
         "thumbnail_url": s.poster_url,  # StashDB doesn't separate thumb/poster
     }
 
 
-_SITE_TITLE_RE = re.compile(
-    r'^(?P<site>.+?)\s+[-–]\s+(?P<title>.+?)(?:\s*\(\d{4}[-./]\d{2}[-./]\d{2}\))?\s*$'
+# Canonical UUID matcher — StashDB scene IDs are UUIDs. Used to extract the id
+# from a pasted scene URL (https://stashdb.org/scenes/{UUID}) or a bare UUID, and
+# to reject anything else before it ever reaches the GraphQL query (the GraphQL
+# ID type is just a string, so validating here keeps malformed/abusive input out).
+_UUID_RE = re.compile(
+    r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
 )
-_DATE_SUFFIX_RE = re.compile(r'\s*\(\d{4}[-./]\d{2}[-./]\d{2}\)\s*$')
 
 
-def _extract_site_title(file_data: dict) -> tuple[str | None, str]:
+def _extract_stashdb_scene_id(raw: str) -> Optional[str]:
+    """Pull a StashDB scene UUID out of a pasted URL or a bare id.
+
+    Accepts:
+      • https://stashdb.org/scenes/<uuid>  (with/without trailing slash, query,
+        fragment, or extra path segments)
+      • a bare <uuid>
+    Returns the lowercased UUID, or None if no valid UUID is present. Host is not
+    enforced (mirrors/self-hosted Stash-box instances exist), but the value must
+    be a real UUID — so this can't be used to probe arbitrary URLs/paths.
     """
-    For files whose detector returned no site/title (e.g. "SiteName - Title (Date).mp4"),
-    attempt to parse the components from clean_name.
-    Returns (parsed_site, clean_title).
+    if not raw:
+        return None
+    m = _UUID_RE.search(raw.strip())
+    return m.group(0).lower() if m else None
+
+
+class StashDBLookupRequest(BaseModel):
+    """Request body for /api/stashdb/scene — a pasted scene URL or bare UUID."""
+    url: str
+
+    @field_validator("url")
+    @classmethod
+    def _not_blank(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError("A StashDB scene URL or ID is required")
+        return v.strip()
+
+
+@app.post("/api/stashdb/scene")
+async def stashdb_scene_lookup(req: StashDBLookupRequest):
     """
-    raw = file_data.get("scene_title") or file_data.get("clean_name", "")
-    m = _SITE_TITLE_RE.match(raw)
-    if m:
-        site_part  = m.group("site").strip()
-        title_part = _DATE_SUFFIX_RE.sub("", m.group("title")).strip()
-        return site_part, title_part
-    return None, raw
+    Resolve a StashDB scene URL (https://stashdb.org/scenes/{UUID}) or a bare
+    UUID to full scene metadata, for the manual-edit "Fetch from StashDB" action.
+
+    Returns the same scene dict shape used everywhere else so the client can
+    populate the manual-edit fields directly. Requires a configured StashDB key
+    (env var or Settings UI) — the key never leaves the server.
+    """
+    if not stashdb:
+        raise HTTPException(
+            status_code=503,
+            detail="StashDB API key not configured. Set it via STASHDB_API_KEY or the Settings UI.",
+        )
+
+    scene_id = _extract_stashdb_scene_id(req.url)
+    if not scene_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Could not find a scene ID. Paste a link like https://stashdb.org/scenes/<id>.",
+        )
+
+    try:
+        scene = await stashdb.find_scene_by_id(scene_id)
+    except Exception as exc:
+        # Transport / GraphQL / auth failure — surface a clean message, no stack.
+        raise HTTPException(status_code=502, detail=f"StashDB lookup failed: {exc}")
+
+    if scene is None:
+        raise HTTPException(status_code=404, detail="No StashDB scene found for that ID.")
+
+    return {"scene": _stashdb_scene_to_dict(scene)}
+
+
+# ── ThePornDB scene-by-URL lookup (manual-edit "Fetch") ────────────────────────
+# ThePornDB is a REST API (api.theporndb.net, Bearer auth) and its scene URLs use
+# a *slug* — https://theporndb.net/scenes/<slug> — not a UUID. We take the last
+# path segment and look the scene up; if the API can't resolve the slug directly,
+# we fall back to a text search on the de-slugified words so a pasted link still
+# works either way. Same UX as the StashDB fetch.
+_TPDB_SLUG_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*")
+
+
+def _tpdb_scene_to_dict(s) -> dict:
+    """Convert a TPDBScene to the common scene dict used throughout the app."""
+    return {
+        "id": s.id,
+        "title": s.title,
+        "site": s.site,
+        "network": s.network,
+        "performers": s.performers,
+        "release_date": s.release_date,
+        "tags": s.tags,
+        "duration": s.duration,
+        "poster_url": s.poster_url_large,
+        "thumbnail_url": s.thumbnail_url_small,
+    }
+
+
+def _extract_tpdb_scene_slug(raw: str) -> Optional[str]:
+    """Pull the scene slug (or id) out of a pasted ThePornDB URL or bare token.
+
+    For a ``…/scenes/<slug>`` URL, takes the segment immediately after ``scenes``;
+    otherwise (a bare slug/id) takes the last path segment. The result is validated
+    against a strict slug/id charset (letters, digits, ``-``, ``_``) and rejected
+    if it is the literal ``scenes`` (i.e. a URL with no id). Because only the part
+    up to the next ``/`` is kept and dots/slashes/percent are disallowed, the value
+    can never carry a path separator or traversal sequence into the REST path
+    ``/scenes/<slug>``. Host is not enforced (the slug carries the identity).
+    """
+    if not raw:
+        return None
+    s = raw.strip().split("?", 1)[0].split("#", 1)[0]
+    marker = "/scenes/"
+    low = s.lower()
+    if marker in low:
+        seg = s[low.index(marker) + len(marker):].split("/", 1)[0].strip()
+    else:
+        seg = (s.rstrip("/").rsplit("/", 1)[-1] if "/" in s else s).strip()
+    if not seg or seg.lower() == "scenes":
+        return None
+    return seg if _TPDB_SLUG_RE.fullmatch(seg) else None
+
+
+@app.post("/api/tpdb/scene")
+async def tpdb_scene_lookup(req: StashDBLookupRequest):
+    """
+    Resolve a ThePornDB scene URL (https://theporndb.net/scenes/{slug}) — or a
+    bare slug/id — to full scene metadata, for the manual-edit "Fetch from TPDB"
+    action. Returns the shared scene dict shape so the client populates the
+    manual-edit fields directly. Requires a configured TPDB key; the key never
+    leaves the server.
+    """
+    if not tpdb:
+        raise HTTPException(
+            status_code=503,
+            detail="ThePornDB API key not configured. Set it via TPDB_API_KEY or the Settings UI.",
+        )
+
+    slug = _extract_tpdb_scene_slug(req.url)
+    if not slug:
+        raise HTTPException(
+            status_code=400,
+            detail="Could not find a scene from that link. Paste a link like "
+                   "https://theporndb.net/scenes/<slug>.",
+        )
+
+    # 1) Direct lookup by slug/id. (get_scene already swallows transport errors
+    #    and returns None, so a failure here just falls through to the search.)
+    scene = await tpdb.get_scene(slug)
+
+    # 2) Fallback: de-slugify ("a-b-c" → "a b c") and text-search, so the link
+    #    still resolves even when the API only accepts an internal id.
+    if scene is None:
+        query = slug.replace("-", " ").replace("_", " ").strip()
+        results = await tpdb.search_scene(query=query)
+        scene = results[0] if results else None
+
+    if scene is None:
+        raise HTTPException(status_code=404, detail="No ThePornDB scene found for that link.")
+
+    return {"scene": _tpdb_scene_to_dict(scene)}
+
+
+def _dedup_alternatives(results: list[dict], best: dict) -> list[dict]:
+    """Build the alternatives list keyed by scene ``id`` (review item D8).
+
+    The old filter compared whole dicts (``r != best_match``), which is brittle:
+    equality is order-sensitive on list fields like ``performers``/``tags``, so a
+    re-ordered duplicate slipped through while a structurally-identical alt could
+    be dropped. We instead exclude the chosen match by identity *and* by id, and
+    drop any further duplicates sharing an id. Items without a usable id are kept
+    as-is (can't be deduped reliably) — only the chosen object is removed by
+    identity in that case.
+    """
+    best_id = best.get("id") if isinstance(best, dict) else None
+    seen: set = set()
+    out: list[dict] = []
+    for r in results:
+        if r is best:
+            continue
+        rid = r.get("id")
+        if rid is not None:
+            if rid == best_id or rid in seen:
+                continue
+            seen.add(rid)
+        out.append(r)
+    return out
 
 
 async def _match_one_stashdb(file_data: dict, sem: asyncio.Semaphore) -> dict:
@@ -407,7 +1055,9 @@ async def _match_one_stashdb(file_data: dict, sem: asyncio.Semaphore) -> dict:
         # ── 1. Fingerprint search (highest accuracy) ──────────────────
         file_path = Path(file_data.get("path", ""))
         if file_path.is_file():
-            oshash = compute_oshash(file_path)
+            # OSHash reads the file head+tail (blocking disk I/O); run it in a
+            # worker thread so a slow NAS read doesn't stall the event loop.
+            oshash = await asyncio.to_thread(compute_oshash, file_path)
             # pHash computation is CPU-heavy; run it but cap at 20 s
             try:
                 phash = await asyncio.wait_for(compute_phash_ffmpeg(file_path), timeout=20)
@@ -419,30 +1069,36 @@ async def _match_one_stashdb(file_data: dict, sem: asyncio.Semaphore) -> dict:
                 if fp_results:
                     best = fp_results[0]
                     scene_dict = _stashdb_scene_to_dict(best)
-                    confidence = adult_cascade_score(file_data, scene_dict)
-                    alts = [_stashdb_scene_to_dict(s) for s in fp_results[1:5]]
+                    ms = score_match(file_data, scene_dict)
+                    alts = _dedup_alternatives(
+                        [_stashdb_scene_to_dict(s) for s in fp_results[1:5]],
+                        scene_dict,
+                    )
                     return {
                         "original": file_data,
                         "match": scene_dict,
-                        "confidence": round(max(confidence * 100, 90.0), 1),
+                        "confidence": round(max(ms.agreement * 100, 90.0), 1),
+                        "coverage": round(ms.coverage, 3),
+                        "match_fields": ms.fields,
                         "alternatives": alts,
+                        # Exact oshash/phash hit — near-certain regardless of the
+                        # cascade %. The UI surfaces this as a "verified" badge.
+                        "match_method": "fingerprint",
                     }
 
-        # ── 2. Pre-parse "Site - Title (Date)" format ─────────────────
-        # Many files have no detector-parsed site/performers because the
-        # filename follows "StudioName - Scene Title (YYYY-MM-DD)" which
-        # doesn't match any detector pattern.  Extract those parts here
-        # so search and scoring both have better inputs.
+        # ── 2. Resolve search title/site ──────────────────────────────
+        # The detector now extracts site/title/date for "Studio - Title (Date)"
+        # filenames too (D4 consolidation), so we just read its output and fall
+        # back to the junk-stripped normalized name when there's no scene title.
         parsed_site  = file_data.get("site")
-        parsed_title = file_data.get("scene_title") or file_data.get("clean_name", "")
-
-        if not parsed_site:
-            parsed_site, parsed_title = _extract_site_title(file_data)
+        parsed_title = (
+            file_data.get("scene_title")
+            or file_data.get("normalized_name")
+            or file_data.get("clean_name", "")
+        )
 
         # Build an enriched copy of file_data for cascade scoring
         scoring_data = dict(file_data)
-        if parsed_site and not file_data.get("site"):
-            scoring_data["site"] = parsed_site
         if parsed_title:
             scoring_data["scene_title"] = parsed_title
 
@@ -464,31 +1120,122 @@ async def _match_one_stashdb(file_data: dict, sem: asyncio.Semaphore) -> dict:
         results_dicts = [_stashdb_scene_to_dict(s) for s in results[:5]]
 
         # ── 5. Score with enriched metadata ─────────────────────────
+        # find_best_match() now includes the title-only fallback internally
+        # (review item D2), so sparse/title-only files are handled here for both
+        # StashDB and TPDB — no endpoint-specific fallback copy needed.
         best_result = find_best_match(scoring_data, results_dicts)
         if best_result:
-            best_match, score = best_result
+            best_match, ms = best_result
             return {
                 "original": file_data,
                 "match": best_match,
-                "confidence": round(score * 100, 1),
-                "alternatives": [r for r in results_dicts if r != best_match],
+                "confidence": round(ms.agreement * 100, 1),
+                "coverage": round(ms.coverage, 3),
+                "match_fields": ms.fields,
+                "alternatives": _dedup_alternatives(results_dicts, best_match),
             }
 
-        # ── 6. Title-only fallback ────────────────────────────────────
-        # When no performer/date data exists, cascade scoring is near-zero
-        # even for a correct match.  Compare just the title and accept if
-        # it's a reasonable match (≥ 50% similarity).
-        for r in results_dicts[:3]:
-            title_sim = name_similarity(parsed_title, r.get("title", ""))
-            if title_sim >= 0.50:
+        return no_match
+
+
+async def _match_one_tpdb(file_data: dict, sem: asyncio.Semaphore, auto_match: bool) -> dict:
+    """Match a single file against TPDB (auto filename-parse, then text search).
+
+    Extracted so the plain and SSE endpoints share ONE implementation (was
+    duplicated) and both can be wrapped by the match cache uniformly.
+    """
+    async with sem:
+        filename = file_data.get("filename", "")
+
+        # Try automatic matching via filename parsing
+        if auto_match:
+            auto = await tpdb.parse_filename(filename)
+            if auto:
+                net = auto.network or ""
+                _add_known_site(auto.site, net)
+                scene_dict = {
+                    "id": auto.id,
+                    "title": auto.title,
+                    "site": auto.site,
+                    "network": auto.network,  # plain str|None
+                    "performers": auto.performers,
+                    "release_date": auto.release_date,
+                    "tags": auto.tags,
+                    "duration": auto.duration,  # seconds (D1)
+                    "poster_url": auto.poster_url_large,
+                    "thumbnail_url": auto.thumbnail_url_small,
+                }
+                ms = score_match(file_data, scene_dict)
                 return {
                     "original": file_data,
-                    "match": r,
-                    "confidence": round(title_sim * 80, 1),  # cap text-only at 80%
-                    "alternatives": [x for x in results_dicts if x != r],
+                    "match": scene_dict,
+                    "confidence": round(ms.agreement * 100, 1),
+                    "coverage": round(ms.coverage, 3),
+                    "match_fields": ms.fields,
+                    "alternatives": [],
                 }
 
-        return no_match
+        # Fallback to search. Prefer the parsed scene title; otherwise use the
+        # junk-stripped normalized name (D4) before the raw clean name.
+        search_query = (
+            file_data.get("scene_title")
+            or file_data.get("normalized_name")
+            or file_data.get("clean_name", "")
+        )
+        site_filter  = file_data.get("site")
+        search_results = await tpdb.search_scene(query=search_query, site=site_filter)
+
+        if search_results:
+            results_dicts = [
+                {
+                    "id": s.id, "title": s.title, "site": s.site,
+                    "network": s.network,
+                    "performers": s.performers,
+                    "release_date": s.release_date, "tags": s.tags,
+                    "duration": s.duration,  # seconds (D1)
+                    "poster_url": s.poster_url_large,
+                    "thumbnail_url": s.thumbnail_url_small,
+                }
+                for s in search_results[:5]
+            ]
+            best_result = find_best_match(file_data, results_dicts)
+            if best_result:
+                best_match, ms = best_result
+                return {
+                    "original": file_data,
+                    "match": best_match,
+                    "confidence": round(ms.agreement * 100, 1),
+                    "coverage": round(ms.coverage, 3),
+                    "match_fields": ms.fields,
+                    "alternatives": _dedup_alternatives(results_dicts, best_match),
+                }
+            return {"original": file_data, "match": None, "confidence": 0, "alternatives": results_dicts}
+
+        return {"original": file_data, "match": None, "confidence": 0, "alternatives": []}
+
+
+async def _cached_match(file_data: dict, do_match, refresh: bool, source: str,
+                        updates: dict) -> dict:
+    """Wrap a per-file match with the persistent cache (D3).
+
+    On a cache hit (unless ``refresh``) the stored scene is returned without any
+    pHash/API work. On a miss ``do_match()`` runs and a successful result is
+    queued in ``updates`` for a single batched write by the caller.
+    """
+    oshash = file_data.get("oshash")
+    if not refresh and oshash:
+        cached = _match_cache_lookup(oshash, file_data)
+        if cached is not None:
+            return cached
+    result = await do_match()
+    if oshash and isinstance(result, dict) and result.get("match"):
+        updates[oshash] = _make_cache_entry(
+            result["match"], source, result.get("confidence", 0),
+            result.get("match_method"),
+            coverage=result.get("coverage"),
+            match_fields=result.get("match_fields"),
+        )
+    return result
 
 
 @app.post("/api/match")
@@ -498,6 +1245,7 @@ async def match_scenes(req: MatchRequest):
     All files are matched concurrently (up to 5 at a time) to avoid rate limits.
     """
     use_stashdb = req.datasource == "stashdb"
+    cache_updates: dict = {}   # batched cache writes (one flush after gather)
 
     if use_stashdb:
         if not stashdb:
@@ -506,10 +1254,15 @@ async def match_scenes(req: MatchRequest):
                 detail="StashDB API key not configured. Set STASHDB_API_KEY environment variable."
             )
         sem = asyncio.Semaphore(5)
-        matched_files = await asyncio.gather(*[_match_one_stashdb(f, sem) for f in req.files])
+        matched_files = await asyncio.gather(*[
+            _cached_match(f, lambda f=f: _match_one_stashdb(f, sem),
+                          req.refresh, "stashdb", cache_updates)
+            for f in req.files
+        ])
+        _match_cache_flush(cache_updates)
         return {"matches": list(matched_files)}
 
-    # ── TPDB path (original behaviour) ────────────────────────────────
+    # ── TPDB path ─────────────────────────────────────────────────────
     if not tpdb:
         raise HTTPException(
             status_code=503,
@@ -519,70 +1272,13 @@ async def match_scenes(req: MatchRequest):
     # Semaphore: max 5 concurrent TPDB requests
     sem = asyncio.Semaphore(5)
 
-    async def _match_one(file_data: dict) -> dict:
-        async with sem:
-            filename = file_data.get("filename", "")
-
-            # Try automatic matching via filename parsing
-            if req.auto_match:
-                auto_match = await tpdb.parse_filename(filename)
-                if auto_match:
-                    # auto_match.network is already normalised to str|None by
-                    # TPDBClient._parse_scene — use it directly.
-                    net = auto_match.network or ""
-                    _add_known_site(auto_match.site, net)
-                    scene_dict = {
-                        "id": auto_match.id,
-                        "title": auto_match.title,
-                        "site": auto_match.site,
-                        "network": auto_match.network,  # plain str|None
-                        "performers": auto_match.performers,
-                        "release_date": auto_match.release_date,
-                        "tags": auto_match.tags,
-                        "poster_url": auto_match.poster_url_large,
-                        "thumbnail_url": auto_match.thumbnail_url_small,
-                    }
-                    confidence = adult_cascade_score(file_data, scene_dict)
-                    return {
-                        "original": file_data,
-                        "match": scene_dict,
-                        "confidence": round(confidence * 100, 1),
-                        "alternatives": [],
-                    }
-
-            # Fallback to search
-            search_query = file_data.get("scene_title") or file_data.get("clean_name", "")
-            site_filter  = file_data.get("site")
-            search_results = await tpdb.search_scene(query=search_query, site=site_filter)
-
-            if search_results:
-                results_dicts = [
-                    {
-                        "id": s.id, "title": s.title, "site": s.site,
-                        # s.network is already a plain str|None from _parse_scene
-                        "network": s.network,
-                        "performers": s.performers,
-                        "release_date": s.release_date, "tags": s.tags,
-                        "poster_url": s.poster_url_large,
-                        "thumbnail_url": s.thumbnail_url_small,
-                    }
-                    for s in search_results[:5]
-                ]
-                best_result = find_best_match(file_data, results_dicts)
-                if best_result:
-                    best_match, score = best_result
-                    return {
-                        "original": file_data,
-                        "match": best_match,
-                        "confidence": round(score * 100, 1),
-                        "alternatives": [r for r in results_dicts if r != best_match],
-                    }
-                return {"original": file_data, "match": None, "confidence": 0, "alternatives": results_dicts}
-
-            return {"original": file_data, "match": None, "confidence": 0, "alternatives": []}
-
-    # Run all matches concurrently, preserving original order
-    matched_files = await asyncio.gather(*[_match_one(f) for f in req.files])
+    # Run all matches concurrently (cache-wrapped), preserving original order
+    matched_files = await asyncio.gather(*[
+        _cached_match(f, lambda f=f: _match_one_tpdb(f, sem, req.auto_match),
+                      req.refresh, "tpdb", cache_updates)
+        for f in req.files
+    ])
+    _match_cache_flush(cache_updates)
     return {"matches": list(matched_files)}
 
 
@@ -661,60 +1357,19 @@ async def match_stream(request: Request, session_id: str = Query(...)):
     total      = len(files)
     sem: asyncio.Semaphore = asyncio.Semaphore(5)
     q: asyncio.Queue = asyncio.Queue()
+    cache_updates: dict = {}   # batched cache writes, flushed when the stream ends
 
     async def _match_one_sse(idx: int, file_data: dict) -> None:
         result = {"original": file_data, "match": None, "confidence": 0, "alternatives": []}
         try:
             if use_stashdb:
-                result = await _match_one_stashdb(file_data, sem)
+                result = await _cached_match(
+                    file_data, lambda: _match_one_stashdb(file_data, sem),
+                    req.refresh, "stashdb", cache_updates)
             else:
-                async with sem:
-                    filename = file_data.get("filename", "")
-                    if auto_match:
-                        auto = await tpdb.parse_filename(filename)
-                        if auto:
-                            net = auto.network or ""
-                            _add_known_site(auto.site, net)
-                            scene_dict = {
-                                "id": auto.id, "title": auto.title, "site": auto.site,
-                                "network": auto.network, "performers": auto.performers,
-                                "release_date": auto.release_date, "tags": auto.tags,
-                                "poster_url": auto.poster_url_large,
-                                "thumbnail_url": auto.thumbnail_url_small,
-                            }
-                            confidence = adult_cascade_score(file_data, scene_dict)
-                            result = {
-                                "original": file_data, "match": scene_dict,
-                                "confidence": round(confidence * 100, 1), "alternatives": [],
-                            }
-                            await q.put((idx, result))
-                            return
-
-                    search_query = file_data.get("scene_title") or file_data.get("clean_name", "")
-                    site_filter  = file_data.get("site")
-                    search_results = await tpdb.search_scene(query=search_query, site=site_filter)
-
-                    if search_results:
-                        results_dicts = [
-                            {
-                                "id": s.id, "title": s.title, "site": s.site,
-                                "network": s.network, "performers": s.performers,
-                                "release_date": s.release_date, "tags": s.tags,
-                                "poster_url": s.poster_url_large,
-                                "thumbnail_url": s.thumbnail_url_small,
-                            }
-                            for s in search_results[:5]
-                        ]
-                        best = find_best_match(file_data, results_dicts)
-                        if best:
-                            best_match, score = best
-                            result = {
-                                "original": file_data, "match": best_match,
-                                "confidence": round(score * 100, 1),
-                                "alternatives": [r for r in results_dicts if r != best_match],
-                            }
-                        else:
-                            result = {"original": file_data, "match": None, "confidence": 0, "alternatives": results_dicts}
+                result = await _cached_match(
+                    file_data, lambda: _match_one_tpdb(file_data, sem, auto_match),
+                    req.refresh, "tpdb", cache_updates)
         except Exception:
             pass  # leave result as no-match on any transient error
 
@@ -728,37 +1383,41 @@ async def match_stream(request: Request, session_id: str = Query(...)):
         ordered: list[dict | None] = [None] * total
         done_count = 0
 
-        while done_count < total:
-            # Check if the client disconnected
-            if await request.is_disconnected():
-                for t in tasks:
-                    t.cancel()
-                return
+        try:
+            while done_count < total:
+                # Check if the client disconnected
+                if await request.is_disconnected():
+                    for t in tasks:
+                        t.cancel()
+                    return
 
-            try:
-                idx, result = await asyncio.wait_for(q.get(), timeout=30.0)
-            except asyncio.TimeoutError:
-                # Safety valve: client will reconnect via EventSource
-                yield "event: error\ndata: {\"detail\": \"timeout\"}\n\n"
-                for t in tasks:
-                    t.cancel()
-                return
+                try:
+                    idx, result = await asyncio.wait_for(q.get(), timeout=30.0)
+                except asyncio.TimeoutError:
+                    # Safety valve: client will reconnect via EventSource
+                    yield "event: error\ndata: {\"detail\": \"timeout\"}\n\n"
+                    for t in tasks:
+                        t.cancel()
+                    return
 
-            ordered[idx] = result
-            done_count += 1
-            filename = result["original"].get("filename", "")
+                ordered[idx] = result
+                done_count += 1
+                filename = result["original"].get("filename", "")
 
-            # progress event
-            prog = json.dumps({"done": done_count, "total": total, "filename": filename})
-            yield f"event: progress\ndata: {prog}\n\n"
+                # progress event
+                prog = json.dumps({"done": done_count, "total": total, "filename": filename})
+                yield f"event: progress\ndata: {prog}\n\n"
 
-            # result event
-            res_payload = json.dumps({"index": idx, "match": result})
-            yield f"event: result\ndata: {res_payload}\n\n"
+                # result event
+                res_payload = json.dumps({"index": idx, "match": result})
+                yield f"event: result\ndata: {res_payload}\n\n"
 
-        matched_count = sum(1 for r in ordered if r and r.get("match"))
-        done_payload = json.dumps({"matched": matched_count, "total": total})
-        yield f"event: done\ndata: {done_payload}\n\n"
+            matched_count = sum(1 for r in ordered if r and r.get("match"))
+            done_payload = json.dumps({"matched": matched_count, "total": total})
+            yield f"event: done\ndata: {done_payload}\n\n"
+        finally:
+            # Persist whatever matched (even on disconnect/timeout) in one write.
+            _match_cache_flush(cache_updates)
 
     return StreamingResponse(
         _event_stream(),
@@ -771,6 +1430,11 @@ async def match_stream(request: Request, session_id: str = Query(...)):
 
 
 # ─── Preview-Paths Endpoint ──────────────────────────────────────────
+
+# Matches {placeholder} tokens in a naming template (same pattern the formatter
+# uses), so unknown variables can be flagged against TEMPLATE_VARS.
+_TEMPLATE_TOKEN_RE = re.compile(r'\{(\w+)\}')
+
 
 class PreviewPathsRequest(BaseModel):
     """Request body for /api/preview-paths."""
@@ -807,6 +1471,12 @@ async def preview_paths(req: PreviewPathsRequest):
         if flat:
             new_path = old_path.parent / new_path.name
 
+        # Detect {placeholders} the formatter can't resolve — they silently
+        # render to empty (formatter.apply_template), so the UI warns about them
+        # before a rename rather than after.  Validated against TEMPLATE_VARS,
+        # the formatter's own canonical list, so this can never drift.
+        unknown_vars = sorted(set(_TEMPLATE_TOKEN_RE.findall(tmpl)) - TEMPLATE_VARS)
+
         results.append({
             "old_path":       str(old_path),
             "new_path":       str(new_path),
@@ -814,6 +1484,8 @@ async def preview_paths(req: PreviewPathsRequest):
             "same_as_source": new_path.resolve() == old_path.resolve(),
             # True when the generated stem is blank / dot / dotdot
             "degenerate":     new_path.stem in ("", ".", ".."),
+            # Placeholder names not recognised by the formatter (render to empty)
+            "unknown_vars":   unknown_vars,
         })
 
     return {"previews": results}
@@ -835,7 +1507,9 @@ async def rename_files(req: RenameRequest, background_tasks: BackgroundTasks):
     action = RenameAction(req.action)
 
     # ── Phase 1: filesystem operations (sequential to avoid path conflicts) ──
-    phase1 = []   # list of (result, new_path, meta) tuples
+    phase1 = []          # list of (result, new_path, meta, cat) tuples
+    history_batch = []   # (old, new, action, success) — written in ONE save below
+    confirm_updates = {} # oshash -> confirmed cache entry, flushed once below (D3)
     for operation in req.operations:
         old_path   = Path(operation["old_path"])
         scene_data = operation.get("scene_data", {})
@@ -857,10 +1531,44 @@ async def rename_files(req: RenameRequest, background_tasks: BackgroundTasks):
             "release_date": scene_data.get("release_date", ""),
             "tags":         scene_data.get("tags", []),
         }
-        phase1.append((result, new_path, meta))
-
+        # Catalog payload for this op — applied in Phase 2 ONLY after the NFO is
+        # actually written, so a file is never flagged "organized" (which the UI
+        # reports as "has metadata + NFO") when the embed/NFO write failed or the
+        # process died mid-embed. See _run_embed_phase / _embed_one.
+        cat = None
         if result.success and action != RenameAction.TEST:
-            history.add_entry(old_path, new_path, action.value, True)
+            history_batch.append((old_path, new_path, action.value, True))
+            # Renaming a file is the user accepting its match → confirm it in the
+            # cache (only when a real scene was attached). oshash is content-
+            # stable, so the confirmation still hits after the move/rename.
+            oshash = file_data.get("oshash")
+            if oshash and scene_data.get("title"):
+                confirm_updates[oshash] = _make_cache_entry(
+                    scene_data, "confirmed", 100.0, confirmed=True)
+            cat = {
+                "oshash":     oshash,
+                "scene_id":   scene_data.get("id"),
+                "source":     file_data.get("datasource"),
+                "confidence": (file_data.get("confidence") or None),
+                "confirmed":  bool(scene_data.get("title")),
+            }
+            # The filesystem move already happened, so drop the stale source row
+            # now (its content lives at new_path). Marking new_path "organized"
+            # is deferred to Phase 2 (after the NFO write succeeds).
+            try:
+                if action == RenameAction.MOVE and str(new_path) != str(old_path):
+                    catalog.forget(str(old_path))
+            except Exception as e:
+                print(f"WARNING: catalog rename integration failed: {e}")
+
+        phase1.append((result, new_path, meta, cat))
+
+    # Persist all history entries for this request in a SINGLE disk write,
+    # rather than one full-file rewrite per file (previously O(n²) per batch).
+    if history_batch:
+        history.add_entries(history_batch)
+    if confirm_updates:
+        _match_cache_flush(confirm_updates)
 
     # Serialize Phase 1 results (embed_warning is null — Phase 2 not run yet)
     phase1_results = [
@@ -872,7 +1580,7 @@ async def rename_files(req: RenameRequest, background_tasks: BackgroundTasks):
             "error":         result.error,
             "embed_warning": None,
         }
-        for result, _, _ in phase1
+        for result, _, _, _ in phase1
     ]
 
     # Test mode: no embedding happens, skip the background task.
@@ -880,16 +1588,10 @@ async def rename_files(req: RenameRequest, background_tasks: BackgroundTasks):
         return {"results": phase1_results}
 
     # ── Phase 2: metadata embedding + NFO — runs in background ──────────────
-    embeddable = [(r, p, m) for r, p, m in phase1 if r.success and r.new_path]
+    embeddable = [(r, p, m, c) for r, p, m, c in phase1 if r.success and r.new_path]
     job_id = uuid.uuid4().hex
-    _embed_jobs[job_id] = {
-        "total":    len(embeddable),
-        "done":     0,
-        "warnings": [],
-        "complete": len(embeddable) == 0,  # trivially complete if nothing to embed
-        "created":  _time.monotonic(),
-    }
-    background_tasks.add_task(_run_embed_phase, job_id, embeddable)
+    _job_create(job_id, len(embeddable), kind="embed")
+    background_tasks.add_task(_run_embed_phase, job_id, embeddable, req.embed_mode)
     return {"results": phase1_results, "embed_job_id": job_id}
 
 
@@ -909,36 +1611,99 @@ def _get_embed_sem() -> asyncio.Semaphore:
     return _embed_sem
 
 
-async def _run_embed_phase(job_id: str, tasks: list) -> None:
+async def _run_embed_phase(job_id: str, tasks: list, embed_mode: str = "embed") -> None:
     """
-    Background task: embed metadata + write NFO for each successfully renamed file.
-    Tasks are serialised through _EMBED_SEM (max 2 concurrent) so that NAS
-    bandwidth is not saturated by parallel FFmpeg processes.
-    Updates _embed_jobs[job_id] as work completes so the client can poll progress.
+    Background task: write metadata for each successfully renamed file.
+
+    embed_mode:
+      "embed"    – remux metadata into the container via FFmpeg, then write NFO.
+      "nfo_only" – write only the NFO sidecar (no FFmpeg remux). Avoids the
+                   heavy read+local-write+NAS-copy-back; near-instant per file.
+
+    FFmpeg work (embed mode only) is serialised through _EMBED_SEM so NAS
+    bandwidth is not saturated by parallel FFmpeg processes.  Updates
+    _embed_jobs[job_id] as work completes so the client can poll progress.
     """
     job = _embed_jobs.get(job_id)
     if job is None:
         return
 
     embed_sem = _get_embed_sem()
+    nfo_only = embed_mode == "nfo_only"
 
-    async def _embed_one(result, new_path, meta):
-        async with embed_sem:
-            warning = None
-            ok, err = await embed_metadata(result.new_path, meta)
+    async def _embed_one(result, new_path, meta, cat):
+        warning = None
+        # Only the FFmpeg remux needs the concurrency cap; the NFO write is a
+        # tiny local XML file, so nfo_only mode skips the semaphore entirely.
+        if not nfo_only:
+            async with embed_sem:
+                ok, err = await _embed_for_mode(result.new_path, meta, embed_mode)
+                if not ok:
+                    warning = f"Metadata embedding warning: {err}"
+        nfo_ok = True
+        try:
+            write_nfo(result.new_path, meta)
+        except Exception as nfo_err:
+            nfo_ok = False
+            if not warning:
+                warning = f"NFO write warning: {nfo_err}"
+        # Catalog (R1): only now — once the durable, player-visible NFO actually
+        # exists — record the file as organised. Doing this here (not in Phase 1)
+        # prevents a re-scan from reporting "has metadata + NFO" for a file whose
+        # embed/NFO write failed or never ran (e.g. process killed mid-embed).
+        if cat and nfo_ok:
+            try:
+                catalog.mark_organized(
+                    str(result.new_path),
+                    oshash=cat.get("oshash"),
+                    scene_id=cat.get("scene_id"),
+                    source=cat.get("source"),
+                    confidence=cat.get("confidence"),
+                    confirmed=cat.get("confirmed", False),
+                )
+            except Exception as e:
+                print(f"WARNING: catalog mark_organized (phase 2) failed: {e}")
+        _job_progress(
+            job_id,
+            {"path": str(result.new_path), "warning": warning} if warning else None,
+        )
+
+    await asyncio.gather(*[_embed_one(r, p, m, c) for r, p, m, c in tasks])
+    _job_finish(job_id)
+
+
+async def _run_manual_embed_job(
+    job_id: str, file_path: Path, metadata: dict, embed_mode: str
+) -> None:
+    """
+    Background container-embed for a single manual metadata save.
+
+    The NFO sidecar is already written synchronously by the request handler, so
+    this only performs the heavy FFmpeg remux (embed_mode "embed"/"smart").  It
+    mirrors _run_embed_phase's job bookkeeping for ONE file and shares the same
+    _embed_sem, so manual saves and rename Phase-2 embeds never saturate NAS
+    bandwidth together.  Progress is polled via /api/embed-status/{job_id}.
+
+    Identical on every build target — pure stdlib + the shared embed helpers,
+    no platform-specific code.
+    """
+    job = _embed_jobs.get(job_id)
+    if job is None:
+        return
+
+    warning = None
+    try:
+        async with _get_embed_sem():
+            ok, err = await _embed_for_mode(file_path, metadata, embed_mode)
             if not ok:
                 warning = f"Metadata embedding warning: {err}"
-            try:
-                write_nfo(result.new_path, meta)
-            except Exception as nfo_err:
-                if not warning:
-                    warning = f"NFO write warning: {nfo_err}"
-            job["done"] += 1
-            if warning:
-                job["warnings"].append({"path": str(result.new_path), "warning": warning})
+    except Exception as e:  # never let a background crash leave the job stuck
+        warning = f"Metadata embedding warning: {e}"
 
-    await asyncio.gather(*[_embed_one(r, p, m) for r, p, m in tasks])
-    job["complete"] = True
+    _job_progress(
+        job_id, {"path": str(file_path), "warning": warning} if warning else None
+    )
+    _job_finish(job_id)
 
 
 # ─── Embed-status Endpoint ─────────────────────────────────────────────
@@ -968,16 +1733,33 @@ async def embed_status(job_id: str):
     for k in stale:
         _embed_jobs.pop(k, None)
 
+    # Live, in-process job is authoritative while the process is alive.
     job = _embed_jobs.get(job_id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Embed job not found or expired")
+    if job is not None:
+        return {
+            "job_id":   job_id,
+            "total":    job["total"],
+            "done":     job["done"],
+            "complete": job["complete"],
+            "warnings": job["warnings"],
+            "status":   "complete" if job["complete"] else "running",
+        }
 
+    # Fallback (review item R2): not in memory — either the page was refreshed and
+    # we're re-attaching, or the server restarted. The durable store returns the
+    # last-known state; a job left "running" at the last shutdown was flipped to
+    # "interrupted" at startup, so the client gets a clear terminal state instead
+    # of a 404 that would hang or silently drop the progress banner.
+    stored = _job_store.get(job_id)
+    if stored is None:
+        raise HTTPException(status_code=404, detail="Embed job not found or expired")
     return {
         "job_id":   job_id,
-        "total":    job["total"],
-        "done":     job["done"],
-        "complete": job["complete"],
-        "warnings": job["warnings"],
+        "total":    stored["total"],
+        "done":     stored["done"],
+        "complete": stored["complete"],
+        "warnings": stored["warnings"],
+        "status":   stored["status"],
     }
 
 
@@ -997,12 +1779,18 @@ async def get_settings():
     return {
         "tpdb":    {"active": tpdb    is not None, "source": tpdb_src},
         "stashdb": {"active": stashdb is not None, "source": stashdb_src},
+        # Non-secret UI preferences — safe to expose so a fresh browser/profile
+        # can pick up the server-saved choice.
+        "locale":  _effective_locale(),
+        "theme":   _effective_theme(),
     }
 
 
 class SaveSettingsRequest(BaseModel):
     tpdb_api_key:    Optional[str] = None
     stashdb_api_key: Optional[str] = None
+    locale:          Optional[str] = None
+    theme:           Optional[str] = None
 
     @field_validator("tpdb_api_key", "stashdb_api_key", mode="before")
     @classmethod
@@ -1013,6 +1801,30 @@ class SaveSettingsRequest(BaseModel):
         if len(v) > _SETTINGS_KEY_MAX_LEN:
             raise ValueError(f"API key exceeds maximum length ({_SETTINGS_KEY_MAX_LEN})")
         return v or None   # normalise empty string → None
+
+    @field_validator("locale", mode="before")
+    @classmethod
+    def _validate_locale(cls, v) -> Optional[str]:
+        if v is None:
+            return None
+        v = str(v).strip().lower()
+        if not v:
+            return None
+        if v not in _ALLOWED_LOCALES:
+            raise ValueError(f"Unsupported locale: {v}. Allowed: {sorted(_ALLOWED_LOCALES)}")
+        return v
+
+    @field_validator("theme", mode="before")
+    @classmethod
+    def _validate_theme(cls, v) -> Optional[str]:
+        if v is None:
+            return None
+        v = str(v).strip().lower()
+        if not v:
+            return None
+        if v not in _ALLOWED_THEMES:
+            raise ValueError(f"Unsupported theme: {v}. Allowed: {sorted(_ALLOWED_THEMES)}")
+        return v
 
 
 @app.post("/api/settings")
@@ -1030,7 +1842,8 @@ async def save_settings(req: SaveSettingsRequest):
     global tpdb, stashdb
 
     settings = _load_settings()
-    changed  = []
+    changed  = []          # API-key labels — surfaced in the UI toast
+    dirty    = False       # whether anything (keys or prefs) needs persisting
 
     for field_name, env_var, settings_key, label in [
         ("tpdb_api_key",    "TPDB_API_KEY",    "tpdb_api_key",    "TPDB"),
@@ -1045,9 +1858,18 @@ async def save_settings(req: SaveSettingsRequest):
         if new_val:          # non-empty → update saved value
             settings[settings_key] = new_val
             changed.append(label)
+            dirty = True
         # blank → leave existing saved value untouched
 
-    if changed:
+    # UI preferences (already whitelist-validated above). A blank/None value
+    # means "leave unchanged"; only persist when it actually differs.
+    for pref in ("locale", "theme"):
+        new_val = getattr(req, pref)
+        if new_val and settings.get(pref) != new_val:
+            settings[pref] = new_val
+            dirty = True
+
+    if dirty:
         _save_settings(settings)
 
     # Hot-reload clients regardless of whether anything changed, so that a
@@ -1072,6 +1894,8 @@ async def save_settings(req: SaveSettingsRequest):
         "changed": changed,
         "tpdb":    {"active": tpdb    is not None, "source": tpdb_src},
         "stashdb": {"active": stashdb is not None, "source": stashdb_src},
+        "locale":  _effective_locale(),
+        "theme":   _effective_theme(),
     }
 
 
@@ -1093,6 +1917,10 @@ async def get_history(limit: int = Query(50, ge=1, le=500)):
                 "action": e.action,
                 "success": e.success,
                 "error": e.error,
+                # Whether this row can be reverted (action + success). The actual
+                # filesystem state is checked at revert time, so we don't stat
+                # every path here (avoids 50 NAS stat calls per history open).
+                "revertible": history.is_revertible(e),
             }
             for e in entries
         ]
@@ -1102,9 +1930,10 @@ async def get_history(limit: int = Query(50, ge=1, le=500)):
 @app.post("/api/history/undo")
 async def undo_rename():
     """
-    Undo the last rename operation.
+    Undo the last rename operation (most recent revertible *move*).
+    Paths are confined to the allowed roots before any filesystem change.
     """
-    entry = history.undo_last()
+    entry = history.undo_last(is_allowed=_is_allowed_path)
     if entry:
         return {
             "success": True,
@@ -1120,42 +1949,145 @@ async def undo_rename():
         }
 
 
+class RevertRequest(BaseModel):
+    """Request body for /api/history/revert."""
+    id: str
+
+
+@app.post("/api/history/revert")
+async def revert_history_entry(req: RevertRequest):
+    """
+    Revert a single history entry by id.
+
+    A "move" is undone by moving the file back; "copy"/"hardlink"/"symlink" are
+    undone by deleting the created file/link (the original is left untouched).
+    Every path is validated against the allowed roots before any change.
+
+    NOTE: embedded container metadata and NFO sidecars written during the rename
+    are NOT removed — that step is not reversible. The UI states this.
+
+    Returns {"success": bool, "code": str, "reverted"?: {...}} so the client can
+    localise the outcome (codes: ok, not_revertible, already_reverted,
+    source_exists, forbidden, error).
+    """
+    entry = history.get_entry(req.id)
+    if entry is None:
+        raise HTTPException(status_code=404, detail="History entry not found")
+
+    ok, code = history.revert_entry(entry, is_allowed=_is_allowed_path)
+    resp: dict = {"success": ok, "code": code}
+    if ok:
+        resp["reverted"] = {
+            "old_path": entry.old_path,
+            "new_path": entry.new_path,
+            "action":   entry.action,
+        }
+    return resp
+
+
 # ─── Browse Endpoint ───────────────────────────────────────────────────
 
+# Default starting directory for the browse modal.
+#   • Native (deb/AppImage): the user's home (AMM_HOME, set by Electron).
+#   • Docker: "/" — resolved to the *virtual roots view* below (the list of
+#     allowed mount points that exist), so users land on a picker of their
+#     mounted folders instead of a hard-coded "/media" that may not be mounted.
+_BROWSE_DEFAULT = os.getenv("AMM_HOME", os.path.expanduser("~")) if _AMM_NATIVE else "/"
+
+
+def _existing_allowed_roots() -> list[Path]:
+    """Allowed roots that currently exist as directories (Docker roots view).
+
+    Best-effort and never raises — a dead/hung mount among ALLOWED_ROOTS must not
+    break the whole picker, so per-root stat errors are swallowed.
+    """
+    found: list[Path] = []
+    for r in ALLOWED_ROOTS:
+        try:
+            if r.is_dir():
+                found.append(r)
+        except OSError:
+            continue
+    return sorted(found, key=lambda p: str(p))
+
+
 @app.get("/api/browse")
-async def browse_directory(path: str = Query("/media")):
+def browse_directory(path: str = Query(None)):
     """
     Browse directories on the server.
     Returns list of subdirectories and files.
+
+    Plain ``def`` (see scan_directory): the iterdir()/stat() calls are blocking
+    filesystem I/O with no awaits, so FastAPI runs this in its worker threadpool
+    to keep the event loop responsive on slow mounts.
     """
+    if path is None:
+        path = _BROWSE_DEFAULT
     try:
         p = Path(path).resolve()
 
+        # ── Virtual roots view (Docker) ─────────────────────────────────────
+        # "/" is deliberately NOT an allowed root (we must never expose the whole
+        # host filesystem), but the user still needs a top level to pick their
+        # mounted folders from — otherwise browsing dead-ends at a 403 on "/" and
+        # mounts like /mnt are only reachable by typing the path. So browsing "/"
+        # returns ONLY the allowed roots that exist (the configured mounts). This
+        # exposes nothing beyond what the allowlist already permits.
+        # Native mode (AMM_NATIVE=1) skips this and lists "/" for real.
+        if p == Path("/") and not _AMM_NATIVE:
+            return {
+                "path": "/",
+                "is_root": True,
+                "items": [
+                    {"name": str(r), "path": str(r), "type": "directory", "size": 0}
+                    for r in _existing_allowed_roots()
+                ],
+            }
+
         # Security: reject anything outside the explicitly allowed mount points.
-        # Path("/") is intentionally excluded — it would allow traversal to any
-        # file on the filesystem (e.g. /etc/passwd, /root/.ssh).
+        # Native mode (AMM_NATIVE=1) allows any absolute path.
         if not _is_allowed_path(p):
             raise HTTPException(status_code=403, detail="Access denied to this path")
-        
+
         if not p.exists():
             raise HTTPException(status_code=404, detail="Path does not exist")
-        
+
         if not p.is_dir():
             raise HTTPException(status_code=400, detail="Path is not a directory")
-        
+
         items = []
-        
-        # Add parent directory link
-        if p != p.parent:
+
+        # Parent (".." ) link. When the literal parent isn't browsable in Docker
+        # (e.g. the parent of an allowed root, or a non-allowed ancestor like
+        # /run for /run/media), point ".." at the virtual roots view ("/") so the
+        # user can hop between mounts instead of hitting a 403.
+        parent = p.parent
+        if p == parent:
+            parent_link = None                       # already at filesystem root
+        elif _AMM_NATIVE or _is_allowed_path(parent):
+            parent_link = str(parent)
+        else:
+            parent_link = "/"                        # → virtual roots view
+        if parent_link is not None:
             items.append({
                 "name": "..",
-                "path": str(p.parent),
+                "path": parent_link,
                 "type": "directory",
                 "size": 0,
             })
-        
-        # List directory contents
-        for item in sorted(p.iterdir(), key=lambda x: (not x.is_dir(), x.name.lower())):
+
+        # List directory contents. iterdir() on the directory itself can raise
+        # PermissionError/OSError (e.g. /root is in the allowlist but mode 700
+        # and the process isn't root, or a dead NAS mount) — surface that as a
+        # clean 403/503 instead of a generic 500 from the catch-all below.
+        try:
+            entries = sorted(p.iterdir(), key=lambda x: (not x.is_dir(), x.name.lower()))
+        except PermissionError:
+            raise HTTPException(status_code=403, detail="Permission denied for this directory")
+        except OSError as e:
+            raise HTTPException(status_code=503, detail=f"Cannot read directory: {e}")
+
+        for item in entries:
             try:
                 items.append({
                     "name": item.name,
@@ -1182,9 +2114,11 @@ async def browse_directory(path: str = Query("/media")):
 @app.get("/api/templates")
 async def get_templates():
     """
-    Get available naming templates.
+    Get available naming templates and the list of valid {placeholder} variables
+    (so the UI can validate custom templates against the same canonical set the
+    formatter uses).
     """
-    return {"templates": TEMPLATES}
+    return {"templates": TEMPLATES, "variables": sorted(TEMPLATE_VARS)}
 
 
 # ─── Manual Editing & Thumbnails ───────────────────────────────────────
@@ -1209,16 +2143,84 @@ CURATED_TAGS = sorted([
 ])
 
 
+class _JsonStore:
+    """Thread-safe, in-memory-cached JSON file store with atomic writes.
+
+    Replaces the old per-call ``_load_*``/``_save_*`` helpers that re-read and
+    re-parsed the file on every request and rewrote the whole file on every
+    change (the latter called from inside the concurrent match ``gather``).
+
+    Properties:
+      • The value is loaded once and cached, so request paths and match tasks
+        no longer do blocking file reads on the event loop.
+      • A single lock serialises every read-modify-write, so neither FastAPI's
+        worker threadpool (sync endpoints) nor a future multi-thread setup can
+        interleave an update or observe a half-written file.
+      • Writes go through a temp file + ``os.replace`` so a crash can never
+        leave a truncated/corrupt JSON file.
+    Identical behaviour on every build target — pure stdlib, no platform code.
+    """
+
+    def __init__(self, path: Path, default_factory):
+        self._path = path
+        self._default_factory = default_factory   # callable -> fresh default
+        self._lock = threading.RLock()
+        self._cache = None                         # lazy-loaded
+
+    def _ensure_loaded_locked(self):
+        if self._cache is not None:
+            return
+        try:
+            data = json.loads(self._path.read_text(encoding="utf-8"))
+        except Exception:
+            data = None
+        default = self._default_factory()
+        self._cache = data if isinstance(data, type(default)) else default
+
+    def get(self):
+        """Return a deep copy of the value (callers may freely mutate it)."""
+        with self._lock:
+            self._ensure_loaded_locked()
+            return copy.deepcopy(self._cache)
+
+    def get_key(self, key):
+        """Return a deep copy of a single dict entry, or None.
+
+        For dict-backed stores only. Avoids deep-copying the whole store on every
+        lookup (important for a large match cache queried once per file).
+        """
+        with self._lock:
+            self._ensure_loaded_locked()
+            if isinstance(self._cache, dict):
+                val = self._cache.get(key)
+                return copy.deepcopy(val) if val is not None else None
+            return None
+
+    def mutate(self, fn) -> bool:
+        """
+        Run ``fn(cache)`` under the lock, mutating the cached object in place.
+        If ``fn`` returns True the cache is persisted atomically.  ``fn`` may
+        raise to reject the change.  Returns whether a write happened.
+        """
+        with self._lock:
+            self._ensure_loaded_locked()
+            changed = fn(self._cache)
+            if changed:
+                self._write_locked()
+            return bool(changed)
+
+    def _write_locked(self):
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = Path(str(self._path) + ".tmp")
+        tmp.write_text(json.dumps(self._cache, ensure_ascii=False), encoding="utf-8")
+        os.replace(tmp, self._path)
+
+
 USER_TAGS_FILE = DATA_DIR / "user_tags.json"
+_user_tags_store = _JsonStore(USER_TAGS_FILE, list)
 
 def _load_user_tags() -> list[str]:
-    try:
-        return json.loads(USER_TAGS_FILE.read_text())
-    except Exception:
-        return []
-
-def _save_user_tags(tags: list[str]) -> None:
-    USER_TAGS_FILE.write_text(json.dumps(sorted(tags)))
+    return _user_tags_store.get()
 
 @app.get("/api/tags")
 async def get_tags():
@@ -1248,41 +2250,59 @@ class AddTagRequest(BaseModel):
 @app.post("/api/tags")
 async def add_user_tag(req: AddTagRequest):
     """Save a new user-created tag persistently."""
-    user_tags = _load_user_tags()
-    if req.tag not in user_tags:
-        if len(user_tags) >= _MAX_USER_TAGS:
-            raise HTTPException(status_code=400, detail=f"Tag limit ({_MAX_USER_TAGS}) reached")
-        user_tags.append(req.tag)
-        _save_user_tags(user_tags)
+    class _LimitReached(Exception):
+        pass
+
+    def _add(tags: list) -> bool:
+        if req.tag in tags:
+            return False
+        if len(tags) >= _MAX_USER_TAGS:
+            raise _LimitReached()
+        tags.append(req.tag)
+        tags.sort()
+        return True
+
+    try:
+        _user_tags_store.mutate(_add)
+    except _LimitReached:
+        raise HTTPException(status_code=400, detail=f"Tag limit ({_MAX_USER_TAGS}) reached")
     return {"ok": True, "tag": req.tag}
 
 @app.delete("/api/tags/{tag}")
 async def delete_user_tag(tag: str):
     """Remove a user-created tag."""
-    user_tags = _load_user_tags()
-    user_tags = [t for t in user_tags if t != tag]
-    _save_user_tags(user_tags)
+    def _delete(tags: list) -> bool:
+        if tag not in tags:
+            return False
+        tags[:] = [t for t in tags if t != tag]   # mutate in place
+        return True
+
+    _user_tags_store.mutate(_delete)
     return {"ok": True}
 
 KNOWN_SITES_FILE = DATA_DIR / "known_sites.json"
+_known_sites_store = _JsonStore(KNOWN_SITES_FILE, list)
 
 def _load_known_sites() -> list[dict]:
-    try:
-        return json.loads(KNOWN_SITES_FILE.read_text())
-    except Exception:
-        return []
-
-def _save_known_sites(sites: list[dict]) -> None:
-    KNOWN_SITES_FILE.write_text(json.dumps(sites))
+    return _known_sites_store.get()
 
 def _add_known_site(name: str, network: str = "") -> None:
+    """Register a single site if not already known (cached + atomic write).
+
+    Safe to call from inside the concurrent match gather: the cached read means
+    no per-call file I/O, and the lock + atomic write make the update safe.
+    """
     if not name:
         return
-    sites = _load_known_sites()
-    if not any(s["name"] == name for s in sites):
+
+    def _add(sites: list) -> bool:
+        if any(s.get("name") == name for s in sites):
+            return False
         sites.append({"name": name, "network": network})
         sites.sort(key=lambda s: s["name"].lower())
-        _save_known_sites(sites)
+        return True
+
+    _known_sites_store.mutate(_add)
 
 @app.get("/api/search-sites")
 async def search_sites(q: str = Query(default="", min_length=0)):
@@ -1296,10 +2316,133 @@ async def search_sites(q: str = Query(default="", min_length=0)):
         raise HTTPException(status_code=503, detail="TPDB not configured")
     results = await tpdb.search_sites(q)
     sites = [{"id": s.id, "name": s.name, "network": s.network} for s in results]
-    # Cache any new ones found — s.network is str|None from _parse_site()
-    for s in results:
-        _add_known_site(s.name, s.network or "")
+
+    # Cache any new ones found in a SINGLE locked, atomic write (was one full
+    # read-modify-write per result).  s.network is str|None from _parse_site().
+    def _add_all(known: list) -> bool:
+        existing = {s.get("name") for s in known}
+        added = False
+        for s in results:
+            if s.name and s.name not in existing:
+                known.append({"name": s.name, "network": s.network or ""})
+                existing.add(s.name)
+                added = True
+        if added:
+            known.sort(key=lambda x: x["name"].lower())
+        return added
+
+    _known_sites_store.mutate(_add_all)
     return {"sites": sites}
+
+
+# ─── Persistent match cache / canonical-ID catalog (review item D3) ───────────
+# Maps a file's content fingerprint (oshash, computed at scan) to its matched
+# scene, so a re-scan/re-match reuses the result instead of recomputing pHash and
+# re-querying the API (saving the most expensive work and API rate limit). Keyed
+# by oshash, the entry survives renames/moves (content-stable). Entries:
+#   { "<oshash>": {scene, source, confidence, match_method, user_confirmed,
+#                  updated_at} }
+# Stored as plain JSON in the already-secured DATA_DIR (same place as history),
+# bounded so it can't grow without limit. No secrets, no platform code — behaves
+# identically on Docker/deb/AppImage.
+_MATCH_CACHE_FILE = DATA_DIR / "match_cache.json"
+_match_cache_store = _JsonStore(_MATCH_CACHE_FILE, dict)
+try:
+    _MATCH_CACHE_MAX = int(os.getenv("AMM_MATCH_CACHE_MAX", "50000"))
+except ValueError:
+    _MATCH_CACHE_MAX = 50000
+if _MATCH_CACHE_MAX < 0:
+    _MATCH_CACHE_MAX = 0   # 0 = unbounded
+
+
+def _make_cache_entry(scene: dict, source: str, confidence, match_method=None,
+                      confirmed: bool = False, coverage=None,
+                      match_fields=None) -> dict:
+    return {
+        "scene": scene,
+        "source": source,
+        "confidence": confidence,
+        "match_method": match_method,
+        "user_confirmed": confirmed,
+        # Evidence coverage + fields (D7) so a cache hit shows the same "based on
+        # …" note as a fresh match. Absent on legacy entries → handled on read.
+        "coverage": coverage,
+        "match_fields": match_fields or [],
+        "updated_at": _time.time(),
+    }
+
+
+def _bound_match_cache(cache: dict) -> None:
+    """Evict the oldest NON-confirmed entries until within the cap (in place)."""
+    cap = _MATCH_CACHE_MAX
+    if not cap or len(cache) <= cap:
+        return
+    evictable = sorted(
+        (k for k, v in cache.items() if not v.get("user_confirmed")),
+        key=lambda k: cache[k].get("updated_at", 0),
+    )
+    i = 0
+    while len(cache) > cap and i < len(evictable):
+        del cache[evictable[i]]
+        i += 1
+
+
+def _match_cache_lookup(oshash: str, file_data: dict) -> Optional[dict]:
+    """Return a match-result dict from the cache for this oshash, or None."""
+    if not oshash:
+        return None
+    entry = _match_cache_store.get_key(oshash)
+    if not entry or not entry.get("scene"):
+        return None
+    return {
+        "original": file_data,
+        "match": entry["scene"],
+        "confidence": entry.get("confidence", 0),
+        "alternatives": [],
+        "match_method": "cache",
+        "cached": True,
+        "user_confirmed": bool(entry.get("user_confirmed")),
+        "coverage": entry.get("coverage"),
+        "match_fields": entry.get("match_fields", []),
+    }
+
+
+def _match_cache_flush(updates: dict) -> None:
+    """Persist a batch of auto-match results in a SINGLE atomic write.
+
+    Never downgrades a user-confirmed entry back to an auto one (keeps the
+    confirmed flag, just refreshes the snapshot). Called once per match run.
+    """
+    if not updates:
+        return
+
+    def _apply(cache: dict) -> bool:
+        for oshash, entry in updates.items():
+            existing = cache.get(oshash)
+            if existing and existing.get("user_confirmed"):
+                entry = {**entry, "user_confirmed": True}
+            cache[oshash] = entry
+        _bound_match_cache(cache)
+        return True
+
+    _match_cache_store.mutate(_apply)
+
+
+def _match_cache_confirm(oshash: str, scene: dict, source: str, confidence=100.0) -> None:
+    """Mark a file's match as user-confirmed (manual edit / accepted rename).
+
+    Best-effort: confirmed entries are trusted on the next scan and are never
+    evicted by the size cap.
+    """
+    if not oshash or not scene:
+        return
+
+    def _apply(cache: dict) -> bool:
+        cache[oshash] = _make_cache_entry(scene, source, confidence, confirmed=True)
+        _bound_match_cache(cache)
+        return True
+
+    _match_cache_store.mutate(_apply)
 
 
 class AddKnownSiteRequest(BaseModel):
@@ -1596,15 +2739,9 @@ async def embed_metadata(file_path: Path, metadata: dict) -> tuple[bool, str]:
             "-map_metadata", "0",          # keep existing metadata as base
         ]
 
-        def _add(key: str, value: str):
-            if value:
-                cmd.extend(["-metadata", f"{key}={value}"])
-
-        _add("title",       metadata.get("title", ""))
-        _add("artist",      ", ".join(metadata.get("performers", [])))
-        _add("album",       metadata.get("site", ""))
-        _add("date",        metadata.get("release_date", ""))
-        _add("comment",     ", ".join(metadata.get("tags", [])))
+        # Shared field→tag mapping (also used by the mkvpropedit / AtomicParsley
+        # writers) so embedded metadata is identical whichever strategy runs.
+        cmd.extend(ffmpeg_metadata_args(metadata))
 
         cmd.append(str(tmp_path))
 
@@ -1733,13 +2870,192 @@ async def embed_metadata(file_path: Path, metadata: dict) -> tuple[bool, str]:
         return False, str(e)
 
 
-@app.post("/api/save-manual-metadata")
-async def save_manual_metadata(req: ManualMetadataRequest):
+async def embed_metadata_mkv(file_path: Path, metadata: dict) -> tuple[bool, str]:
     """
-    Embed manually entered metadata directly into the video file via FFmpeg.
-    No sidecar JSON file is written.
+    Embed metadata into a Matroska file IN PLACE using mkvpropedit.
+
+    Only the segment title and global tags are rewritten — the media data is
+    never re-muxed, so this is near-instant even on multi-GB files and uses
+    negligible NAS bandwidth (the key win over the FFmpeg remux).
+
+    Returns (True, "") on success (including the no-op case), or (False, err);
+    the caller falls back to the FFmpeg remux on failure.
+    """
+    binary = _mkvpropedit_path()
+    if not binary:
+        return False, "mkvpropedit not available"
+
+    title = (metadata.get("title") or "").strip()
+    tags_xml = build_mkv_tags_xml(metadata)
+
+    # Nothing to write → success no-op.
+    if not title and tags_xml is None:
+        return True, ""
+
+    cmd = [binary, str(file_path)]
+    if title:
+        # Passed as a single argv element (no shell) — value may contain '=' or
+        # spaces safely; mkvpropedit splits on the first '='.
+        cmd += ["--edit", "info", "--set", f"title={title}"]
+
+    tags_tmp: Optional[Path] = None
+    try:
+        if tags_xml is not None:
+            fd, tmp_str = tempfile.mkstemp(suffix=".xml", dir=_EMBED_STAGING_DIR)
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                fh.write('<?xml version="1.0" encoding="UTF-8"?>\n')
+                fh.write('<!DOCTYPE Tags SYSTEM "matroskatags.dtd">\n')
+                fh.write(tags_xml)
+            tags_tmp = Path(tmp_str)
+            cmd += ["--tags", f"global:{tags_tmp}"]
+
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        try:
+            _, stderr_data = await asyncio.wait_for(proc.communicate(), timeout=300)
+        except asyncio.TimeoutError:
+            proc.kill()
+            await proc.wait()
+            return False, "mkvpropedit timed out"
+
+        # mkvtoolnix exit codes: 0 = ok, 1 = warning(s) but changes were applied,
+        # 2 = error/aborted.  Treat 0 and 1 as success so we don't trigger a
+        # needless remux when the edit actually happened.
+        if proc.returncode not in (0, 1):
+            return False, stderr_data.decode(errors="replace").strip() or "mkvpropedit failed"
+        return True, ""
+    except Exception as e:
+        return False, str(e)
+    finally:
+        if tags_tmp is not None:
+            tags_tmp.unlink(missing_ok=True)
+
+
+async def embed_metadata_mp4(file_path: Path, metadata: dict) -> tuple[bool, str]:
+    """
+    Tag an MP4/M4V/MOV file IN PLACE using AtomicParsley (``--overWrite``).
+
+    Avoids the FFmpeg stream-remux quirks (data/subtitle stream rejections) and
+    keeps the media untouched. Field mapping mirrors the FFmpeg/mkv writers:
+        title → --title, performers → --artist, site → --album,
+        release_date → --year, tags → --comment.
+
+    Returns (True, "") on success (including the no-op case), or (False, err);
+    the caller falls back to the FFmpeg remux on failure.
+    """
+    binary = _atomicparsley_path()
+    if not binary:
+        return False, "AtomicParsley not available"
+
+    cmd = [binary, str(file_path)]
+    mapping = [
+        ("--title",   (metadata.get("title") or "").strip()),
+        ("--artist",  ", ".join(metadata.get("performers", []) or [])),
+        ("--album",   (metadata.get("site") or "")),
+        ("--year",    (metadata.get("release_date") or "")),
+        ("--comment", ", ".join(metadata.get("tags", []) or [])),
+    ]
+    for flag, value in mapping:
+        if value:
+            cmd += [flag, value]
+
+    # Nothing to write → success no-op (don't rewrite the file for nothing).
+    if len(cmd) == 2:
+        return True, ""
+
+    cmd.append("--overWrite")
+
+    # AtomicParsley may rewrite the moov atom; size-scaled timeout like the remux.
+    try:
+        timeout = min(3600, 300 + int(file_path.stat().st_size / (1024 ** 3) * 180))
+    except OSError:
+        timeout = 600
+
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        try:
+            _, stderr_data = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+        except asyncio.TimeoutError:
+            proc.kill()
+            await proc.wait()
+            return False, f"AtomicParsley timed out after {timeout}s"
+        if proc.returncode != 0:
+            return False, stderr_data.decode(errors="replace").strip() or "AtomicParsley failed"
+        return True, ""
+    except Exception as e:
+        return False, str(e)
+
+
+# Strategy registry (review item R4): name → async executor. The planner
+# (embedder.plan_embed) returns an ordered list of these names; _embed_for_mode
+# tries each until one succeeds, with "remux" always last as the universal
+# fallback. Adding a new strategy = one executor + one registry entry + one
+# branch in plan_embed.
+_EMBED_EXECUTORS = {
+    "mkvpropedit":   lambda fp, md: embed_metadata_mkv(fp, md),
+    "atomicparsley": lambda fp, md: embed_metadata_mp4(fp, md),
+    "remux":         lambda fp, md: embed_metadata(fp, md),
+}
+
+
+async def _embed_for_mode(file_path: Path, metadata: dict, embed_mode: str) -> tuple[bool, str]:
+    """
+    Write embedded metadata according to embed_mode (never called for nfo_only).
+
+    Delegates the per-container decision to the pure planner
+    (embedder.plan_embed), then runs the resulting strategy chain in order until
+    one succeeds. "smart" prefers a fast in-place edit (mkvpropedit for Matroska,
+    AtomicParsley for MP4) and falls back to the FFmpeg remux; "embed" is remux
+    only. The end state always matches "embed" because "remux" is the last step.
+    """
+    plan = plan_embed(
+        file_path.suffix.lower(),
+        embed_mode,
+        has_mkvpropedit=bool(_mkvpropedit_path()),
+        has_atomicparsley=bool(_atomicparsley_path()),
+    )
+    if not plan:
+        return True, ""  # nothing to do (e.g. nfo_only) — safe no-op
+
+    errors: list[str] = []
+    for strategy in plan:
+        ok, err = await _EMBED_EXECUTORS[strategy](file_path, metadata)
+        if ok:
+            return True, ""
+        errors.append(f"{strategy}: {err}")
+    return False, "; ".join(errors)
+
+
+@app.post("/api/save-manual-metadata")
+async def save_manual_metadata(req: ManualMetadataRequest, background_tasks: BackgroundTasks):
+    """
+    Persist manually entered metadata.
+
+    Fast path (returns immediately): write the Jellyfin/Plex-compatible NFO
+    sidecar and select the preferred thumbnail.  Players read the sidecar, so the
+    edit is durable the moment this returns — the request is no longer gated on a
+    multi-GB container rewrite (review item X3).
+
+    Heavy path (background): for embed_mode "embed"/"smart" the in-container
+    FFmpeg remux is dispatched as a BackgroundTask and tracked in _embed_jobs,
+    exactly like Phase 2 of /api/rename.  The client polls
+    /api/embed-status/{job_id}.  "nfo_only" skips embedding entirely (no job).
     """
     file_path = Path(req.file_path)
+
+    # Security: confine writes to the configured media roots — native mode
+    # (AMM_NATIVE=1) allows any absolute path, Docker restricts to the mounted
+    # allowlist.  Mirrors the guard already enforced by /api/preview-paths and
+    # /api/browse so this write endpoint isn't a softer target.
+    if not _is_allowed_path(file_path):
+        raise HTTPException(status_code=403, detail="Path not in an allowed media directory")
 
     if not file_path.exists():
         raise HTTPException(status_code=404, detail="File not found")
@@ -1752,16 +3068,15 @@ async def save_manual_metadata(req: ManualMetadataRequest):
         "tags":         req.tags,
     }
 
-    ok, err = await embed_metadata(file_path, metadata)
-    if not ok:
-        raise HTTPException(status_code=500, detail=f"Metadata embedding failed: {err}")
-
+    # ── Fast path: NFO sidecar (tiny local XML) ─────────────────────────────
+    # This is the durable, player-visible result and must not be gated on the
+    # heavy container embed, so it is written synchronously and up front.
     try:
         write_nfo(file_path, metadata)
-    except Exception:
-        pass
+    except Exception as nfo_err:
+        raise HTTPException(status_code=500, detail=f"Failed to write metadata sidecar: {nfo_err}")
 
-    # Optionally mark a preferred thumbnail
+    # Optionally mark a preferred thumbnail (cheap local copy)
     thumbnail_url = None
     if req.thumbnail_index is not None:
         thumbnail_dir = DATA_DIR / "thumbnails" / file_path.stem
@@ -1772,10 +3087,46 @@ async def save_manual_metadata(req: ManualMetadataRequest):
             shutil.copy2(source_thumb, dest_thumb)
             thumbnail_url = f"/api/thumbnail/{file_path.stem}/selected.jpg"
 
+    # ── Heavy path: in-container embed dispatched to the background ──────────
+    # "nfo_only" relies on the sidecar alone; "embed"/"smart" remux the file but
+    # do so off the request path so the UI returns instantly.
+    embed_job_id = None
+    if req.embed_mode != "nfo_only":
+        embed_job_id = uuid.uuid4().hex
+        _job_create(embed_job_id, 1, kind="manual_embed")
+        background_tasks.add_task(
+            _run_manual_embed_job, embed_job_id, file_path, metadata, req.embed_mode
+        )
+
+    # A manual save is the strongest "this is the right scene" signal — record it
+    # as a user-confirmed match so a future re-scan trusts it (D3). Best-effort;
+    # the oshash is recomputed from the (existing, already path-validated) file.
+    try:
+        confirmed_scene = {
+            "id": "manual",
+            "title": metadata["title"],
+            "site": metadata["site"],
+            "performers": metadata["performers"],
+            "release_date": metadata["release_date"],
+            "tags": metadata["tags"],
+            "manual_entry": True,
+            "thumbnail_url": thumbnail_url,
+        }
+        oshash = compute_oshash(file_path)
+        _match_cache_confirm(oshash, confirmed_scene, "manual")
+        # Catalog (R1): a manual save is a user-confirmed match at this path.
+        catalog.mark_organized(
+            str(file_path), oshash=oshash, scene_id="manual",
+            source="manual", confidence=100.0, confirmed=True,
+        )
+    except Exception:
+        pass
+
     return {
-        "success": True,
-        "thumbnail_url": thumbnail_url,
-        "metadata": metadata,
+        "success":       True,
+        "thumbnail_url":  thumbnail_url,
+        "metadata":       metadata,
+        "embed_job_id":   embed_job_id,   # null when nfo_only — nothing to poll
     }
 
 
@@ -1820,9 +3171,7 @@ async def health_check():
     """
     Health check endpoint.
     """
-    privacy_mode = os.getenv("PRIVACY_MODE", "true").lower() == "true"
     return {
         "status": "healthy",
         "tpdb_configured": tpdb is not None,
-        "privacy_mode": privacy_mode,
     }

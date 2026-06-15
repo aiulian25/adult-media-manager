@@ -12,10 +12,20 @@ services:
       # Keys set here always take priority over the Settings page.
       - TPDB_API_KEY=${TPDB_API_KEY:-}
       - STASHDB_API_KEY=${STASHDB_API_KEY:-}
-      - PRIVACY_MODE=${PRIVACY_MODE:-false}
       - AMM_HOST=0.0.0.0
       - AMM_PORT=${AMM_PORT:-8887}
       - DATA_DIR=/data
+      # Date matching tolerance in days (see .env.example). Forwarded explicitly
+      # so Docker matches deb/AppImage, which read it straight from the env.
+      - AMM_DATE_TOLERANCE_DAYS=${AMM_DATE_TOLERANCE_DAYS:-7}
+      # Extra browsable/scannable roots (colon-separated), for media mounted
+      # OUTSIDE the built-in roots (/media /mnt /data /downloads /organized /home
+      # /srv /nas /storage /run/media). The Browse picker lists the built-in roots
+      # that exist plus these. Example: AMM_EXTRA_ROOTS=/library:/tank
+      - AMM_EXTRA_ROOTS=${AMM_EXTRA_ROOTS:-}
+      # Run a SINGLE worker only. Match sessions and embed-job progress live in
+      # process-local memory, so matching and embed progress break with >1
+      # worker. Do not set WEB_CONCURRENCY / AMM_WORKERS above 1.
     volumes:
       # Persistent data: history, settings, API keys saved via UI, embed staging
       - adult-media-manager-data:/data
@@ -24,6 +34,10 @@ services:
       # Mount your media directories here. Use the same path inside and outside
       # the container so the scan path you type in the UI matches what the
       # server sees. Add as many mounts as you need.
+      #
+      # Mount under a built-in root (e.g. /mnt, /media, /srv, /nas) and it shows
+      # up automatically in the in-app Browse picker. For any other location, also
+      # list it in AMM_EXTRA_ROOTS above so the picker/scan will allow it.
 
       # Single directory:
       # - /path/to/your/media:/path/to/your/media

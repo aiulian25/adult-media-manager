@@ -2,7 +2,7 @@
 Name=Adult Media Manager
 GenericName=Adult Media Organizer
 Comment=Smart metadata organizer for adult content
-Exec=AppRun --no-sandbox %U
+Exec=/opt/Adult Media Manager/adult-media-manager %U
 Icon=adult-media-manager
 Type=Application
 Categories=AudioVideo;Video;Utility;
@@ -10,3 +10,4 @@ Terminal=false
 StartupWMClass=AdultMediaManager
 StartupNotify=true
 X-AppImage-Version=1.0.0
+Keywords=adult;media;organizer;metadata;rename;scan;

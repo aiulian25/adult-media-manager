@@ -204,6 +204,55 @@ body {
     border-color: var(--primary);
 }
 
+/* Live template preview (U5) — example output path under the template field. */
+.template-preview {
+    margin-top: 6px;
+    font-family: var(--mono, ui-monospace, monospace);
+    font-size: 11px;
+    line-height: 1.4;
+    color: var(--text-secondary);
+    word-break: break-all;
+    min-height: 1em;          /* reserve space so the toolbar doesn't jump */
+}
+.template-preview.is-hint  { color: var(--text-muted); font-style: italic; }
+.template-preview.is-error { color: var(--error, #ff8a80); font-family: inherit; }
+
+/* Template warning line (unknown variables / no-change) — hidden until shown */
+.template-warning {
+    margin-top: 4px;
+    font-size: 11px;
+    line-height: 1.4;
+    color: var(--warning, #ffcc66);
+    word-break: break-word;
+    display: none;
+}
+.template-warning.is-shown { display: block; }
+
+/* Inline field error (manual release date) */
+.field-error {
+    display: none;
+    margin-top: 4px;
+    font-size: 11px;
+    line-height: 1.4;
+    color: var(--error, #ff8a80);
+}
+.field-error.is-shown { display: block; }
+
+.glass-input.input-error,
+input.input-error {
+    border-color: var(--error, #ff8a80) !important;
+}
+
+/* Inline status for the manual-edit "Fetch from StashDB" action */
+.manual-stashdb-status {
+    display: none;
+    margin-top: 6px;
+    font-size: 12px;
+    line-height: 1.4;
+}
+.manual-stashdb-status.is-error { display: block; color: var(--error, #ff8a80); }
+.manual-stashdb-status.is-ok    { display: block; color: var(--success, #00e0a4); }
+
 .topbar-right {
     display: flex;
     gap: 10px;
@@ -252,6 +301,33 @@ body {
     box-shadow: 0 4px 20px rgba(178, 75, 243, 0.5);
 }
 
+/* Toggle visibility of the scan/stop buttons (no global .hidden utility). */
+.btn-scan.hidden, .btn-stop-scan.hidden { display: none; }
+
+/* Stop-scan button — only visible while a scan is streaming */
+.btn-stop-scan {
+    background: linear-gradient(135deg, var(--error) 0%, #b23030 100%);
+    border-color: transparent;
+    font-weight: 600;
+}
+.btn-stop-scan:hover {
+    box-shadow: 0 4px 20px rgba(255, 71, 87, 0.5);
+}
+
+/* Partial-results banner shown after a scan is stopped early */
+.scan-stopped-notice {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 14px 16px;
+    margin-bottom: 12px;
+    border: 1px solid var(--warning, #ffc107);
+    border-radius: 12px;
+}
+.scan-stopped-icon { font-size: 1.3rem; line-height: 1.4; }
+.scan-stopped-title { font-weight: 600; color: var(--warning, #ffc107); }
+.scan-stopped-sub { font-size: .82rem; color: var(--text-muted); margin-top: 2px; }
+
 /* ═══ Inputs ═══ */
 .glass-input, .glass-select {
     padding: 8px 12px;
@@ -277,6 +353,20 @@ body {
 
 .glass-select {
     cursor: pointer;
+}
+
+/* Native <select> popup options — Chromium/Electron honour background-color and
+   color on <option>, so the OS-default white/blue (or orange) popup is replaced
+   by the active theme. Variable-driven, so it follows ANY theme automatically. */
+.glass-select option,
+.glass-input option {
+    background-color: var(--bg-dark-2);
+    color: var(--text-primary);
+}
+.glass-select option:checked,
+.glass-input option:checked {
+    background-color: var(--primary);
+    color: #ffffff;
 }
 
 /* ═══ Scan Bar ═══ */
@@ -378,13 +468,35 @@ body {
     margin-bottom: 10px;
 }
 
-.privacy-notice {
-    background: rgba(255, 111, 181, 0.1);
-    padding: 15px;
-    border-radius: 8px;
-    border: 1px solid rgba(255, 111, 181, 0.3);
-    max-width: 600px;
-    margin: 20px auto 0;
+
+/* ═══ Empty / zero-result states (home, zero-scan, zero-match) ═══ */
+.empty-state {
+    text-align: center;
+    padding: 56px 24px;
+    color: var(--text-secondary);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+}
+
+.empty-icon {
+    font-size: 46px;
+    line-height: 1;
+    opacity: .9;
+}
+
+.empty-title {
+    font-size: 19px;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.empty-subtitle {
+    font-size: 14px;
+    color: var(--text-muted);
+    max-width: 520px;
+    line-height: 1.6;
 }
 
 /* ═══ File List ═══ */
@@ -533,11 +645,6 @@ body {
     width: 100%;
     height: 100%;
     object-fit: cover;
-    transition: filter 0.3s;
-}
-
-.match-thumbnail img.blurred {
-    filter: blur(20px);
 }
 
 .match-info {
@@ -603,6 +710,107 @@ body {
     height: 100%;
     background: linear-gradient(90deg, var(--accent) 0%, var(--primary) 100%);
     width: var(--confidence, 0%);
+}
+
+/* ── Confidence interpretation (U4) ───────────────────────────────────────
+   Band colours give the raw % meaning at a glance (High/Medium/Low). */
+.confidence-bar.conf-high::after   { background: linear-gradient(90deg, #00c853 0%, #00e676 100%); }
+.confidence-bar.conf-medium::after { background: linear-gradient(90deg, #f0a500 0%, #ffca28 100%); }
+.confidence-bar.conf-low::after    { background: linear-gradient(90deg, #ff5252 0%, #ff8a80 100%); }
+
+.conf-band {
+    display: block;
+    margin-bottom: 8px;
+    font-size: 12px;
+    font-weight: 600;
+}
+.conf-band.conf-high   { color: #00e676; }
+.conf-band.conf-medium { color: #ffca28; }
+.conf-band.conf-low    { color: #ff8a80; }
+
+/* Evidence-coverage note (D7) — "based on title + duration only". Muted so it
+   reads as context under the headline %, not a competing figure. */
+.conf-evidence {
+    display: block;
+    margin: -2px 0 8px;
+    font-size: 10px;
+    line-height: 1.3;
+    color: var(--text-muted);
+    cursor: help;
+}
+
+/* ── Match-row classes (review item R3) ───────────────────────────────────
+   Extracted from inline style="…" so presentation lives in CSS, not JS
+   strings. The badge/evidence slots are display:contents so the helper-built
+   element inside them lays out as a direct child of .match-confidence (the
+   flex column), preserving the previous spacing. */
+.conf-badge-slot,
+.conf-evidence-slot { display: contents; }
+
+.match-header-panel { padding: 20px; margin-bottom: 15px; }
+.match-zero-panel   { margin-bottom: 15px; }
+.match-writeall-btn { font-size: 12px; margin-left: auto; }
+
+.match-nomatch { border: 1px solid rgba(255, 71, 87, 0.3); }
+.manual-tag    { font-size: 11px; color: var(--accent); }
+
+.match-original          { margin-top: 10px; color: var(--text-muted); font-size: 12px; }
+.match-original-nomatch  { margin-top: 0; margin-bottom: 10px; }
+
+.match-action-btn  { font-size: 11px; width: 100%; margin-top: 6px; }
+.match-edit-btn    { margin-top: 10px; }
+.match-edit-manual { font-size: 12px; }
+
+/* Windowing "Show all N more" button (shared by scan + match lists). */
+.show-all-btn { margin: 10px auto 0; display: block; font-size: 12px; }
+
+/* "Needs review" queue filter bar (Suggested-Fields summary). */
+.match-filter-bar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+.match-filter-label {
+    font-size: 12px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: .04em;
+}
+.match-filter-bar .glass-select { font-size: 12px; padding: 4px 8px; }
+.match-selecthigh-btn { font-size: 12px; margin-left: auto; }
+
+/* Fingerprint-verified badge — an exact oshash/phash hit; near-certain. */
+.conf-verified {
+    display: inline-block;
+    margin-bottom: 6px;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: .02em;
+    color: #00e676;
+    background: rgba(0, 230, 118, 0.12);
+    border: 1px solid rgba(0, 230, 118, 0.4);
+    cursor: help;
+}
+
+/* Cached-match badge (D3) — reuses the verified pill shape, amber tone */
+.conf-cached {
+    display: inline-block;
+    margin-bottom: 6px;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: .02em;
+    color: #ffca6a;
+    background: rgba(255, 202, 106, 0.12);
+    border: 1px solid rgba(255, 202, 106, 0.4);
+    cursor: help;
 }
 
 /* ═══ Modal ═══ */
@@ -750,10 +958,45 @@ body {
     border-radius: 8px;
 }
 
+.history-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 8px;
+}
+
+.history-action {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: .05em;
+    padding: 2px 8px;
+    border-radius: 10px;
+    background: rgba(178, 75, 243, 0.18);
+    color: var(--primary, #b24bf3);
+    flex-shrink: 0;
+}
+
+.history-revert-btn {
+    margin-left: auto;
+    font-size: 11px;
+    padding: 3px 12px;
+    flex-shrink: 0;
+}
+
+.history-note {
+    font-size: 11px;
+    line-height: 1.5;
+    color: var(--text-muted);
+    padding: 8px 12px;
+    margin-bottom: 12px;
+    background: rgba(178, 75, 243, 0.06);
+    border-left: 3px solid rgba(178, 75, 243, 0.35);
+    border-radius: 0 6px 6px 0;
+}
+
 .history-time {
     font-size: 12px;
     color: var(--text-muted);
-    margin-bottom: 8px;
 }
 
 .history-path {
@@ -794,13 +1037,27 @@ body {
 }
 
 /* Autocomplete suggestion lists */
+/* Autocomplete dropdown container — opaque, theme-driven background so the
+   floating menu follows the active theme instead of a hardcoded purple. */
+#site-suggestions,
+#tag-suggestions {
+    padding: 0;
+    list-style: none;
+    background: var(--bg-dark-2);
+    border: 1px solid var(--glass-border);
+    border-radius: 8px;
+    max-height: 200px;
+    overflow-y: auto;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+}
+
 #site-suggestions li,
 #tag-suggestions li {
     padding: 8px 12px;
     cursor: pointer;
     color: var(--text-primary);
     font-size: 13px;
-    border-bottom: 1px solid rgba(178, 75, 243, 0.1);
+    border-bottom: 1px solid var(--glass-border);
 }
 
 #site-suggestions li:last-child,
@@ -810,13 +1067,14 @@ body {
 
 #site-suggestions li:hover,
 #tag-suggestions li:hover {
-    background: rgba(178, 75, 243, 0.25);
+    background: var(--glass-border);                                 /* fallback */
+    background: color-mix(in srgb, var(--primary) 22%, transparent);
 }
 
 #tag-suggestions li.tag-create-new {
-    color: var(--accent-light, #b24bf3);
+    color: var(--accent-light);
     font-style: italic;
-    border-top: 1px solid rgba(178, 75, 243, 0.2);
+    border-top: 1px solid var(--glass-border);
 }
 
 .thumbnail-option {
@@ -1038,6 +1296,47 @@ body {
     max-width: 560px;
     width: 95vw;
     max-height: 88vh;
+}
+
+/* Section heading inside the Settings panel (General / API Keys) */
+.settings-section-title {
+    font-size: .7rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: .08em;
+    color: var(--text-muted);
+    margin: 1.25rem 0 .65rem;
+    padding-bottom: .4rem;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+}
+.settings-section-title:first-child {
+    margin-top: 0;
+}
+
+/* General-preference rows (language / theme) */
+.settings-pref-row {
+    display: flex;
+    flex-direction: column;
+    gap: .4rem;
+    margin-bottom: .9rem;
+}
+
+.settings-pref-label {
+    font-size: .88rem;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.settings-select {
+    width: 100%;
+    cursor: pointer;
+    padding: .55rem .7rem;
+}
+
+.settings-pref-hint {
+    font-size: .73rem;
+    color: var(--text-muted);
+    margin: 0;
 }
 
 .settings-hint {
@@ -1392,3 +1691,74 @@ body {
     background: rgba(178, 75, 243, 0.12);
 }
 
+
+/* ════════════════════════════════════════════════════════════════════════
+   THEME: Midnight Teal  (data-theme="midnight-teal")
+   Dark, near-black teal-tinted background with a cyan primary action (Scan)
+   and a purple secondary action (Match). Pure CSS-variable + targeted overrides
+   on the existing markup — no JS/markup logic changes, identical on every build.
+   ════════════════════════════════════════════════════════════════════════ */
+[data-theme="midnight-teal"] {
+    /* Accents: cyan primary, purple secondary */
+    --primary: #1fc8db;
+    --primary-dark: #0b9eb4;
+    --accent: #b327e8;
+    --accent-light: #cc63ff;
+
+    /* Background — near-black with a subtle teal tint */
+    --bg-dark: #070d0e;
+    --bg-dark-2: #0d1518;
+
+    /* Glass panels — dark charcoal with a faint cyan edge */
+    --glass-bg: rgba(15, 27, 29, 0.6);
+    --glass-border: rgba(34, 211, 238, 0.12);
+
+    /* Text — white headings, muted teal-grey labels */
+    --text-primary: #ffffff;
+    --text-secondary: #9fc3c6;
+    --text-muted: #6b8587;
+
+    /* States */
+    --success: #00e0a4;
+    --warning: #ffc107;
+    --error: #ff5a6a;
+}
+
+/* Background glow blobs → teal/cyan with a single subtle purple */
+[data-theme="midnight-teal"] .blob-1 { background: radial-gradient(circle, #0fb8cc 0%, transparent 70%); }
+[data-theme="midnight-teal"] .blob-2 { background: radial-gradient(circle, #11d3e6 0%, transparent 70%); }
+[data-theme="midnight-teal"] .blob-3 { background: radial-gradient(circle, #7a1fb8 0%, transparent 70%); }
+
+/* Logo glow → teal */
+[data-theme="midnight-teal"] .logo-icon { filter: drop-shadow(0 0 8px rgba(34, 211, 238, 0.5)); }
+
+/* Neutral dark generic buttons (e.g. Browse) — no purple tint */
+[data-theme="midnight-teal"] .glass-btn { background: rgba(255, 255, 255, 0.04); }
+[data-theme="midnight-teal"] .glass-btn:hover {
+    background: rgba(255, 255, 255, 0.08);
+    border-color: var(--primary);
+    box-shadow: 0 4px 12px rgba(34, 211, 238, 0.25);
+}
+
+/* Scan (and Rename) = cyan; Match = purple — distinct primary/secondary actions */
+[data-theme="midnight-teal"] .btn-scan,
+[data-theme="midnight-teal"] .btn-rename {
+    background: linear-gradient(135deg, #22d3ee 0%, #0697b0 100%);
+}
+[data-theme="midnight-teal"] .btn-match {
+    background: linear-gradient(135deg, #a31fe0 0%, #c026d3 100%);
+}
+[data-theme="midnight-teal"] .btn-scan:hover,
+[data-theme="midnight-teal"] .btn-rename:hover {
+    box-shadow: 0 4px 20px rgba(34, 211, 238, 0.5);
+}
+[data-theme="midnight-teal"] .btn-match:hover {
+    box-shadow: 0 4px 20px rgba(192, 38, 211, 0.5);
+}
+
+/* Input/select focus ring → teal */
+[data-theme="midnight-teal"] .glass-input:focus,
+[data-theme="midnight-teal"] .glass-select:focus,
+[data-theme="midnight-teal"] .scanbar-input:focus {
+    box-shadow: 0 0 0 3px rgba(34, 211, 238, 0.12);
+}

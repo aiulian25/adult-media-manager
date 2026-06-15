@@ -19,6 +19,15 @@ Advanced deployment scenarios, security hardening, and production best practices
 
 ## 🌐 Production Deployment
 
+> ⚠️ **Run a single worker.** Adult Media Manager keeps match sessions and
+> metadata-embedding job progress in process-local memory, so it must run as one
+> worker process. The Docker image (entrypoint pins `--workers 1`) and the
+> deb/AppImage builds already do this. **Do not** set `WEB_CONCURRENCY` /
+> `AMM_WORKERS` above 1 or launch `uvicorn`/`gunicorn` with multiple workers —
+> matching and embed-progress would break. Scale by running separate instances
+> for separate libraries rather than adding workers. (See review item P7 /
+> the shared-store refactor R2 if true horizontal scaling is ever needed.)
+
 ### Docker Compose Production Configuration
 
 ```yaml
@@ -33,7 +42,6 @@ services:
       - PUID=${PUID}
       - PGID=${PGID}
       - TPDB_API_KEY=${TPDB_API_KEY}
-      - PRIVACY_MODE=true
     volumes:
       - ./data:/data
       - /mnt/media:/media:ro  # Read-only mount

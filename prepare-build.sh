@@ -94,6 +94,89 @@ else
     echo "✓ Packages installed"
 fi
 
+# ── Bundle mkvpropedit (Matroska in-place tagging for "smart" embed mode) ──────
+# So the AppImage and deb behave EXACTLY like Docker (which apt-installs
+# mkvtoolnix) regardless of what is on the user's host.  We copy the binary plus
+# its non-glibc shared libraries and wrap it in a launcher that sets
+# LD_LIBRARY_PATH to the bundled libs ONLY — so it never affects the bundled
+# Python or ffmpeg subprocesses.  The glibc core + dynamic linker are excluded
+# (they must come from the host loader).
+#
+# If mkvpropedit is not installed on THIS build host the step is skipped: the
+# app still works because the backend falls back to PATH and then to the ffmpeg
+# remux, and the deb additionally declares mkvtoolnix as a dependency.
+TOOLS_DIR="bundled-tools"
+rm -rf "$TOOLS_DIR"
+mkdir -p "$TOOLS_DIR/bin" "$TOOLS_DIR/lib"
+
+MKV_SRC="$(command -v mkvpropedit || true)"
+if [ -n "$MKV_SRC" ]; then
+    echo "→ Bundling mkvpropedit from ${MKV_SRC} ..."
+    cp -L "$MKV_SRC" "$TOOLS_DIR/bin/mkvpropedit.bin"
+    chmod +x "$TOOLS_DIR/bin/mkvpropedit.bin"
+
+    # Copy dynamic dependencies, excluding glibc core + the dynamic linker.
+    # libstdc++ / libgcc_s ARE bundled (mkvtoolnix is C++); that's safe because
+    # the launcher isolates LD_LIBRARY_PATH to mkvpropedit alone.
+    EXCLUDE='^(ld-linux.*|libc|libm|libdl|libpthread|librt|libresolv|libutil)\.so'
+    ldd "$MKV_SRC" | awk '/=> \// {print $3}' | sort -u | while read -r lib; do
+        base="$(basename "$lib")"
+        echo "$base" | grep -qE "$EXCLUDE" && continue
+        cp -L "$lib" "$TOOLS_DIR/lib/" 2>/dev/null || true
+    done
+
+    # Launcher: resolve bundled libs first, then exec the real binary.
+    # AMM_MKVPROPEDIT (set by electron/main.js) points here.
+    cat > "$TOOLS_DIR/bin/mkvpropedit" <<'WRAP'
+#!/bin/sh
+HERE="$(dirname "$(readlink -f "$0")")"
+export LD_LIBRARY_PATH="$HERE/../lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+exec "$HERE/mkvpropedit.bin" "$@"
+WRAP
+    chmod +x "$TOOLS_DIR/bin/mkvpropedit"
+
+    echo "✓ mkvpropedit bundled ($(du -sh "$TOOLS_DIR" | awk '{print $1}'))"
+else
+    echo "⚠ mkvpropedit not found on build host — the AppImage will rely on the"
+    echo "  host's mkvtoolnix (if any) and otherwise fall back to the ffmpeg"
+    echo "  remux. To bundle it: sudo apt-get install mkvtoolnix && re-run."
+fi
+
+# ── Bundle AtomicParsley (MP4/M4V/MOV in-place tagging for "smart" embed mode) ─
+# Same mechanism as mkvpropedit above (review item R4): copy the binary + its
+# non-glibc libs into the SHARED bundled-tools/ and wrap it in a launcher that
+# isolates LD_LIBRARY_PATH to those libs only. Skipped if AtomicParsley is not on
+# the build host: the backend then falls back to PATH and finally the ffmpeg
+# remux, and the deb additionally declares atomicparsley as a dependency.
+AP_SRC="$(command -v AtomicParsley || command -v atomicparsley || true)"
+if [ -n "$AP_SRC" ]; then
+    echo "→ Bundling AtomicParsley from ${AP_SRC} ..."
+    cp -L "$AP_SRC" "$TOOLS_DIR/bin/AtomicParsley.bin"
+    chmod +x "$TOOLS_DIR/bin/AtomicParsley.bin"
+
+    EXCLUDE='^(ld-linux.*|libc|libm|libdl|libpthread|librt|libresolv|libutil)\.so'
+    ldd "$AP_SRC" | awk '/=> \// {print $3}' | sort -u | while read -r lib; do
+        base="$(basename "$lib")"
+        echo "$base" | grep -qE "$EXCLUDE" && continue
+        cp -L "$lib" "$TOOLS_DIR/lib/" 2>/dev/null || true
+    done
+
+    # Launcher: AMM_ATOMICPARSLEY (set by electron/main.js) points here.
+    cat > "$TOOLS_DIR/bin/AtomicParsley" <<'WRAP'
+#!/bin/sh
+HERE="$(dirname "$(readlink -f "$0")")"
+export LD_LIBRARY_PATH="$HERE/../lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+exec "$HERE/AtomicParsley.bin" "$@"
+WRAP
+    chmod +x "$TOOLS_DIR/bin/AtomicParsley"
+
+    echo "✓ AtomicParsley bundled"
+else
+    echo "⚠ AtomicParsley not found on build host — the AppImage will rely on the"
+    echo "  host's atomicparsley (if any) and otherwise fall back to the ffmpeg"
+    echo "  remux. To bundle it: sudo apt-get install atomicparsley && re-run."
+fi
+
 # ── Summary ───────────────────────────────────────────────────────────────────
 PY_ACTUAL=$("${PYTHON_DIR}/bin/python3" --version)
 echo ""

@@ -54,9 +54,16 @@ npm-debug.log*
 # Build artifacts (distributed via GitHub Releases)
 dist/
 
-# Bundled runtime — downloaded by prepare-build.sh, never committed
+# Bundled runtime — downloaded/assembled by prepare-build.sh, never committed
 bundled-python/
 bundled-packages/
+bundled-tools/
 
 # Docker override
 docker-compose.override.yml
+
+# Local-only dev helpers & scratch notes (contain machine-specific paths)
+reinstall.sh
+REINSTALL-*.md
+unistal.md
+app-improvement-review.md

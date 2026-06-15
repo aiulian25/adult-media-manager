@@ -1,6 +1,6 @@
 "use strict";
 
-const { app, BrowserWindow, nativeImage, shell } = require("electron");
+const { app, BrowserWindow, nativeImage, shell, dialog, ipcMain } = require("electron");
 const { spawn, execFileSync }                     = require("child_process");
 const path  = require("path");
 const fs    = require("fs");
@@ -78,6 +78,38 @@ function findPackagesDir() {
     return null;
 }
 
+// ── Bundled mkvpropedit resolution ───────────────────────────────────────────
+// Shipped in resources/bundled-tools (assembled by prepare-build.sh) so the
+// AppImage and deb behave like Docker, which apt-installs mkvtoolnix. The path
+// we return is a launcher script that sets LD_LIBRARY_PATH to the bundled libs
+// ONLY for mkvpropedit — ffmpeg and the bundled Python are unaffected. The
+// backend honours this via the AMM_MKVPROPEDIT env var (_mkvpropedit_path); if
+// the bundle is absent it falls back to PATH, then to the ffmpeg remux.
+function findMkvpropedit() {
+    const candidates = [
+        path.join(process.resourcesPath, "bundled-tools", "bin", "mkvpropedit"),
+        path.join(__dirname, "..", "bundled-tools", "bin", "mkvpropedit"),
+    ];
+    for (const p of candidates) {
+        try { fs.accessSync(p, fs.constants.X_OK); return p; } catch {}
+    }
+    return null;
+}
+
+// ── Bundled AtomicParsley resolution (review item R4) ─────────────────────────
+// Same as mkvpropedit but for MP4/M4V/MOV in-place tagging; the backend honours
+// it via AMM_ATOMICPARSLEY (_atomicparsley_path). Absent → PATH → ffmpeg remux.
+function findAtomicParsley() {
+    const candidates = [
+        path.join(process.resourcesPath, "bundled-tools", "bin", "AtomicParsley"),
+        path.join(__dirname, "..", "bundled-tools", "bin", "AtomicParsley"),
+    ];
+    for (const p of candidates) {
+        try { fs.accessSync(p, fs.constants.X_OK); return p; } catch {}
+    }
+    return null;
+}
+
 function findCwd() {
     // Packaged: app source is under resources/app
     const packaged = path.join(process.resourcesPath, "app");
@@ -131,6 +163,11 @@ function startPython() {
         DATA_DIR:         DATA_DIR,
         // Tell the backend which extra roots the user can scan
         AMM_EXTRA_ROOTS:  buildExtraRoots(),
+        // Signal that we're running as a native desktop app (not Docker).
+        // The backend uses this to lift the Docker-centric path allowlist so
+        // users can browse and scan any directory on their machine.
+        AMM_NATIVE:       "1",
+        AMM_HOME:         os.homedir(),
         // Uvicorn / Python diagnostics
         PYTHONUNBUFFERED: "1",
         // Python must not try to write .pyc files to read-only package dirs
@@ -146,6 +183,27 @@ function startPython() {
         console.log("[main] PYTHONPATH:", childEnv.PYTHONPATH);
     } else {
         console.warn("[main] bundled-packages not found — imports may fail");
+    }
+
+    // ── Bundled mkvpropedit (smart embed mode) ───────────────────────────────
+    // Point the backend at the bundled launcher when present so behaviour
+    // matches Docker/deb. When absent, AMM_MKVPROPEDIT stays unset and the
+    // backend resolves mkvpropedit on PATH, then falls back to the ffmpeg remux.
+    const mkvpropedit = findMkvpropedit();
+    if (mkvpropedit) {
+        childEnv.AMM_MKVPROPEDIT = mkvpropedit;
+        console.log("[main] Bundled mkvpropedit:", mkvpropedit);
+    } else {
+        console.warn("[main] bundled mkvpropedit not found — smart mode uses PATH/ffmpeg fallback");
+    }
+
+    // ── Bundled AtomicParsley (smart embed mode, MP4/M4V/MOV) ─────────────────
+    const atomicParsley = findAtomicParsley();
+    if (atomicParsley) {
+        childEnv.AMM_ATOMICPARSLEY = atomicParsley;
+        console.log("[main] Bundled AtomicParsley:", atomicParsley);
+    } else {
+        console.warn("[main] bundled AtomicParsley not found — smart mode uses PATH/ffmpeg fallback");
     }
 
     // ── Optional API key passthrough ─────────────────────────────────────────
@@ -274,6 +332,18 @@ function installDesktopEntry() {
 }
 
 // ── App lifecycle ─────────────────────────────────────────────────────────────
+// ── Native folder picker ──────────────────────────────────────────────────────
+// Renderer calls electronAPI.openFolderDialog() → this IPC handler opens the
+// native GTK/KDE/portal file chooser, bypassing the web-based browse modal.
+// multiSelections lets the user pick multiple top-level folders at once.
+ipcMain.handle("dialog:openDirectory", async () => {
+    const { canceled, filePaths } = await dialog.showOpenDialog({
+        title:      "Select Media Folder",
+        properties: ["openDirectory", "multiSelections"],
+    });
+    return canceled ? [] : filePaths;
+});
+
 app.whenReady().then(async () => {
     app.setName("Adult Media Manager");
 

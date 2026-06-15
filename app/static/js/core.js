@@ -1,0 +1,1033 @@
+/* Adult Media Manager - Frontend Logic */
+
+// ─── Custom confirm modal (replaces blocking window.confirm) ─────────────────
+function showConfirmModal(message, onConfirm) {
+    const modal   = document.getElementById('confirm-modal');
+    const msgEl   = document.getElementById('confirm-modal-message');
+    const btnOk   = document.getElementById('confirm-modal-ok');
+    const btnCancel = document.getElementById('confirm-modal-cancel');
+    msgEl.textContent = message;
+    modal.classList.remove('hidden');
+    function cleanup() {
+        modal.classList.add('hidden');
+        btnOk.removeEventListener('click', handleOk);
+        btnCancel.removeEventListener('click', handleCancel);
+    }
+    function handleOk()     { cleanup(); onConfirm(); }
+    function handleCancel() { cleanup(); }
+    btnOk.addEventListener('click', handleOk);
+    btnCancel.addEventListener('click', handleCancel);
+}
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ─── i18n ─────────────────────────────────────────────────────────────────────
+let _i18n = {};
+
+/**
+ * Translate a key, optionally interpolating {placeholder} variables.
+ * Falls back to the raw key if no translation is found.
+ * @param {string} key
+ * @param {Object} [vars]
+ */
+function t(key, vars) {
+    let str = _i18n[key] || key;
+    if (vars) {
+        Object.entries(vars).forEach(([k, v]) => {
+            str = str.replaceAll(`{${k}}`, v);
+        });
+    }
+    return str;
+}
+
+async function loadI18n() {
+    const saved = localStorage.getItem('amm_locale') || 'en';
+    try {
+        const res = await fetch(`/static/locales/${saved}.json`);
+        if (res.ok) {
+            _i18n = await res.json();
+        }
+    } catch (_) {
+        // silently fall through to English key names
+    }
+}
+
+// Themes are gated behind a whitelist on the server; the client only ships one
+// for now ("default"). Applying sets a data-theme hook on <html> so future
+// themes can override CSS variables without any JS change.
+const ALLOWED_THEMES = ['default', 'midnight-teal'];
+function applyTheme(theme) {
+    const t = ALLOWED_THEMES.includes(theme) ? theme : 'default';
+    document.documentElement.setAttribute('data-theme', t);
+}
+
+function applyI18nToDOM() {
+    document.querySelectorAll('[data-i18n]').forEach(el => {
+        const key = el.getAttribute('data-i18n');
+        const attr = el.getAttribute('data-i18n-attr');
+        if (attr) {
+            el.setAttribute(attr, t(key));
+        } else {
+            el.textContent = t(key);
+        }
+    });
+}
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ─── Utility: Get intelligent default browse path ────────────────────────────
+/**
+ * Choose sensible default browse path based on platform.
+ * Native (DEB/AppImage): user's actual home directory from Electron.
+ * Docker/browser: /media (most likely mounted volume root).
+ */
+function _getDefaultBrowsePath() {
+    if (typeof window !== 'undefined' && window.electronAPI?.isElectron) {
+        // homedir is injected by the preload script — falls back to /home if unavailable
+        return window.electronAPI.homedir || '/home';
+    }
+    // Docker: "/" resolves to the virtual roots view (the list of mounted folders
+    // the server allows), so the picker always shows the user's mounts instead of
+    // a hard-coded "/media" that may not exist in their compose file.
+    return '/';
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+// State
+let scannedFiles = [];
+let matchedResults = [];
+let currentBrowsePath = _getDefaultBrowsePath();
+let browseHistory = [];              // stack of visited paths for back navigation
+let browseSelectionMode = 'folder';  // 'folder' or 'files'
+let selectedFiles = [];
+let selectedScannedIndices = new Set();   // indices into scannedFiles
+let selectedMatchIndices   = new Set();   // indices into matchedResults
+
+// Elements
+const scanPath = document.getElementById('scan-path');
+const btnScan = document.getElementById('btn-scan');
+const btnStopScan = document.getElementById('btn-stop-scan');
+const btnMatch = document.getElementById('btn-match');
+const btnRename = document.getElementById('btn-rename');
+const btnBrowse = document.getElementById('btn-browse');
+const btnHistory = document.getElementById('btn-history');
+const recursive = document.getElementById('recursive');
+const skipOrganized = document.getElementById('skip-organized');
+const action = document.getElementById('action');
+const template = document.getElementById('template');
+const flatRename = document.getElementById('flat-rename');
+const embedModeSel = document.getElementById('embed-mode');
+
+/** Currently-selected metadata write mode ('embed' | 'smart' | 'nfo_only'). */
+function _getEmbedMode() {
+    const v = embedModeSel && embedModeSel.value;
+    return (v === 'nfo_only' || v === 'smart') ? v : 'embed';
+}
+
+// ─── Live template preview ────────────────────────────────────────────────────
+// Shows an example output path under the template field as the user types or
+// picks a preset. Uses the server's /api/preview-paths (the SAME formatter the
+// real rename uses) against a representative scanned/matched file — never a
+// client-side reimplementation, so the preview can't drift from the backend.
+const templatePreviewEl = document.getElementById('template-preview');
+const templateWarningEl = document.getElementById('template-warning');
+let _templatePreviewTimer = null;
+
+/** Render (or clear) the template warning line below the preview. */
+function _setTemplateWarning(text) {
+    if (!templateWarningEl) return;
+    if (text) {
+        templateWarningEl.textContent = text;
+        templateWarningEl.classList.add('is-shown');
+    } else {
+        templateWarningEl.textContent = '';
+        templateWarningEl.classList.remove('is-shown');
+    }
+}
+
+// Canonical list of valid {placeholder} names, fetched once from /api/templates
+// (the formatter's TEMPLATE_VARS). Kept server-sourced so the client list can
+// never drift from what apply_template actually resolves. Null until loaded —
+// while null we skip unknown-var warnings to avoid false positives.
+let _validTemplateVars = null;
+async function loadTemplateVars() {
+    try {
+        const res = await fetch('/api/templates');
+        if (!res.ok) return;
+        const data = await res.json();
+        if (Array.isArray(data.variables)) _validTemplateVars = new Set(data.variables);
+    } catch (_) { /* offline / non-fatal — unknown-var warnings stay disabled */ }
+}
+
+/** Return the list of {placeholder} names in `tpl` not recognised by the formatter. */
+function _unknownTemplateVars(tpl) {
+    if (!_validTemplateVars) return [];
+    const found = [...String(tpl).matchAll(/\{(\w+)\}/g)].map(m => m[1]);
+    // De-dupe while preserving first-seen order.
+    return [...new Set(found)].filter(name => !_validTemplateVars.has(name));
+}
+
+/** Pick a representative operation for the preview, or null when no data yet. */
+function _samplePreviewOp() {
+    // Prefer a real matched result (has scene_data → most accurate preview).
+    const matched = matchedResults.find(r => r && r.match && r.original && r.original.path);
+    if (matched) {
+        return { old_path: matched.original.path, scene_data: matched.match, file_data: matched.original };
+    }
+    // Otherwise a scanned file (detector metadata only).
+    const scanned = scannedFiles.find(f => f && f.path);
+    if (scanned) {
+        return { old_path: scanned.path, scene_data: {}, file_data: scanned };
+    }
+    return null;
+}
+
+function updateTemplatePreview() {
+    if (!templatePreviewEl) return;
+
+    // Unknown-variable detection needs no sample data — validate the raw template
+    // against the server's canonical list, so the user is warned even before a
+    // scan. Unknown vars take priority over the same-as-source notice below.
+    const unknown = _unknownTemplateVars(template.value);
+    const unknownMsg = unknown.length
+        ? t('template.unknown_vars', { vars: unknown.map(v => '{' + v + '}').join(', ') })
+        : '';
+
+    const op = _samplePreviewOp();
+    if (!op) {
+        templatePreviewEl.textContent = t('template.preview_none');
+        templatePreviewEl.className = 'template-preview is-hint';
+        _setTemplateWarning(unknownMsg);
+        return;
+    }
+    const body = {
+        operations: [{
+            old_path: op.old_path,
+            scene_data: op.scene_data,
+            file_data: op.file_data,
+            template: template.value,
+            flat: flatRename.checked,
+        }],
+    };
+    fetch('/api/preview-paths', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+    })
+        .then(r => r.ok ? r.json() : null)
+        .then(data => {
+            const p = data && data.previews && data.previews[0];
+
+            // Warning line: unknown vars first, then "no change" (same as source).
+            if (unknownMsg)               _setTemplateWarning(unknownMsg);
+            else if (p && p.same_as_source) _setTemplateWarning(t('template.same_as_source'));
+            else                          _setTemplateWarning('');
+
+            if (!p) { templatePreviewEl.textContent = ''; templatePreviewEl.className = 'template-preview'; return; }
+            if (p.degenerate) {
+                templatePreviewEl.textContent = t('template.preview_empty');
+                templatePreviewEl.className = 'template-preview is-error';
+                return;
+            }
+            // Show the path relative to its parent for brevity (it's just an example).
+            templatePreviewEl.textContent = t('template.preview_prefix') + ' ' + p.new_path;
+            templatePreviewEl.className = 'template-preview';
+        })
+        .catch(() => {
+            templatePreviewEl.textContent = '';
+            templatePreviewEl.className = 'template-preview';
+            _setTemplateWarning(unknownMsg);
+        });
+}
+
+/** Debounced wrapper for the typing path. */
+function _scheduleTemplatePreview() {
+    clearTimeout(_templatePreviewTimer);
+    _templatePreviewTimer = setTimeout(updateTemplatePreview, 300);
+}
+const resultsContainer = document.getElementById('results-container');
+const statusBar = document.getElementById('status-bar');
+const statusText = document.getElementById('status-text');
+const progressFill = document.getElementById('progress-fill');
+
+// Home / reset button
+document.getElementById('btn-home').addEventListener('click', resetToHome);
+
+/**
+ * Build a centered empty/zero-result state. `icon` is trusted markup (an emoji
+ * we control); `title`/`subtitle` are treated as untrusted text and escaped,
+ * so interpolated values like a filesystem path or a server error message can
+ * never inject HTML.
+ */
+function _emptyStateHtml(icon, title, subtitle) {
+    return `
+        <div class="empty-state">
+            <div class="empty-icon">${icon}</div>
+            <div class="empty-title">${escapeHtml(title)}</div>
+            <div class="empty-subtitle">${escapeHtml(subtitle)}</div>
+        </div>`;
+}
+
+function _renderEmptyState(icon, title, subtitle) {
+    resultsContainer.innerHTML = _emptyStateHtml(icon, title, subtitle);
+}
+
+/**
+ * Windowed list rendering (review item R3 / U1). Appends the first `cap` items as
+ * built nodes, then a single "Show all N more" button that appends the rest on
+ * demand — so a large result set doesn't build its whole DOM up front. Shared by
+ * the scan and match lists so both window the same way from ONE implementation.
+ *
+ * @param {Element}  container - element to append rows (and the button) into
+ * @param {Array}    items     - arbitrary items passed to buildNode
+ * @param {Function} buildNode - (item) => Node, builds one row
+ * @param {number}   cap       - how many to render up front
+ * @param {Function} [onExpand]- called after the remainder is appended
+ */
+function _renderWindowed(container, items, buildNode, cap, onExpand) {
+    if (!container) return;
+    const head = items.slice(0, cap);
+    const frag = document.createDocumentFragment();
+    head.forEach(it => frag.appendChild(buildNode(it)));
+    container.appendChild(frag);
+
+    const rest = items.slice(cap);
+    if (rest.length === 0) return;
+
+    const btn = document.createElement('button');
+    btn.className = 'glass-btn show-all-btn';
+    btn.textContent = t('scan.show_all', { count: rest.length });
+    btn.addEventListener('click', () => {
+        btn.remove();
+        const f2 = document.createDocumentFragment();
+        rest.forEach(it => f2.appendChild(buildNode(it)));
+        container.appendChild(f2);
+        if (onExpand) onExpand();
+    });
+    container.appendChild(btn);
+}
+
+function resetToHome() {
+    // Abort any in-flight scan stream and restore the Scan/Stop buttons.
+    if (typeof _scanEventSource !== 'undefined' && _scanEventSource) {
+        _scanStopped = true;
+        try { _scanEventSource.close(); } catch (_) { /* ignore */ }
+        _scanEventSource = null;
+        if (typeof _scanResolve !== 'undefined' && _scanResolve) { _scanResolve(); _scanResolve = null; }
+    }
+    if (typeof _setScanRunning === 'function') _setScanRunning(false);
+
+    // Clear in-memory state
+    scannedFiles = [];
+    matchedResults = [];
+    selectedFiles = [];
+    selectedScannedIndices = new Set();
+    selectedMatchIndices   = new Set();
+
+    // Clear scan path input
+    scanPath.value = '';
+
+    // Reset button states
+    btnMatch.disabled  = true;
+    btnRename.disabled = true;
+
+    // Hide status bar
+    statusBar.classList.add('hidden');
+
+    // Clear results panel back to initial placeholder
+    _renderEmptyState('🎬', t('home.empty_title'), t('home.empty_subtitle'));
+
+    // No files loaded — reset the template preview to its hint state.
+    if (typeof updateTemplatePreview === 'function') updateTemplatePreview();
+}
+
+// Modals
+const browseModal = document.getElementById('browse-modal');
+const historyModal = document.getElementById('history-modal');
+const manualEditModal = document.getElementById('manual-edit-modal');
+
+// Manual editing state
+let currentManualFile = null;
+let manualPerformers = [];
+let manualTags = [];
+let generatedThumbnails = [];
+let selectedThumbnailIndex = null;
+
+// Initialize
+document.addEventListener('DOMContentLoaded', async () => {
+    // Initialise i18n + theme before anything else so the first paint already
+    // reflects the user's saved choices. localStorage is a fast cache; the
+    // server (settings.json) is the durable source of truth and is reconciled
+    // immediately after, so a fresh browser/profile still picks up the choice.
+    applyTheme(localStorage.getItem('amm_theme') || 'default');
+    await loadI18n();
+    applyI18nToDOM();
+    reconcilePrefsFromServer();   // fire-and-forget; updates if server differs
+
+    // Template presets
+    document.querySelectorAll('.preset-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            template.value = btn.dataset.template;
+            updateTemplatePreview();           // immediate preview on preset pick
+        });
+    });
+
+    // Live template preview: update as the user types / toggles flat mode.
+    template.addEventListener('input', _scheduleTemplatePreview);
+    flatRename.addEventListener('change', updateTemplatePreview);
+    updateTemplatePreview();                   // initial state (shows hint until a scan)
+    // Load the valid-variable list, then re-run so unknown-var warnings apply.
+    loadTemplateVars().then(() => updateTemplatePreview());
+
+    // Scan button
+    btnScan.addEventListener('click', scanFolder);
+
+    // Stop-scan button (visible only while a scan is streaming)
+    if (btnStopScan) btnStopScan.addEventListener('click', stopScan);
+
+    // Match button
+    btnMatch.addEventListener('click', matchFiles);
+    
+    // Rename button
+    btnRename.addEventListener('click', renameFiles);
+    
+    // Browse button — native OS picker in Electron, web modal otherwise
+    btnBrowse.addEventListener('click', async () => {
+        if (window.electronAPI?.openFolderDialog) {
+            const paths = await window.electronAPI.openFolderDialog();
+            if (!paths || paths.length === 0) return;
+            // OS picker returns selected directories directly — pass them straight
+            // through without the parent-stripping that _resolveDropPaths does for
+            // file drag-and-drop.
+            const path = paths.length === 1 ? paths[0] : paths.join(',');
+            _loadPath(path, paths.length > 1);
+        } else {
+            openBrowseModal();
+        }
+    });
+    
+    // History button
+    btnHistory.addEventListener('click', openHistoryModal);
+
+    // Settings button
+    document.getElementById('btn-settings').addEventListener('click', openSettingsModal);
+    
+    // Modal close buttons
+    document.getElementById('modal-close').addEventListener('click', () => {
+        browseModal.classList.add('hidden');
+    });
+    
+    document.getElementById('browse-cancel').addEventListener('click', () => {
+        browseModal.classList.add('hidden');
+    });
+    
+    document.getElementById('browse-select').addEventListener('click', selectBrowseFolder);
+    
+    document.getElementById('history-close').addEventListener('click', () => {
+        historyModal.classList.add('hidden');
+    });
+    
+    document.getElementById('history-ok').addEventListener('click', () => {
+        historyModal.classList.add('hidden');
+    });
+    
+    document.getElementById('history-undo').addEventListener('click', undoLastRename);
+
+    // Delegated handler for the per-row "Revert" buttons (rows are re-rendered
+    // on every history load, so a single listener on the container is robust).
+    document.getElementById('history-list').addEventListener('click', (e) => {
+        const btn = e.target.closest('.history-revert-btn');
+        if (btn && btn.dataset.id) revertHistoryEntry(btn.dataset.id, btn);
+    });
+
+    // Manual edit modal
+    document.getElementById('manual-edit-close').addEventListener('click', () => {
+        manualEditModal.classList.add('hidden');
+    });
+    
+    document.getElementById('manual-edit-cancel').addEventListener('click', () => {
+        manualEditModal.classList.add('hidden');
+    });
+    
+    document.getElementById('manual-edit-save').addEventListener('click', saveManualMetadata);
+    // Live-validate the release date as the user changes it.
+    document.getElementById('manual-date').addEventListener('input', _refreshManualDateError);
+    document.getElementById('manual-add-performer').addEventListener('click', addManualPerformer);
+    document.getElementById('manual-add-tag').addEventListener('click', addManualTag);
+    // Fetch metadata from a pasted StashDB scene URL/UUID
+    const stashFetchBtn = document.getElementById('manual-stashdb-fetch');
+    if (stashFetchBtn) stashFetchBtn.addEventListener('click', fetchStashDBScene);
+    const stashUrlInput = document.getElementById('manual-stashdb-url');
+    if (stashUrlInput) stashUrlInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); fetchStashDBScene(); }
+    });
+    // Fetch metadata from a pasted ThePornDB scene URL/slug
+    const tpdbFetchBtn = document.getElementById('manual-tpdb-fetch');
+    if (tpdbFetchBtn) tpdbFetchBtn.addEventListener('click', fetchTPDBScene);
+    const tpdbUrlInput = document.getElementById('manual-tpdb-url');
+    if (tpdbUrlInput) tpdbUrlInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); fetchTPDBScene(); }
+    });
+    document.getElementById('manual-generate-thumbnails').addEventListener('click', generateThumbnails);
+    
+    // Autocomplete: tags
+    const tagInput = document.getElementById('manual-tag-input');
+    tagInput.addEventListener('input', () => filterTagSuggestions(tagInput.value));
+    tagInput.addEventListener('focus', () => filterTagSuggestions(tagInput.value));
+    document.addEventListener('click', (e) => {
+        if (!e.target.closest('#manual-tag-input') && !e.target.closest('#tag-suggestions')) {
+            document.getElementById('tag-suggestions').style.display = 'none';
+        }
+    });
+
+    // Autocomplete: sites
+    const siteInput = document.getElementById('manual-site');
+    let siteSearchTimer = null;
+    siteInput.addEventListener('input', () => {
+        clearTimeout(siteSearchTimer);
+        siteSearchTimer = setTimeout(() => searchSiteSuggestions(siteInput.value), 300);
+    });
+    // Show known sites immediately on focus even with empty input
+    siteInput.addEventListener('focus', () => searchSiteSuggestions(siteInput.value));
+    document.addEventListener('click', (e) => {
+        if (!e.target.closest('#manual-site') && !e.target.closest('#site-suggestions')) {
+            document.getElementById('site-suggestions').style.display = 'none';
+        }
+    });
+
+    // Enter key support
+    document.getElementById('manual-performer-input').addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') addManualPerformer();
+    });
+    
+    document.getElementById('manual-tag-input').addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') addManualTag();
+    });
+    
+    // Enter key in scan path
+    scanPath.addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') {
+            scanFolder();
+        }
+    });
+
+    // §4.4 — Resume banner: if a rename was interrupted (page refresh / crash)
+    // show a dismissible notification so the user knows work was in progress.
+    const savedQueue = _loadRenameQueue();
+    if (savedQueue && savedQueue.operations && savedQueue.operations.length > 0) {
+        const banner = document.createElement('div');
+        banner.style.cssText =
+            'position:fixed;bottom:1rem;right:1rem;z-index:9999;' +
+            'background:rgba(30,30,40,.95);border:1px solid var(--accent,#7f5af0);' +
+            'border-radius:12px;padding:1rem 1.2rem;max-width:340px;font-size:.85rem;' +
+            'box-shadow:0 4px 20px rgba(0,0,0,.5);color:var(--text,#fff)';
+
+        const count = savedQueue.operations.length;
+        const msg = document.createElement('p');
+        msg.style.cssText = 'margin:0 0 .7rem';
+        msg.textContent =
+            t('resume.banner_msg', {
+                count: count,
+                plural: count !== 1 ? 's' : '',
+                action: savedQueue.actionType,
+            });
+
+        const btnRow = document.createElement('div');
+        btnRow.style.cssText = 'display:flex;gap:.5rem';
+
+        const btnResume = document.createElement('button');
+        btnResume.className = 'btn btn-primary';
+        btnResume.style.cssText = 'font-size:.8rem;padding:.35rem .8rem';
+        btnResume.textContent = t('resume.btn_resume');
+        btnResume.addEventListener('click', () => {
+            banner.remove();
+            _doRename(savedQueue.operations, savedQueue.actionType, savedQueue.embedMode || 'embed');
+        });
+
+        const btnDiscard = document.createElement('button');
+        btnDiscard.className = 'btn btn-secondary';
+        btnDiscard.style.cssText = 'font-size:.8rem;padding:.35rem .8rem';
+        btnDiscard.textContent = t('resume.btn_discard');
+        btnDiscard.addEventListener('click', () => {
+            _saveRenameQueue([], '');
+            banner.remove();
+        });
+
+        btnRow.appendChild(btnResume);
+        btnRow.appendChild(btnDiscard);
+        banner.appendChild(msg);
+        banner.appendChild(btnRow);
+        document.body.appendChild(banner);
+    }
+
+    // R2 — Resume embed progress: if a metadata-embedding job was running when the
+    // page was refreshed (or the server restarted), re-attach to it. The backend
+    // persists job state, so polling resumes the banner/progress; a finished or
+    // interrupted job ends immediately, and an expired one (404) clears silently.
+    let savedEmbed = null;
+    try { savedEmbed = JSON.parse(localStorage.getItem(EMBED_JOB_KEY)); } catch {}
+    if (savedEmbed && savedEmbed.jobId) {
+        _pollEmbedStatus(savedEmbed.jobId, savedEmbed.total || 0);
+    }
+});
+
+// ═══ Settings (language + theme + API keys) ═══
+
+/**
+ * After the localStorage-cached first paint, reconcile UI preferences with the
+ * server's durable copy (settings.json). If the server has a different choice
+ * (e.g. saved from another browser, or after clearing localStorage), adopt it.
+ * Non-blocking and silent on failure — the cached values remain in effect.
+ */
+async function reconcilePrefsFromServer() {
+    try {
+        const resp = await fetch('/api/settings');
+        if (!resp.ok) return;
+        const data = await resp.json();
+
+        const serverTheme = data.theme || 'default';
+        if (serverTheme !== (localStorage.getItem('amm_theme') || 'default')) {
+            localStorage.setItem('amm_theme', serverTheme);
+        }
+        applyTheme(localStorage.getItem('amm_theme'));
+
+        const serverLocale = data.locale;
+        if (serverLocale && serverLocale !== (localStorage.getItem('amm_locale') || 'en')) {
+            localStorage.setItem('amm_locale', serverLocale);
+            await loadI18n();
+            applyI18nToDOM();
+        }
+    } catch (_) {
+        // Non-fatal — keep the cached values.
+    }
+}
+
+function _applySettingsStatus(data, isNative = false) {
+    // data: { tpdb: {active, source}, stashdb: {active, source} }
+    for (const [key, info] of Object.entries(data)) {
+        if (!info) continue;
+        const badge  = document.getElementById(`settings-${key}-badge`);
+        const source = document.getElementById(`settings-${key}-source`);
+        const inp    = document.getElementById(`settings-${key}-key`);
+        const row    = badge?.closest('.settings-key-row');
+        if (!badge) continue;
+
+        if (info.active) {
+            badge.textContent = 'Active';
+            badge.className   = 'settings-badge settings-badge-active';
+        } else {
+            badge.textContent = 'Inactive';
+            badge.className   = 'settings-badge settings-badge-inactive';
+        }
+
+        if (info.source === 'env') {
+            row?.classList.add('is-env-locked');
+            if (inp) { inp.disabled = true; inp.placeholder = 'Managed by environment variable'; }
+            if (source) {
+                source.className   = 'settings-source-note note-env';
+                source.textContent = isNative
+                    ? '🔒 Set via environment variable — remove it from your shell to use the Settings page instead.'
+                    : '🔒 Set via environment variable — edit docker-compose.yml to change.';
+            }
+        } else if (info.source === 'settings') {
+            row?.classList.remove('is-env-locked');
+            if (inp) { inp.disabled = false; inp.placeholder = 'Paste new key here to replace…'; }
+            if (source) {
+                source.className   = 'settings-source-note note-saved';
+                source.textContent = '✓ Saved in settings — leave blank to keep current.';
+            }
+        } else {
+            row?.classList.remove('is-env-locked');
+            if (inp) { inp.disabled = false; inp.placeholder = 'Paste key here…'; }
+            if (source) {
+                source.className   = 'settings-source-note note-none';
+                source.textContent = 'Not configured.';
+            }
+        }
+    }
+}
+
+async function openSettingsModal() {
+    const modal = document.getElementById('settings-modal');
+    modal.classList.remove('hidden');
+
+    // ── Context-aware hint text ──────────────────────────────────────────────
+    // window.electronAPI is injected by the preload script only in the native
+    // Electron build (deb / AppImage). In Docker / browser it is undefined.
+    const isNative = !!(window.electronAPI && window.electronAPI.isElectron);
+    const hint = document.getElementById('settings-hint-text');
+    if (hint) {
+        if (isNative) {
+            hint.innerHTML =
+                'Keys are saved to <code>~/.local/share/adult-media-manager/settings.json</code> ' +
+                'and take effect immediately — no restart needed. ' +
+                'You can also set <code>TPDB_API_KEY</code> / <code>STASHDB_API_KEY</code> ' +
+                'as shell environment variables; those always take priority over the keys saved here.';
+        } else {
+            hint.innerHTML =
+                'Keys are saved to <code>/data/settings.json</code> inside the container and take ' +
+                'effect immediately — no restart needed. ' +
+                'Docker users: set them as environment variables in <code>docker-compose.yml</code> ' +
+                'instead (env vars take priority and cannot be overridden here).';
+        }
+    }
+
+    // Clear inputs on every open for security (never pre-fill key values)
+    ['settings-tpdb-key', 'settings-stashdb-key'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) { el.value = ''; el.disabled = false; }
+    });
+
+    // Pre-fill the preference selects from the cached values so they show the
+    // current choice instantly; the server fetch below corrects them if needed.
+    const langSel  = document.getElementById('settings-lang');
+    const themeSel = document.getElementById('settings-theme');
+    if (langSel)  langSel.value  = localStorage.getItem('amm_locale') || 'en';
+    if (themeSel) themeSel.value = localStorage.getItem('amm_theme')  || 'default';
+
+    // Fetch current status from the server
+    try {
+        const resp = await fetch('/api/settings');
+        if (resp.ok) {
+            const data = await resp.json();
+            _applySettingsStatus(data, isNative);
+            // Server is authoritative for the saved preferences.
+            if (langSel  && data.locale) langSel.value  = data.locale;
+            if (themeSel && data.theme)  themeSel.value = data.theme;
+        }
+    } catch (_) {
+        // Non-fatal — badges stay in default state
+    }
+}
+
+async function saveSettings() {
+    const saveBtn = document.getElementById('settings-save');
+    saveBtn.disabled = true;
+    saveBtn.textContent = t('settings.saving');
+
+    const tpdbVal    = document.getElementById('settings-tpdb-key')?.value.trim()    || '';
+    const stashdbVal = document.getElementById('settings-stashdb-key')?.value.trim() || '';
+    const localeVal  = document.getElementById('settings-lang')?.value   || 'en';
+    const themeVal   = document.getElementById('settings-theme')?.value  || 'default';
+
+    try {
+        const resp = await fetch('/api/settings', {
+            method:  'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                tpdb_api_key:    tpdbVal    || null,
+                stashdb_api_key: stashdbVal || null,
+                locale:          localeVal,
+                theme:           themeVal,
+            }),
+        });
+
+        const data = await resp.json();
+
+        if (!resp.ok) {
+            const msg = data.detail || resp.statusText;
+            showToast('Settings Error', msg, 'error');
+            return;
+        }
+
+        // Clear the inputs after save (never keep key in DOM)
+        ['settings-tpdb-key', 'settings-stashdb-key'].forEach(id => {
+            const el = document.getElementById(id);
+            if (el) el.value = '';
+        });
+
+        // Update badges to reflect new server state
+        _applySettingsStatus({ tpdb: data.tpdb, stashdb: data.stashdb }, !!(window.electronAPI && window.electronAPI.isElectron));
+
+        // Apply preferences returned by the server (authoritative). Cache them
+        // in localStorage so the next load paints them without a flash.
+        const newTheme = data.theme || themeVal;
+        localStorage.setItem('amm_theme', newTheme);
+        applyTheme(newTheme);
+
+        const newLocale = data.locale || localeVal;
+        if (newLocale !== (localStorage.getItem('amm_locale') || 'en')) {
+            localStorage.setItem('amm_locale', newLocale);
+            await loadI18n();
+            applyI18nToDOM();
+        }
+
+        const label = data.changed && data.changed.length
+            ? `${data.changed.join(' & ')} key${data.changed.length > 1 ? 's' : ''} saved and active.`
+            : 'Settings saved.';
+        showToast('Settings Saved', label, 'success');
+
+        document.getElementById('settings-modal').classList.add('hidden');
+
+    } catch (err) {
+        showToast('Settings Error', err.message, 'error');
+    } finally {
+        saveBtn.disabled = false;
+        saveBtn.textContent = t('settings.save');
+    }
+}
+
+// Wire settings modal buttons (called once; modal exists in DOM at parse time)
+document.addEventListener('DOMContentLoaded', () => {
+    document.getElementById('settings-cancel').addEventListener('click', () => {
+        document.getElementById('settings-modal').classList.add('hidden');
+    });
+    document.getElementById('settings-modal-close').addEventListener('click', () => {
+        document.getElementById('settings-modal').classList.add('hidden');
+    });
+    document.getElementById('settings-save').addEventListener('click', saveSettings);
+
+    // Show/hide toggle for each key input
+    document.querySelectorAll('.settings-eye-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const inp = document.getElementById(btn.dataset.target);
+            if (!inp) return;
+            inp.type = inp.type === 'password' ? 'text' : 'password';
+        });
+    });
+
+    // Close on backdrop click
+    document.getElementById('settings-modal').addEventListener('click', (e) => {
+        if (e.target === document.getElementById('settings-modal')) {
+            document.getElementById('settings-modal').classList.add('hidden');
+        }
+    });
+});
+
+// ═══ Drag-and-Drop ═══
+//
+// Strategy:
+//   1. Attach dragenter/dragleave/dragover/drop to the document (not just the
+//      scanbar) so the full-viewport overlay intercepts drops anywhere on the page.
+//   2. Use the FileSystem Entry API (webkitGetAsEntry) to distinguish files from
+//      folders and to read folder paths.
+//   3. Collect all unique parent directories / file paths from the drop, then
+//      populate scan-path and trigger a scan — exactly as if the user had typed
+//      the path and clicked Scan.
+//
+// Security: paths are validated server-side by _is_allowed_path() in main.py.
+//   The browser never sends raw file bytes for dropped items — only the path
+//   string, which the server resolves the same way as any manual path input.
+
+(function initDragDrop() {
+    const overlay  = document.getElementById('drop-overlay');
+    const scanbar  = document.querySelector('.scanbar');
+
+    // dragenter counter: increments on every child's dragenter, decrements on
+    // dragleave. When it hits 0 the drag has truly left the document.
+    let _dragDepth = 0;
+
+    // Returns true only when the DataTransfer contains at least one item that
+    // could be a file or directory (blocks text/url-only drags like link hovering).
+    function _hasFiles(dt) {
+        if (!dt) return false;
+        // Modern browsers expose types list
+        if (dt.types && dt.types.length) {
+            return Array.from(dt.types).some(t => t === 'Files');
+        }
+        return dt.files && dt.files.length > 0;
+    }
+
+    document.addEventListener('dragenter', (e) => {
+        if (!_hasFiles(e.dataTransfer)) return;
+        e.preventDefault();
+        _dragDepth++;
+        if (_dragDepth === 1) {
+            overlay.classList.add('drop-active');
+            overlay.removeAttribute('aria-hidden');
+            scanbar?.classList.add('drag-over');
+        }
+    });
+
+    document.addEventListener('dragleave', (e) => {
+        if (!_hasFiles(e.dataTransfer)) return;
+        _dragDepth--;
+        if (_dragDepth <= 0) {
+            _dragDepth = 0;
+            _hideDrop();
+        }
+    });
+
+    document.addEventListener('dragover', (e) => {
+        if (!_hasFiles(e.dataTransfer)) return;
+        e.preventDefault();
+        // Show copy cursor to signal the drop is actionable
+        e.dataTransfer.dropEffect = 'copy';
+    });
+
+    document.addEventListener('drop', (e) => {
+        e.preventDefault();
+        _dragDepth = 0;
+        _hideDrop();
+        _handleDrop(e.dataTransfer);
+    });
+
+    // Keyboard escape cancels an active drag overlay
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && _dragDepth > 0) {
+            _dragDepth = 0;
+            _hideDrop();
+        }
+    });
+
+    function _hideDrop() {
+        overlay.classList.remove('drop-active');
+        overlay.setAttribute('aria-hidden', 'true');
+        scanbar?.classList.remove('drag-over');
+    }
+
+    // ── Core drop handler ────────────────────────────────────────────────────
+
+    async function _handleDrop(dataTransfer) {
+        const files = Array.from(dataTransfer.files || []);
+
+        // In Electron: webUtils.getPathForFile() returns the real absolute path.
+        // This is the only reliable way to get actual filesystem paths from drops.
+        if (window.electronAPI && typeof window.electronAPI.getPathForFile === 'function' && files.length > 0) {
+            const paths = files
+                .map(f => window.electronAPI.getPathForFile(f))
+                .filter(p => p && p.length > 0);
+            if (paths.length > 0) {
+                const resolved = _resolveDropPaths(paths);
+                _loadPath(resolved.path, resolved.isMulti);
+                return;
+            }
+        }
+
+        // Browser/Docker: use the FileSystem Entry API (Chromium + Firefox 50+).
+        // NOTE: entry.fullPath is a virtual path (e.g. "/video.mp4") — not a real
+        // server path. We populate the field so the user can correct it.
+        const items = Array.from(dataTransfer.items || []);
+        const entries = items
+            .map(item => (typeof item.webkitGetAsEntry === 'function' ? item.webkitGetAsEntry() : null))
+            .filter(Boolean);
+
+        if (entries.length > 0) {
+            await _processEntries(entries);
+            return;
+        }
+
+        // Fallback: plain File objects (Safari, edge cases).
+        if (files.length === 0) return;
+        const paths = files.map(f => f.name);
+        _loadPath(paths[0], paths.length > 1);
+    }
+
+    // Walk FileSystemEntry objects (files + recursive directory trees) and
+    // collect server-side paths, then load.
+    async function _processEntries(entries) {
+        const paths = [];   // unique absolute-ish paths to scan
+
+        for (const entry of entries) {
+            if (entry.isDirectory) {
+                // For a directory we scan its full path on the server.
+                // entry.fullPath is a virtual path like "/FolderName" — prepend
+                // nothing; the user's scan-path value is the authoritative root.
+                // We use entry.name as the leaf and rely on the existing scan-path
+                // to provide the parent, OR we try to read file.path if available.
+                paths.push(entry.fullPath);
+            } else if (entry.isFile) {
+                paths.push(entry.fullPath);
+            }
+        }
+
+        if (paths.length === 0) return;
+
+        // If everything under one common prefix → scan the common parent.
+        // Otherwise → comma-separated multi-path scan (existing API behaviour).
+        const resolved = _resolveDropPaths(paths);
+        _loadPath(resolved.path, resolved.isMulti);
+    }
+
+    // Given a list of virtual full-paths (starting with /), decide whether to
+    // scan a single common parent directory or pass multiple paths.
+    function _resolveDropPaths(paths) {
+        if (paths.length === 1) {
+            return { path: paths[0], isMulti: false };
+        }
+
+        // Find longest common directory prefix
+        const parts = paths.map(p => p.split('/').slice(0, -1));
+        const common = parts[0].filter((seg, i) =>
+            parts.every(arr => arr[i] === seg)
+        );
+        const commonDir = common.join('/') || '/';
+
+        // If all items share a real common directory, scan that directory.
+        // Prefer this over comma-list because the user probably dropped a folder.
+        if (commonDir !== '/') {
+            return { path: commonDir, isMulti: false };
+        }
+
+        // No useful common root → pass as comma-separated (handles /mnt/a, /mnt/b etc.)
+        return { path: paths.join(','), isMulti: paths.length > 1 };
+    }
+
+    // Populate the scan-path input and optionally trigger a scan.
+    function _loadPath(path, isMulti) {
+        const cleanPath = path.replace(/^\/+/, '/').trim();
+
+        // In Electron (DEB/AppImage), getPathForFile() returns the real on-disk path,
+        // so any absolute path is valid — trust it and let the server validate.
+        // In Docker/browser the FileSystem Entry API returns virtual paths like
+        // "/VideoFile.mp4" that don't map to server locations — use the known-prefix
+        // regex to detect these and ask the user to correct the path instead.
+        const isElectron = typeof window !== 'undefined' && window.electronAPI?.isElectron;
+        const looksLikeServerPath = isElectron
+            ? cleanPath.startsWith('/')
+            : /^\/(mnt|media|data|downloads|organized|home|root|srv|nas|storage|run)\b/.test(cleanPath);
+
+        scanPath.value = cleanPath;
+
+        if (!looksLikeServerPath) {
+            showToast(
+                'Check scan path',
+                'Browser reported: \u201c' + cleanPath.slice(0, 80) +
+                    (cleanPath.length > 80 ? '\u2026' : '') +
+                    '\u201d \u2014 edit the path above to match the actual server location, then click Scan.',
+                'info',
+                8000
+            );
+            // Don't auto-scan a path we know is wrong — let the user fix it first.
+            return;
+        }
+
+        // Trigger scan — same code path as clicking the Scan button
+        scanFolder();
+    }
+})();
+
+// ═══ Embed-in-progress guard ═══
+// Tracks whether Phase-2 metadata embedding is currently running.
+// Used to:
+//   1. Show/update the sticky bottom banner.
+//   2. Warn before the user closes or navigates away (beforeunload).
+//   3. Prefix the window title so it's visible in the taskbar.
+let _embedInProgress = false;
+const _ORIG_TITLE = document.title;
+
+// Register once at startup. The handler is a no-op when no embed is running.
+window.addEventListener('beforeunload', (e) => {
+    if (!_embedInProgress) return;
+    // Standard pattern: preventDefault + returnValue triggers the browser's
+    // built-in "Leave site?" dialog. Custom messages are blocked by all
+    // modern browsers for security reasons.
+    e.preventDefault();
+    e.returnValue = '';
+});
+
+function _setEmbedBanner(text) {
+    const banner = document.getElementById('embed-banner');
+    const label  = document.getElementById('embed-banner-text');
+    if (!banner || !label) return;
+    label.textContent = text;
+    banner.classList.remove('hidden');
+}
+
+function _clearEmbedBanner() {
+    const banner = document.getElementById('embed-banner');
+    if (banner) banner.classList.add('hidden');
+    document.title = _ORIG_TITLE;
+    _embedInProgress = false;
+}
+
+
