@@ -140,6 +140,8 @@
   "modal.browse_select_files_btn": "Selecionar ficheiros",
   "modal.browse_cancel": "Cancelar",
   "modal.browse_select": "Selecionar pasta",
+  "modal.browse_home": "🏠 Início",
+  "modal.browse_show_hidden": "Mostrar ocultos",
   "modal.browse_kbd_hint": "Dica: clique nas caixas, ou use ↑/↓ para mover · Espaço para alternar · Shift+↑/↓ ou Shift+Clique para um intervalo · Ctrl+A para selecionar tudo",
   "modal.history_title": "Histórico de renomeações",
   "modal.history_close": "Fechar",

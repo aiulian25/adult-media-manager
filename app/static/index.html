@@ -283,7 +283,10 @@
                 </div>
                 <div style="display:flex;align-items:center;gap:8px;margin-bottom:15px;">
                     <button id="browse-back" class="glass-btn" onclick="browseBack()" style="padding:5px 11px;font-size:15px;line-height:1;" title="Go back" disabled>&#8592;</button>
+                    <button id="browse-home" class="glass-btn" onclick="navigateDir(_getDefaultBrowsePath())" style="padding:5px 11px;font-size:13px;line-height:1;white-space:nowrap;" title="Home" data-i18n="modal.browse_home">🏠 Home</button>
+                    <button id="browse-root" class="glass-btn" onclick="navigateDir('/')" style="padding:5px 11px;font-size:13px;line-height:1;" title="Root (/)">/</button>
                     <div id="browse-path" class="browse-path" style="margin-bottom:0;flex:1;"></div>
+                    <label class="cb-label" style="white-space:nowrap;font-size:13px;"><input type="checkbox" id="browse-show-hidden"><span data-i18n="modal.browse_show_hidden">Show hidden</span></label>
                 </div>
                 <div id="selection-counter" style="display:none; padding: 8px; margin-bottom: 10px; background: rgba(178, 75, 243, 0.2); border-radius: 8px; text-align: center; font-size: 14px;"></div>
                 <div id="browse-kbd-hint" style="display:none; margin-bottom:10px; font-size:12px; color:var(--text-muted); text-align:center;" data-i18n="modal.browse_kbd_hint">Tip: click checkboxes, or use ↑/↓ to move · Space to toggle · Shift+↑/↓ or Shift+Click for a range · Ctrl+A to select all</div>

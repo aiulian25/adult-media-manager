@@ -140,6 +140,8 @@
   "modal.browse_select_files_btn": "Dateien auswählen",
   "modal.browse_cancel": "Abbrechen",
   "modal.browse_select": "Ordner auswählen",
+  "modal.browse_home": "🏠 Start",
+  "modal.browse_show_hidden": "Versteckte anzeigen",
   "modal.browse_kbd_hint": "Tipp: Kontrollkästchen anklicken oder ↑/↓ bewegen · Leertaste zum Umschalten · Umschalt+↑/↓ oder Umschalt+Klick für einen Bereich · Strg+A für alle",
   "modal.history_title": "Umbenennungsverlauf",
   "modal.history_close": "Schließen",

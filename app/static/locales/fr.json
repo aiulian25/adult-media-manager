@@ -140,6 +140,8 @@
   "modal.browse_select_files_btn": "Sélectionner des fichiers",
   "modal.browse_cancel": "Annuler",
   "modal.browse_select": "Sélectionner un dossier",
+  "modal.browse_home": "🏠 Accueil",
+  "modal.browse_show_hidden": "Afficher les cachés",
   "modal.browse_kbd_hint": "Astuce : cochez les cases, ou utilisez ↑/↓ pour vous déplacer · Espace pour (dé)sélectionner · Maj+↑/↓ ou Maj+clic pour une plage · Ctrl+A pour tout sélectionner",
   "modal.history_title": "Historique des renommages",
   "modal.history_close": "Fermer",

@@ -21,16 +21,25 @@ async function openBrowseModal() {
     currentBrowsePath = startPath || _getDefaultBrowsePath();
     browseHistory = [];
     selectedFiles = [];
+    // Reflect the persisted "Show hidden" choice in the checkbox before loading.
+    const hiddenCb = document.getElementById('browse-show-hidden');
+    if (hiddenCb) hiddenCb.checked = _browseShowHidden();
     updateBrowseSelectionMode(browseSelectionMode);
     loadBrowseDirectory(currentBrowsePath);
+}
+
+// Whether the picker should include dot-files/dirs. Persisted so the choice
+// survives reopening the modal and restarting the app.
+function _browseShowHidden() {
+    return localStorage.getItem('amm_browse_show_hidden') === '1';
 }
 
 async function loadBrowseDirectory(path) {
     document.getElementById('browse-path').textContent = path;
     document.getElementById('browse-list').innerHTML = '<div style="text-align:center;padding:20px;">Loading...</div>';
-    
+
     try {
-        const response = await fetch(`/api/browse?path=${encodeURIComponent(path)}`);
+        const response = await fetch(`/api/browse?path=${encodeURIComponent(path)}&show_hidden=${_browseShowHidden()}`);
         if (!response.ok) throw new Error('Failed to browse');
         
         const data = await response.json();
@@ -275,6 +284,15 @@ function selectBrowseFolder() {
         });
     }
     document.addEventListener('keydown', onBrowseKeydown);
+
+    // "Show hidden" toggle: persist the choice and reload the current directory.
+    const hiddenCb = document.getElementById('browse-show-hidden');
+    if (hiddenCb) {
+        hiddenCb.addEventListener('change', () => {
+            localStorage.setItem('amm_browse_show_hidden', hiddenCb.checked ? '1' : '0');
+            if (currentBrowsePath) loadBrowseDirectory(currentBrowsePath);
+        });
+    }
 })();
 
 // ═══ History Modal ═══

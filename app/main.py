@@ -2087,10 +2087,15 @@ def _browsable_roots() -> list[Path]:
 
 
 @app.get("/api/browse")
-def browse_directory(path: str = Query(None)):
+def browse_directory(path: str = Query(None), show_hidden: bool = Query(False)):
     """
     Browse directories on the server.
     Returns list of subdirectories and files.
+
+    Hidden entries (dot-files like .ssh, .cache, .config) are omitted unless
+    ``show_hidden=true`` — this matches the scanner's dot-file policy and keeps
+    the picker focused on real media instead of home-directory clutter. The
+    ".." parent link is always shown.
 
     Plain ``def`` (see scan_directory): the iterdir()/stat() calls are blocking
     filesystem I/O with no awaits, so FastAPI runs this in its worker threadpool
@@ -2163,6 +2168,9 @@ def browse_directory(path: str = Query(None)):
             raise HTTPException(status_code=503, detail=f"Cannot read directory: {e}")
 
         for item in entries:
+            # Skip dot-files/dirs unless explicitly requested (UI "Show hidden").
+            if not show_hidden and item.name.startswith('.'):
+                continue
             try:
                 items.append({
                     "name": item.name,
@@ -2172,10 +2180,11 @@ def browse_directory(path: str = Query(None)):
                 })
             except (PermissionError, OSError):
                 continue
-        
+
         return {
             "path": str(p),
             "items": items,
+            "show_hidden": show_hidden,
         }
 
     except HTTPException:
