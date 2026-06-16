@@ -140,6 +140,7 @@
   "modal.browse_select_files_btn": "Seleccionar archivos",
   "modal.browse_cancel": "Cancelar",
   "modal.browse_select": "Seleccionar carpeta",
+  "modal.browse_kbd_hint": "Consejo: marca las casillas, o usa ↑/↓ para moverte · Espacio para alternar · Mayús+↑/↓ o Mayús+clic para un rango · Ctrl+A para seleccionar todo",
   "modal.history_title": "Historial de renombrado",
   "modal.history_close": "Cerrar",
   "history.undo": "Deshacer último",

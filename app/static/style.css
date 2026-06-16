@@ -931,6 +931,14 @@ input.input-error {
     border-color: var(--primary);
 }
 
+/* Keyboard-focused row (arrow-key navigation). A bright ring marks the row that
+   Space toggles and Shift+Arrow extends a selection from. */
+.browse-item.file.focused {
+    border-color: var(--primary);
+    box-shadow: 0 0 0 2px var(--primary) inset;
+    background: rgba(178, 75, 243, 0.18);
+}
+
 .browse-item input[type="checkbox"] {
     margin-right: 5px;
     cursor: pointer;

@@ -140,6 +140,7 @@
   "modal.browse_select_files_btn": "ファイルを選択",
   "modal.browse_cancel": "キャンセル",
   "modal.browse_select": "フォルダーを選択",
+  "modal.browse_kbd_hint": "ヒント：チェックボックスをクリック、または↑/↓で移動・スペースで切替・Shift+↑/↓やShift+クリックで範囲選択・Ctrl+Aで全選択",
   "modal.history_title": "名前変更の履歴",
   "modal.history_close": "閉じる",
   "history.undo": "直前を元に戻す",

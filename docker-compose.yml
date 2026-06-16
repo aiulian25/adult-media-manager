@@ -20,8 +20,9 @@ services:
       - AMM_DATE_TOLERANCE_DAYS=${AMM_DATE_TOLERANCE_DAYS:-7}
       # Extra browsable/scannable roots (colon-separated), for media mounted
       # OUTSIDE the built-in roots (/media /mnt /data /downloads /organized /home
-      # /srv /nas /storage /run/media). The Browse picker lists the built-in roots
-      # that exist plus these. Example: AMM_EXTRA_ROOTS=/library:/tank
+      # /srv /nas /storage /run/media). The Browse picker lists the directories
+      # you actually mount here (below) that fall within an allowed root; set this
+      # to also permit mounts outside them. Example: AMM_EXTRA_ROOTS=/library:/tank
       - AMM_EXTRA_ROOTS=${AMM_EXTRA_ROOTS:-}
       # Run a SINGLE worker only. Match sessions and embed-job progress live in
       # process-local memory, so matching and embed progress break with >1
@@ -35,9 +36,10 @@ services:
       # the container so the scan path you type in the UI matches what the
       # server sees. Add as many mounts as you need.
       #
-      # Mount under a built-in root (e.g. /mnt, /media, /srv, /nas) and it shows
-      # up automatically in the in-app Browse picker. For any other location, also
-      # list it in AMM_EXTRA_ROOTS above so the picker/scan will allow it.
+      # Mount under a built-in root (e.g. /mnt, /media, /srv, /nas) and the mount
+      # shows up automatically in the in-app Browse picker — only your mounts are
+      # listed, not the empty built-in roots. For any other location, also list it
+      # in AMM_EXTRA_ROOTS above so the picker/scan will allow it.
 
       # Single directory:
       # - /path/to/your/media:/path/to/your/media

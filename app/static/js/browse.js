@@ -1,4 +1,11 @@
 // ═══ Browse Modal ═══
+
+// Keyboard file-selection state (files mode). browseFocusIdx is the row the
+// arrow keys move and Space toggles; browseAnchorIdx is the fixed end of a
+// Shift range. Both index into window._browsePaths and reset on every reload.
+let browseFocusIdx  = -1;
+let browseAnchorIdx = -1;
+
 async function openBrowseModal() {
     browseModal.classList.remove('hidden');
     // Derive a directory to start from. If scanPath contains files or a
@@ -46,21 +53,27 @@ async function loadBrowseDirectory(path) {
             <div class="browse-item directory" onclick="navigateDir(_browseDirs[${i}])">📁 ${escapeHtml(item.name)}</div>
         `).join('');
 
-        // Show files if in file selection mode
+        // Show files if in file selection mode. Clicks go through a single
+        // delegated handler (onBrowseFileClick) so Shift-range and Ctrl-toggle
+        // work; the checkbox is a visual indicator only (pointer-events:none)
+        // so a click anywhere on the row is handled the same way.
         if (browseSelectionMode === 'files') {
             html += files.map((item, i) => {
                 const isSelected = selectedFiles.some(f => f.path === item.path);
                 return `
-                    <div class="browse-item file ${isSelected ? 'selected' : ''}" data-fidx="${i}"
-                         onclick="toggleFileSelection(_browsePaths[${i}])">
-                        <input type="checkbox" ${isSelected ? 'checked' : ''}
-                               onclick="event.stopPropagation(); toggleFileSelection(_browsePaths[${i}])">
+                    <div class="browse-item file ${isSelected ? 'selected' : ''}" data-fidx="${i}">
+                        <input type="checkbox" ${isSelected ? 'checked' : ''} tabindex="-1"
+                               style="pointer-events:none;">
                         📄 ${escapeHtml(item.name)}
                     </div>
                 `;
             }).join('');
         }
-        
+
+        // A fresh listing invalidates the old focus/anchor indices.
+        browseFocusIdx  = -1;
+        browseAnchorIdx = -1;
+
         document.getElementById('browse-list').innerHTML = html || '<div style="text-align:center;padding:20px;color:var(--text-muted);">Empty folder</div>';
         updateSelectionCounter();
         updateBrowseBackBtn();
@@ -98,6 +111,10 @@ function updateBrowseSelectionMode(mode) {
     } else {
         selectBtn.textContent = t('modal.browse_select_files_btn') || 'Select Files';
     }
+
+    // Keyboard-selection hint is only relevant when picking files.
+    const hint = document.getElementById('browse-kbd-hint');
+    if (hint) hint.style.display = (mode === 'files') ? 'block' : 'none';
     
     // Reload current directory to show/hide files
     if (currentBrowsePath) {
@@ -105,27 +122,119 @@ function updateBrowseSelectionMode(mode) {
     }
 }
 
-function toggleFileSelection(filePath) {
-    const index = selectedFiles.findIndex(f => f.path === filePath);
-    if (index > -1) {
-        selectedFiles.splice(index, 1);
-    } else {
-        selectedFiles.push({ path: filePath });
-    }
+// ── Index-based file selection (supports checkbox click, Shift-range and
+//    keyboard navigation, all sharing one source of truth) ──────────────────
 
-    // Update UI via data-fidx attribute (safe with any filename)
-    const fidx = (window._browsePaths || []).indexOf(filePath);
-    if (fidx !== -1) {
-        const fileItem = document.querySelector(`.browse-item.file[data-fidx="${fidx}"]`);
-        if (fileItem) {
-            const selected = selectedFiles.some(f => f.path === filePath);
-            fileItem.classList.toggle('selected', selected);
-            const checkbox = fileItem.querySelector('input[type="checkbox"]');
-            if (checkbox) checkbox.checked = selected;
-        }
-    }
+/** True if the file at index `idx` (into _browsePaths) is currently selected. */
+function _isFileIdxSelected(idx) {
+    const p = (window._browsePaths || [])[idx];
+    return p != null && selectedFiles.some(f => f.path === p);
+}
 
+/** Select/deselect the file at `idx` and sync its row's checkbox + highlight. */
+function _setFileIdxSelected(idx, selected) {
+    const p = (window._browsePaths || [])[idx];
+    if (p == null) return;
+    const at = selectedFiles.findIndex(f => f.path === p);
+    if (selected && at === -1)      selectedFiles.push({ path: p });
+    else if (!selected && at !== -1) selectedFiles.splice(at, 1);
+
+    const row = document.querySelector(`.browse-item.file[data-fidx="${idx}"]`);
+    if (row) {
+        row.classList.toggle('selected', selected);
+        const cb = row.querySelector('input[type="checkbox"]');
+        if (cb) cb.checked = selected;
+    }
+}
+
+function _toggleFileIdx(idx) { _setFileIdxSelected(idx, !_isFileIdxSelected(idx)); }
+
+/** Select every file between two indices inclusive (Shift-range). */
+function _selectFileRange(a, b) {
+    const lo = Math.min(a, b), hi = Math.max(a, b);
+    for (let i = lo; i <= hi; i++) _setFileIdxSelected(i, true);
     updateSelectionCounter();
+}
+
+/** Select all files in the current listing (Ctrl/Cmd+A). */
+function _selectAllFiles() {
+    const n = (window._browsePaths || []).length;
+    for (let i = 0; i < n; i++) _setFileIdxSelected(i, true);
+    updateSelectionCounter();
+}
+
+/** Move the keyboard focus ring to file `idx`, scrolling it into view. */
+function _setBrowseFocus(idx) {
+    const n = (window._browsePaths || []).length;
+    if (n === 0) { browseFocusIdx = -1; return; }
+    idx = Math.max(0, Math.min(n - 1, idx));
+    document.querySelectorAll('.browse-item.file.focused')
+        .forEach(el => el.classList.remove('focused'));
+    const row = document.querySelector(`.browse-item.file[data-fidx="${idx}"]`);
+    if (row) {
+        row.classList.add('focused');
+        row.scrollIntoView({ block: 'nearest' });
+    }
+    browseFocusIdx = idx;
+}
+
+/** Delegated click on a file row — handles plain, Ctrl (toggle) and Shift (range). */
+function onBrowseFileClick(e, idx) {
+    if (e.shiftKey && browseAnchorIdx >= 0) {
+        _selectFileRange(browseAnchorIdx, idx);
+    } else {
+        _toggleFileIdx(idx);
+        browseAnchorIdx = idx;
+        updateSelectionCounter();
+    }
+    _setBrowseFocus(idx);
+}
+
+// Back-compat shim: select/deselect a single file by its path.
+function toggleFileSelection(filePath) {
+    const idx = (window._browsePaths || []).indexOf(filePath);
+    if (idx === -1) return;
+    _toggleFileIdx(idx);
+    browseAnchorIdx = idx;
+    _setBrowseFocus(idx);
+    updateSelectionCounter();
+}
+
+// Keyboard selection (files mode): ↑/↓ move focus, Space toggles, Shift+↑/↓
+// extends a range, Ctrl/Cmd+A selects all, Home/End jump, Enter confirms.
+function onBrowseKeydown(e) {
+    if (browseModal.classList.contains('hidden')) return;
+    if (browseSelectionMode !== 'files') return;
+    const n = (window._browsePaths || []).length;
+    if (n === 0) return;
+
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        const step = e.key === 'ArrowDown' ? 1 : -1;
+        const next = browseFocusIdx < 0 ? 0 : browseFocusIdx + step;
+        if (e.shiftKey) {
+            if (browseAnchorIdx < 0) browseAnchorIdx = browseFocusIdx < 0 ? 0 : browseFocusIdx;
+            _selectFileRange(browseAnchorIdx, Math.max(0, Math.min(n - 1, next)));
+        }
+        _setBrowseFocus(next);
+    } else if (e.key === ' ' || e.key === 'Spacebar') {
+        e.preventDefault();
+        if (browseFocusIdx < 0) _setBrowseFocus(0);
+        _toggleFileIdx(browseFocusIdx);
+        browseAnchorIdx = browseFocusIdx;
+        updateSelectionCounter();
+    } else if ((e.ctrlKey || e.metaKey) && (e.key === 'a' || e.key === 'A')) {
+        e.preventDefault();
+        _selectAllFiles();
+        browseAnchorIdx = 0;
+        _setBrowseFocus(n - 1);
+    } else if (e.key === 'Home') {
+        e.preventDefault(); _setBrowseFocus(0);
+    } else if (e.key === 'End') {
+        e.preventDefault(); _setBrowseFocus(n - 1);
+    } else if (e.key === 'Enter') {
+        if (selectedFiles.length > 0) { e.preventDefault(); selectBrowseFolder(); }
+    }
 }
 
 function updateSelectionCounter() {
@@ -151,6 +260,22 @@ function selectBrowseFolder() {
         showStatus(t('status.browse_select_required'), 'error');
     }
 }
+
+// Wire the delegated file-row click handler and the keyboard listener once.
+// File rows carry data-fidx (no inline onclick) so Shift/Ctrl modifiers reach
+// onBrowseFileClick; directory rows keep their own inline navigateDir handler.
+(function initBrowseInput() {
+    const list = document.getElementById('browse-list');
+    if (list) {
+        list.addEventListener('click', (e) => {
+            const row = e.target.closest('.browse-item.file');
+            if (!row || !list.contains(row)) return;
+            const idx = parseInt(row.dataset.fidx, 10);
+            if (!Number.isNaN(idx)) onBrowseFileClick(e, idx);
+        });
+    }
+    document.addEventListener('keydown', onBrowseKeydown);
+})();
 
 // ═══ History Modal ═══
 async function openHistoryModal() {

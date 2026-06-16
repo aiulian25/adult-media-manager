@@ -390,20 +390,14 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Rename button
     btnRename.addEventListener('click', renameFiles);
     
-    // Browse button — native OS picker in Electron, web modal otherwise
-    btnBrowse.addEventListener('click', async () => {
-        if (window.electronAPI?.openFolderDialog) {
-            const paths = await window.electronAPI.openFolderDialog();
-            if (!paths || paths.length === 0) return;
-            // OS picker returns selected directories directly — pass them straight
-            // through without the parent-stripping that _resolveDropPaths does for
-            // file drag-and-drop.
-            const path = paths.length === 1 ? paths[0] : paths.join(',');
-            _loadPath(path, paths.length > 1);
-        } else {
-            openBrowseModal();
-        }
-    });
+    // Browse button — always the in-app modal, which lets the user pick EITHER
+    // a folder OR individual files. The native OS dialog (Electron deb/AppImage)
+    // is folder-only on Linux — GTK can't combine file + directory selection —
+    // so a user trying to pick files hit a dead end, cancelled, and the scan
+    // path stayed empty ("Please enter a path"). The modal browses the server
+    // filesystem via /api/browse and behaves identically across the native and
+    // Docker/browser builds, populating the scan path for both modes.
+    btnBrowse.addEventListener('click', openBrowseModal);
     
     // History button
     btnHistory.addEventListener('click', openHistoryModal);
@@ -994,6 +988,13 @@ document.addEventListener('DOMContentLoaded', () => {
         // Trigger scan — same code path as clicking the Scan button
         scanFolder();
     }
+
+    // Expose to the global scope so callers outside this IIFE — notably the
+    // native folder-picker handler (Browse button in the Electron deb/AppImage
+    // build) — can populate the scan path and trigger a scan. Without this the
+    // handler hits a ReferenceError, the path is never set, and pressing Scan
+    // reports "Please enter a path".
+    window._loadPath = _loadPath;
 })();
 
 // ═══ Embed-in-progress guard ═══

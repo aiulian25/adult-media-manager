@@ -140,6 +140,7 @@
   "modal.browse_select_files_btn": "Select Files",
   "modal.browse_cancel": "Cancel",
   "modal.browse_select": "Select Folder",
+  "modal.browse_kbd_hint": "Tip: click checkboxes, or use ↑/↓ to move · Space to toggle · Shift+↑/↓ or Shift+Click for a range · Ctrl+A to select all",
   "modal.history_title": "Rename History",
   "modal.history_close": "Close",
   "history.undo": "Undo Last",

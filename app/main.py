@@ -2011,6 +2011,81 @@ def _existing_allowed_roots() -> list[Path]:
     return sorted(found, key=lambda p: str(p))
 
 
+def _read_mount_points() -> Optional[list[Path]]:
+    """Return every mount target from the container's mount table.
+
+    Reads /proc/self/mountinfo (Linux/Docker). The mount-point field escapes
+    special characters (space→\\040, tab→\\011, newline→\\012, backslash→\\134);
+    we unescape them so paths with spaces resolve correctly. Returns None when
+    the mount table can't be read (e.g. a non-Linux dev host) so callers can
+    fall back to the static allowlist.
+    """
+    try:
+        with open("/proc/self/mountinfo", "r", encoding="utf-8", errors="replace") as fh:
+            lines = fh.readlines()
+    except OSError:
+        return None
+
+    points: list[Path] = []
+    for line in lines:
+        # Fields: mount_id parent_id major:minor root MOUNT_POINT options …
+        # The mount point is always the 5th field, before the optional fields.
+        parts = line.split(" ")
+        if len(parts) < 5:
+            continue
+        mp = (parts[4]
+              .replace("\\040", " ")
+              .replace("\\011", "\t")
+              .replace("\\012", "\n")
+              .replace("\\134", "\\"))
+        points.append(Path(mp))
+    return points
+
+
+def _browsable_roots() -> list[Path]:
+    """Top-level entries for the Docker "/" virtual roots view.
+
+    Lists only the media locations the user actually mounted into the container
+    — derived from the real mount table and confined to ALLOWED_ROOTS — instead
+    of every built-in root that merely exists as an (often empty) directory in
+    the base image. So a user who mounts a single ``/mnt/NAS`` share sees just
+    that, not a noisy /data /home /media /mnt /root /srv list.
+
+    Falls back to the existing-allowed-roots behaviour when the mount table is
+    unavailable or no media mount is detected, so the picker is never an empty
+    dead-end (the user can still type a path or set AMM_EXTRA_ROOTS).
+    """
+    mounts = _read_mount_points()
+    if mounts is None:
+        return _existing_allowed_roots()
+
+    data_dir = DATA_DIR.resolve()
+    roots: set[Path] = set()
+    for mp in mounts:
+        try:
+            rp = mp.resolve()
+        except OSError:
+            continue
+        # Skip the filesystem root and the app's own persistent data volume —
+        # neither is a media location the user wants to browse.
+        if rp == Path("/") or rp == data_dir:
+            continue
+        # Confine to the allowlist (built-in roots + AMM_EXTRA_ROOTS); this also
+        # drops system bind-mounts like /etc/hosts, /etc/resolv.conf, /proc, …
+        if not _is_allowed_path(rp):
+            continue
+        try:
+            if not rp.is_dir():
+                continue
+        except OSError:
+            continue
+        roots.add(rp)
+
+    if not roots:
+        return _existing_allowed_roots()
+    return sorted(roots, key=lambda p: str(p))
+
+
 @app.get("/api/browse")
 def browse_directory(path: str = Query(None)):
     """
@@ -2040,7 +2115,7 @@ def browse_directory(path: str = Query(None)):
                 "is_root": True,
                 "items": [
                     {"name": str(r), "path": str(r), "type": "directory", "size": 0}
-                    for r in _existing_allowed_roots()
+                    for r in _browsable_roots()
                 ],
             }
 
