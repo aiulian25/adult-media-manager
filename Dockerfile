@@ -3,7 +3,7 @@ FROM python:3.11-slim
 
 LABEL maintainer="Adult Media Manager <app@adultmediamanager.local>"
 LABEL description="Adult media metadata organizer with TPDB integration"
-LABEL version="1.0.0"
+LABEL version="1.1.4"
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1 \
