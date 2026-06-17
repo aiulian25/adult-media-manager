@@ -22,7 +22,7 @@ By using this software you confirm you are of legal age to access adult content 
 | 🔍 Two databases | [ThePornDB](https://theporndb.net/) and [StashDB](https://stashdb.org/) — use one or both |
 | 🔗 Paste a scene link | Paste a `stashdb.org/scenes/…` or `theporndb.net/scenes/…` URL in manual edit and **Fetch** full metadata in one click |
 | 🧬 Fingerprint matching | OSHash + perceptual-hash (pHash) lookups for exact, "✓ Verified" matches |
-| ⚡ Live streaming scan & match | Results appear as they're found, with a **Stop** button that keeps partial results |
+| ⚡ Live streaming scan & match | Results appear as they're found; **Stop** a scan or **Cancel** a match at any time and keep the partial results |
 | 💾 Match cache | Confirmed matches are remembered (by content hash) — rescans are instant and skip the API; **Re-match** forces a refresh |
 | 🗂️ Incremental rescan & duplicates | A catalog tracks organised files so re-scans skip them; same-content duplicates are detected |
 | 🎚️ Confidence bands & review queue | High / Medium / Low colour bands + filters to batch-confirm strong matches and focus on the ambiguous middle |
@@ -36,6 +36,17 @@ By using this software you confirm you are of legal age to access adult content 
 | 📜 History & per-row revert | Every action is logged; move/copy/hardlink/symlink can each be reverted individually |
 | 🐳 Docker | Single-container, named volume, PUID/PGID support |
 | 📦 Native Linux | Self-installing AppImage + `.deb` package — no Python required |
+
+---
+
+## 🆕 What's New in v1.2.0
+
+- **Native file & folder picker (AppImage/deb).** The **Browse** button now opens your desktop's native file chooser — multi-select files *or* folders, with hidden-file support — instead of the in-app browser. Docker/browser installs keep the built-in server-side browser.
+- **Cancel a running match.** The **Match** button turns into **Cancel** while matching is in progress, so you can stop a long run at any time and keep the matches already found. (Available in all 6 languages.)
+- **Multi-folder scans.** Select several folders at once and they're all scanned in a single pass.
+- **More reliable launch (AppImage/deb).** The backend now resolves a free port at startup and a single-instance lock focuses the existing window instead of starting a second copy — fixing intermittent "won't launch" failures caused by a leftover process holding a fixed port.
+
+See the [v1.2.0 release notes](https://github.com/aiulian25/adult-media-manager/releases/tag/v1.2.0) for the full list.
 
 ---
 
@@ -119,10 +130,10 @@ No Docker required. Ships a self-contained Python 3.12 runtime — no system Pyt
 
 ### AppImage (recommended — no root required)
 
-1. Download `Adult.Media.Manager-1.1.0.AppImage`
+1. Download `Adult.Media.Manager-1.2.0.AppImage`
 2. Make it executable:
    ```bash
-   chmod +x Adult.Media.Manager-1.1.0.AppImage
+   chmod +x Adult.Media.Manager-1.2.0.AppImage
    ```
 3. Double-click it (or run it from the terminal)
 
@@ -136,7 +147,7 @@ From that point, launch it from your application menu. The original downloaded f
 ### .deb Package (Debian / Ubuntu / Mint)
 
 ```bash
-sudo apt install ./adult-media-manager_1.1.0_amd64.deb
+sudo apt install ./adult-media-manager_1.2.0_amd64.deb
 ```
 
 Launch **Adult Media Manager** from your application menu, or:
@@ -157,9 +168,9 @@ Launch **Adult Media Manager** from your application menu, or:
 Scan → Match → Review → Rename
 ```
 
-1. **Scan** — Enter a folder path (or drag & drop files/folders onto the window). Enable **Recursive** to include subfolders. Click **Scan**. Results stream in live; a **Stop** button appears so you can halt a long scan and keep whatever was found so far. Enable **Skip organized** to exclude files AMM has already processed (incremental rescan).
+1. **Scan** — Enter a folder path, drag & drop files/folders onto the window, or click **Browse** (on the AppImage/deb this opens your native file chooser — pick multiple files *or* folders at once). Enable **Recursive** to include subfolders. Click **Scan**. Results stream in live; a **Stop** button appears so you can halt a long scan and keep whatever was found so far. Enable **Skip organized** to exclude files AMM has already processed (incremental rescan).
 
-2. **Match** — Select a datasource (TPDB or StashDB) and click **Match**. Matches stream in with confidence scores, thumbnails, and performers. The app first tries exact **fingerprint** lookups (OSHash / perceptual hash) — those show a **✓ Verified** badge. Previously confirmed matches are served instantly from the local cache (**⚡ Cached** / **★ Confirmed** badges); tick **Re-match** to ignore the cache and re-query the API.
+2. **Match** — Select a datasource (TPDB or StashDB) and click **Match**. Matches stream in with confidence scores, thumbnails, and performers. The app first tries exact **fingerprint** lookups (OSHash / perceptual hash) — those show a **✓ Verified** badge. Previously confirmed matches are served instantly from the local cache (**⚡ Cached** / **★ Confirmed** badges); tick **Re-match** to ignore the cache and re-query the API. While matching is running the **Match** button becomes **Cancel** — stop a long run at any time and keep the matches already found.
 
 3. **Review** — Confidence is shown as **High / Medium / Low** colour bands. Use the filter bar to view only the *review* (ambiguous middle), *high*, *confirmed*, or *unmatched* items, and **Select high-confidence** to batch-confirm strong matches at once. Files already organised (via `.nfo` sidecar) appear in a collapsed section and are skipped by default. To edit by hand, open **Manual edit** — you can paste a **StashDB** or **ThePornDB** scene URL and click **Fetch** to auto-fill all fields.
 
