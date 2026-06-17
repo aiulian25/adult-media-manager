@@ -960,28 +960,22 @@ document.addEventListener('DOMContentLoaded', () => {
         _loadPath(resolved.path, resolved.isMulti);
     }
 
-    // Given a list of virtual full-paths (starting with /), decide whether to
-    // scan a single common parent directory or pass multiple paths.
+    // Decide what to scan from a set of dropped paths: scan EXACTLY what was
+    // dropped — a single item as-is, or multiple items as a comma-separated list.
+    //
+    // We deliberately do NOT collapse multiple files to their common parent
+    // directory. Dragging 7 files out of a 100-file folder must scan those 7
+    // files, not the whole folder (the previous "they share a parent → scan the
+    // parent" heuristic conflated "several files" with "a folder" and rescanned
+    // everything). A dropped folder still arrives as a single directory path and
+    // is scanned recursively; the backend's scan accepts a comma list that mixes
+    // files and directories, so mixed drops work too.
     function _resolveDropPaths(paths) {
-        if (paths.length === 1) {
-            return { path: paths[0], isMulti: false };
+        const unique = [...new Set(paths.filter(Boolean))];
+        if (unique.length <= 1) {
+            return { path: unique[0] || '', isMulti: false };
         }
-
-        // Find longest common directory prefix
-        const parts = paths.map(p => p.split('/').slice(0, -1));
-        const common = parts[0].filter((seg, i) =>
-            parts.every(arr => arr[i] === seg)
-        );
-        const commonDir = common.join('/') || '/';
-
-        // If all items share a real common directory, scan that directory.
-        // Prefer this over comma-list because the user probably dropped a folder.
-        if (commonDir !== '/') {
-            return { path: commonDir, isMulti: false };
-        }
-
-        // No useful common root → pass as comma-separated (handles /mnt/a, /mnt/b etc.)
-        return { path: paths.join(','), isMulti: paths.length > 1 };
+        return { path: unique.join(','), isMulti: true };
     }
 
     // Populate the scan-path input and optionally trigger a scan.

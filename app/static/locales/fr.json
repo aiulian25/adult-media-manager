@@ -8,6 +8,7 @@
   "nav.match": "Associer",
   "nav.cancel_match": "Annuler",
   "nav.settings": "Paramètres",
+  "nav.go_top": "Aller en haut",
   "settings.title": "Paramètres",
   "settings.section_general": "Général",
   "settings.section_api": "Clés API",

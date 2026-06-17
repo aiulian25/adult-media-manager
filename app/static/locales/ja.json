@@ -8,6 +8,7 @@
   "nav.match": "照合",
   "nav.cancel_match": "キャンセル",
   "nav.settings": "設定",
+  "nav.go_top": "トップへ戻る",
   "settings.title": "設定",
   "settings.section_general": "一般",
   "settings.section_api": "APIキー",

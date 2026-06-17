@@ -8,6 +8,7 @@
   "nav.match": "Abgleichen",
   "nav.cancel_match": "Abbrechen",
   "nav.settings": "Einstellungen",
+  "nav.go_top": "Nach oben",
   "settings.title": "Einstellungen",
   "settings.section_general": "Allgemein",
   "settings.section_api": "API-Schlüssel",

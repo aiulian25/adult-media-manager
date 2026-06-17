@@ -8,6 +8,7 @@
   "nav.match": "Coincidir",
   "nav.cancel_match": "Cancelar",
   "nav.settings": "Ajustes",
+  "nav.go_top": "Ir arriba",
   "settings.title": "Ajustes",
   "settings.section_general": "General",
   "settings.section_api": "Claves API",

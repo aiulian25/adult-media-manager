@@ -39,6 +39,38 @@ function escapeHtml(str) {
         .replace(/"/g, '&quot;');
 }
 
+// ═══ Human-readable file size ═══
+// Binary units (1024) to match what file managers / Synology DSM show, so the
+// numbers users compare here line up with their NAS. Returns '' for unknown
+// sizes so callers can omit the segment cleanly. Shared by every build target.
+function formatFileSize(bytes) {
+    if (typeof bytes !== 'number' || !isFinite(bytes) || bytes < 0) return '';
+    if (bytes === 0) return '0 B';
+    const units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
+    const i = Math.min(units.length - 1, Math.floor(Math.log(bytes) / Math.log(1024)));
+    const val = bytes / Math.pow(1024, i);
+    // Whole numbers for bytes and for values ≥ 100; one decimal otherwise.
+    const text = (i === 0 || val >= 100) ? Math.round(val).toString() : val.toFixed(1);
+    return `${text} ${units[i]}`;
+}
+
+// ═══ Go-to-top button ═══
+// The app scrolls the page (no inner-scroll container), so with many scanned/
+// matched rows the toolbar scrolls out of reach. A floating button appears once
+// the user scrolls down and jumps back to the top. Pure renderer UI — identical
+// across Docker/deb/AppImage.
+(function initGoToTop() {
+    const btn = document.getElementById('go-to-top');
+    if (!btn) return;
+    const SHOW_AFTER = 400;   // px scrolled before the button appears
+    const onScroll = () => {
+        btn.classList.toggle('is-visible', window.scrollY > SHOW_AFTER);
+    };
+    btn.addEventListener('click', () => window.scrollTo({ top: 0, behavior: 'smooth' }));
+    window.addEventListener('scroll', onScroll, { passive: true });
+    onScroll();
+})();
+
 // ═══ Status Bar ═══
 function showStatus(message, type = 'info') {
     statusBar.classList.remove('hidden');

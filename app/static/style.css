@@ -503,6 +503,38 @@ input.input-error {
     min-height: 400px;
 }
 
+/* ═══ Go-to-top button ═══ */
+.go-to-top {
+    position: fixed;
+    right: 24px;
+    bottom: 24px;
+    z-index: 1500;
+    width: 44px;
+    height: 44px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid var(--glass-border);
+    border-radius: 50%;
+    color: #fff;
+    background: linear-gradient(135deg, var(--primary) 0%, var(--accent) 100%);
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
+    cursor: pointer;
+    opacity: 0;
+    transform: translateY(12px);
+    pointer-events: none;
+    transition: opacity .2s, transform .2s, box-shadow .2s;
+}
+.go-to-top.is-visible {
+    opacity: 0.92;
+    transform: translateY(0);
+    pointer-events: auto;
+}
+.go-to-top:hover {
+    opacity: 1;
+    box-shadow: 0 8px 26px rgba(0, 0, 0, 0.45);
+}
+
 .welcome-message {
     text-align: center;
     padding: 60px 20px;

@@ -314,7 +314,11 @@ function _buildMatchRow({ result, index }) {
         node.id = `match-item-${index}`;
         node.querySelector('.match-cb').dataset.index = index;
         node.querySelector('[data-nomatch]').textContent = `❌ ${t('match.no_match')}`;
-        node.querySelector('[data-original]').textContent = orig.filename || '';
+        // Show the file size even with no match so duplicates can be compared and
+        // the user can decide which copy to keep.
+        const nmSize = formatFileSize(orig.size);
+        node.querySelector('[data-original]').textContent =
+            `${orig.filename || ''}${nmSize ? ' · ' + nmSize : ''}`;
         const editBtn = node.querySelector('[data-edit]');
         editBtn.textContent = `✏️ ${t('match.edit_manually')}`;
         editBtn.addEventListener('click', () => openManualEditModal(orig));
@@ -379,7 +383,9 @@ function _buildMatchRow({ result, index }) {
 
     // Original filename + derived file tech (resolution/source/group from the
     // detector, D4) surfaced as a tie-breaker hint.
-    const tech = [orig.quality, orig.source, orig.group].filter(Boolean).join(' · ');
+    // Include the file size in the tech line so duplicates are easy to compare.
+    const tech = [orig.quality, orig.source, orig.group, formatFileSize(orig.size)]
+        .filter(Boolean).join(' · ');
     node.querySelector('[data-original]').textContent =
         `${t('match.original_label')}: ${orig.filename || ''}${tech ? ' · ' + tech : ''}`;
 

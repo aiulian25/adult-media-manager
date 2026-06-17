@@ -8,6 +8,7 @@
   "nav.match": "Match",
   "nav.cancel_match": "Cancel",
   "nav.settings": "Settings",
+  "nav.go_top": "Go to top",
   "settings.title": "Settings",
   "settings.section_general": "General",
   "settings.section_api": "API Keys",

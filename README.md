@@ -130,10 +130,10 @@ No Docker required. Ships a self-contained Python 3.12 runtime — no system Pyt
 
 ### AppImage (recommended — no root required)
 
-1. Download `Adult.Media.Manager-1.2.0.AppImage`
+1. Download `Adult.Media.Manager-1.2.2.AppImage`
 2. Make it executable:
    ```bash
-   chmod +x Adult.Media.Manager-1.2.0.AppImage
+   chmod +x Adult.Media.Manager-1.2.2.AppImage
    ```
 3. Double-click it (or run it from the terminal)
 
@@ -147,7 +147,7 @@ From that point, launch it from your application menu. The original downloaded f
 ### .deb Package (Debian / Ubuntu / Mint)
 
 ```bash
-sudo apt install ./adult-media-manager_1.2.0_amd64.deb
+sudo apt install ./adult-media-manager_1.2.2_amd64.deb
 ```
 
 Launch **Adult Media Manager** from your application menu, or:
