@@ -30,7 +30,9 @@ contextBridge.exposeInMainWorld("electronAPI", {
         }
     },
 
-    // Opens the native OS folder picker (GTK/KDE/XDG portal).
+    // Opens the native OS picker (GTK/KDE/XDG portal). `mode` is "folder"
+    // (directories) or "files" — Linux GTK can't combine the two in one dialog,
+    // so the caller chooses. Both modes allow multi-select and show hidden files.
     // Returns an array of selected absolute paths, or [] if cancelled.
-    openFolderDialog: () => ipcRenderer.invoke("dialog:openDirectory"),
+    pickPaths: (mode) => ipcRenderer.invoke("dialog:open", mode),
 });

@@ -1,4 +1,75 @@
-// ═══ Match Files ═══
+// ═══ Match Files (streaming + cancellable) ═══
+//
+// Matching streams results over SSE so the UI fills in incrementally AND the user
+// can CANCEL a long match at any time: the Match button becomes a Cancel button
+// while matching runs — a second function on the same button (onMatchClick). Cancel
+// closes the EventSource; the server detects the disconnect between files, cancels
+// the still-pending lookups, and flushes whatever it already matched to the cache
+// (see match_stream's is_disconnected check), so partial results are kept, never
+// lost. Identical across Docker/deb/AppImage — pure SSE + FastAPI, no platform code.
+let _matchEventSource = null;   // active SSE handle, or null when idle
+let _matchInProgress  = false;  // true between start and done/error/cancel
+let _matchStopped     = false;  // true when the user pressed Cancel
+let _matchResolve     = null;   // resolves the matchFiles() promise on cancel
+let _matchOrdered     = null;   // result slots, lifted so Cancel can show partials
+
+// Dispatch the Match button click: start a match, or cancel the running one. The
+// single button carries both functions (start ⇄ cancel); wired in core.js.
+function onMatchClick() {
+    if (_matchInProgress) cancelMatch();
+    else                  matchFiles();
+}
+
+// Swap the Match button between its "Match" and "Cancel" faces. It stays clickable
+// in both states; the data-i18n attr is swapped too so a mid-match language change
+// still localises the label correctly.
+function _setMatchRunning(running) {
+    _matchInProgress = running;
+    if (!btnMatch) return;
+    if (running) {
+        btnMatch.dataset.i18n = 'nav.cancel_match';
+        btnMatch.textContent  = t('nav.cancel_match');
+        btnMatch.classList.add('btn-cancel');
+        btnMatch.disabled = false;   // must stay clickable so the user can cancel
+    } else {
+        btnMatch.dataset.i18n = 'nav.match';
+        btnMatch.textContent  = t('nav.match');
+        btnMatch.classList.remove('btn-cancel');
+    }
+}
+
+// Cancel an in-flight match, keeping the results matched so far. Closing the
+// EventSource disconnects the request (this does NOT fire an SSE error event); the
+// server stops between files and flushes the cache, and we publish the partials.
+function cancelMatch() {
+    if (!_matchEventSource) return;
+    _matchStopped = true;
+    try { _matchEventSource.close(); } catch (_) { /* ignore */ }
+    _matchEventSource = null;
+    _finishMatch(true);
+    if (_matchResolve) { _matchResolve(); _matchResolve = null; }
+}
+
+// Publish whatever is in the ordered slots after a Cancel and restore the button.
+// The normal "done" path finalises inline (it has the server's matched/total
+// counts); this handles only the cancelled case so partial work isn't discarded.
+function _finishMatch(stopped) {
+    const ordered = _matchOrdered || [];
+    matchedResults = ordered.filter(Boolean);
+    _setMatchRunning(false);
+    if (stopped) {
+        const matched = matchedResults.filter(m => m.match).length;
+        progressFill.style.width = '0%';
+        showStatus(t('status.match_stopped', { matched, total: ordered.length }), 'info');
+        displayMatches();
+        btnRename.disabled = matched === 0;
+        setTimeout(() => {
+            statusBar.classList.add('hidden');
+            progressFill.style.width = '0%';
+        }, 2500);
+    }
+}
+
 async function matchFiles() {
     // Only match files the user has checked (default: all)
     const filesToMatch = selectedScannedIndices.size > 0
@@ -10,11 +81,14 @@ async function matchFiles() {
     const total = filesToMatch.length;
     showStatus(t('status.matching_start', { total }));
     progressFill.style.width = '0%';
-    btnMatch.disabled = true;
+    btnMatch.disabled = true;   // Stage 1 (session setup); re-enabled as Cancel at Stage 2
     btnRename.disabled = true;
+    _matchStopped = false;
 
     // Build ordered results array; slots filled as SSE result events arrive.
+    // Lifted to module scope so cancelMatch() can publish the partial results.
     const ordered = new Array(total).fill(null);
+    _matchOrdered = ordered;
     let doneCount  = 0;
 
     const datasource = document.getElementById('datasource').value;
@@ -43,9 +117,13 @@ async function matchFiles() {
         return;
     }
 
-    // Stage 2: open the SSE stream using only the opaque session token.
+    // Stage 2: open the SSE stream using only the opaque session token. From here
+    // the Match button is a Cancel button (onMatchClick → cancelMatch).
+    _setMatchRunning(true);
     await new Promise((resolve) => {
+        _matchResolve = resolve;
         const es = new EventSource(`/api/match-stream?session_id=${encodeURIComponent(sessionId)}`);
+        _matchEventSource = es;
 
         es.addEventListener('progress', (e) => {
             const d = JSON.parse(e.data);
@@ -66,6 +144,7 @@ async function matchFiles() {
 
         es.addEventListener('done', (e) => {
             es.close();
+            _matchEventSource = null;
             const d = JSON.parse(e.data);
             matchedResults = ordered.filter(Boolean);
             progressFill.style.width = '100%';
@@ -74,27 +153,34 @@ async function matchFiles() {
                 'success'
             );
             displayMatches();
+            _setMatchRunning(false);
             btnRename.disabled = matchedResults.filter(m => m.match).length === 0;
             setTimeout(() => {
                 statusBar.classList.add('hidden');
                 progressFill.style.width = '0%';
             }, 2000);
-            btnMatch.disabled = false;
+            _matchResolve = null;
             resolve();
         });
 
         es.addEventListener('error', (e) => {
             es.close();
-            // EventSource fires a generic error event on connection failure;
-            // our server may also emit a structured error event.
+            _matchEventSource = null;
+            // A user Cancel closes the stream via cancelMatch() (which already
+            // finalised); browsers may still fire a generic error on close, so
+            // swallow it here instead of flashing a spurious "connection error".
+            if (_matchStopped) { _matchResolve = null; resolve(); return; }
+            // Otherwise it's a real failure; the server may also emit a structured
+            // error event with a detail payload.
             let msg = 'Match failed — connection error';
             if (e.data) {
                 try { msg = JSON.parse(e.data).detail || msg; } catch { /* ignore */ }
             }
             showStatus(t('error.match_failed', { message: msg }), 'error');
             progressFill.style.width = '0%';
-            btnMatch.disabled = false;
+            _setMatchRunning(false);
             btnRename.disabled = matchedResults.filter(m => m.match).length === 0;
+            _matchResolve = null;
             resolve();
         });
     });

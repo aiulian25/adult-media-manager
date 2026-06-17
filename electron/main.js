@@ -6,6 +6,7 @@ const path  = require("path");
 const fs    = require("fs");
 const os    = require("os");
 const http  = require("http");
+const net   = require("net");
 
 // ── Linux sandbox & Wayland ───────────────────────────────────────────────────
 // Must be called BEFORE app.whenReady().
@@ -24,7 +25,12 @@ if (process.platform === "linux") {
 
 let pyProc     = null;
 let mainWindow = null;
-const PORT     = 47821;
+// Resolved to a free TCP port at launch (see findFreePort) — never hardcoded.
+// A leftover process holding a fixed port (a not-fully-closed previous window or
+// an orphaned backend child) would make the new backend fail with EADDRINUSE and
+// the window's waitForServer would time out, so the app "fails to launch". 47821
+// is only the *preferred* value; startPython/waitForServer/loadURL all read PORT.
+let PORT       = 47821;
 
 // ── Paths ─────────────────────────────────────────────────────────────────────
 const XDG_DATA   = process.env.XDG_DATA_HOME   || path.join(os.homedir(), ".local", "share");
@@ -238,6 +244,25 @@ function startPython() {
     });
 }
 
+// ── Resolve a free local port ─────────────────────────────────────────────────
+// Try the preferred port first; if it's taken (stale window, orphaned backend,
+// or anything else on the box), fall back to an OS-assigned free one (port 0).
+// We bind, read the granted port, then close immediately so the Python backend
+// can bind it a moment later. There's a tiny TOCTOU window between our close and
+// uvicorn's bind, but it's vanishingly small on loopback and beats a hard-coded
+// port that collides deterministically.
+function findFreePort(preferred) {
+    const tryListen = (p) => new Promise((resolve, reject) => {
+        const srv = net.createServer();
+        srv.once("error", reject);
+        srv.listen(p, "127.0.0.1", () => {
+            const got = srv.address().port;
+            srv.close(() => resolve(got));   // close, then let the backend bind it
+        });
+    });
+    return tryListen(preferred).catch(() => tryListen(0)); // 0 = OS-assigned free port
+}
+
 // ── Wait for uvicorn to be ready ──────────────────────────────────────────────
 function waitForServer(timeout = 25000) {
     return new Promise((resolve, reject) => {
@@ -332,20 +357,58 @@ function installDesktopEntry() {
 }
 
 // ── App lifecycle ─────────────────────────────────────────────────────────────
-// ── Native folder picker ──────────────────────────────────────────────────────
-// Renderer calls electronAPI.openFolderDialog() → this IPC handler opens the
-// native GTK/KDE/portal file chooser, bypassing the web-based browse modal.
-// multiSelections lets the user pick multiple top-level folders at once.
-ipcMain.handle("dialog:openDirectory", async () => {
-    const { canceled, filePaths } = await dialog.showOpenDialog({
-        title:      "Select Media Folder",
-        properties: ["openDirectory", "multiSelections"],
+// ── Native file/folder picker ─────────────────────────────────────────────────
+// Renderer calls electronAPI.pickPaths(mode) → this IPC handler opens the native
+// GTK/KDE/portal chooser, bypassing the web-based /api/browse modal entirely.
+//
+// GTK on Linux can NOT combine file + directory selection in one dialog — passing
+// ["openFile","openDirectory"] shows a directory-only selector — so the renderer
+// picks a mode first and we map it to a single dialog. We never spread renderer-
+// supplied options into showOpenDialog: the property list is whitelisted here so a
+// compromised renderer can't, say, flip on system-modal or arbitrary dialog flags.
+// Both modes allow multi-select and reveal hidden files.
+ipcMain.handle("dialog:open", async (_e, mode) => {
+    const files = mode === "files";
+    const { canceled, filePaths } = await dialog.showOpenDialog(mainWindow, {
+        title:      files ? "Select Media Files" : "Select Media Folders",
+        properties: [
+            files ? "openFile" : "openDirectory",
+            "multiSelections",
+            "showHiddenFiles",
+        ],
     });
     return canceled ? [] : filePaths;
 });
 
-app.whenReady().then(async () => {
+// ── Single-instance lock ──────────────────────────────────────────────────────
+// Re-clicking the launcher (or `second-instance`) focuses the existing window
+// instead of spawning a second backend that would race for the same resources.
+// The lock is keyed by app name, so during a version transition an *old* running
+// build holds it and would block the new one — but the dynamic port above means a
+// fresh build can still launch independently if the user force-quits the old one.
+// If we don't get the lock, quit quietly and let the running instance take over.
+const gotInstanceLock = app.requestSingleInstanceLock();
+if (!gotInstanceLock) {
+    app.quit();
+} else {
+    app.on("second-instance", () => {
+        if (mainWindow) {
+            if (mainWindow.isMinimized()) mainWindow.restore();
+            mainWindow.focus();
+        }
+    });
+    startApp();
+}
+
+async function startApp() {
     app.setName("Adult Media Manager");
+
+    await app.whenReady();
+
+    // Resolve a free port BEFORE spawning the backend so a stale process holding
+    // the preferred port can't make uvicorn fail with EADDRINUSE (see PORT note).
+    PORT = await findFreePort(PORT);
+    console.log(`[main] Resolved backend port: ${PORT}`);
 
     // Self-register in the desktop for AppImage users
     installDesktopEntry();
@@ -395,7 +458,7 @@ app.whenReady().then(async () => {
     });
 
     mainWindow.on("closed", () => { mainWindow = null; });
-});
+}
 
 function killPython() {
     if (pyProc) {

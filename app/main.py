@@ -544,8 +544,24 @@ def _resolve_scan_paths_req(req: "ScanRequest") -> tuple[list[Path], Optional[st
     enumerate.
     """
     if ',' in req.path:
-        file_paths = [Path(p.strip()) for p in req.path.split(',')]
-        return [p for p in file_paths if p.exists()], None
+        # A comma-separated list may mix files AND directories — the native OS
+        # picker (deb/AppImage) returns multiple folders, multiple files, or a
+        # mix. Expand each directory into its media candidates (honouring
+        # ``recursive``) instead of dropping it; a bare directory entry would
+        # otherwise be skipped by _build_file_entry's is_file() check.
+        out: list[Path] = []
+        for raw in req.path.split(','):
+            p = Path(raw.strip())
+            if not raw.strip() or not p.exists():
+                continue
+            if p.is_dir():
+                try:
+                    out.extend(sorted(p.rglob("*")) if req.recursive else sorted(p.iterdir()))
+                except (OSError, PermissionError):
+                    continue
+            else:
+                out.append(p)
+        return out, None
     base = Path(req.path)
     if base.is_file():
         return [base], None

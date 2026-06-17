@@ -384,20 +384,25 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Stop-scan button (visible only while a scan is streaming)
     if (btnStopScan) btnStopScan.addEventListener('click', stopScan);
 
-    // Match button
-    btnMatch.addEventListener('click', matchFiles);
+    // Match button — carries two functions: start a match, or cancel the running
+    // one (the button turns into "Cancel" while matching streams). onMatchClick
+    // dispatches based on state; identical across Docker/deb/AppImage.
+    btnMatch.addEventListener('click', onMatchClick);
     
     // Rename button
     btnRename.addEventListener('click', renameFiles);
     
-    // Browse button — always the in-app modal, which lets the user pick EITHER
-    // a folder OR individual files. The native OS dialog (Electron deb/AppImage)
-    // is folder-only on Linux — GTK can't combine file + directory selection —
-    // so a user trying to pick files hit a dead end, cancelled, and the scan
-    // path stayed empty ("Please enter a path"). The modal browses the server
-    // filesystem via /api/browse and behaves identically across the native and
-    // Docker/browser builds, populating the scan path for both modes.
-    btnBrowse.addEventListener('click', openBrowseModal);
+    // Browse button — on the Electron desktop builds (deb/AppImage) we open the
+    // native GTK picker via a tiny folder/files menu (showNativePicker): familiar
+    // chooser, multi-select, hidden-file toggle, starts where the user expects.
+    // GTK can't combine file + directory selection in one dialog, hence the menu.
+    // Docker/browser builds have no electronAPI.pickPaths, so they fall back to
+    // the in-app /api/browse modal, which browses the (sandboxed) server filesystem
+    // and lets the user pick EITHER a folder OR individual files.
+    btnBrowse.addEventListener('click', () => {
+        if (_hasNativePicker()) showNativePicker(btnBrowse);
+        else openBrowseModal();
+    });
     
     // History button
     btnHistory.addEventListener('click', openHistoryModal);
@@ -996,6 +1001,79 @@ document.addEventListener('DOMContentLoaded', () => {
     // reports "Please enter a path".
     window._loadPath = _loadPath;
 })();
+
+// ═══ Native OS picker (Electron deb/AppImage only) ═══
+//
+// On the desktop builds the Browse button opens the real GTK file chooser instead
+// of the in-app /api/browse modal. GTK can't show files AND directories in one
+// dialog on Linux, so we pop a two-item menu and fire the matching native dialog.
+// Selected paths feed straight into the scan path and auto-scan — the same code
+// path as picking inside the modal. Docker/browser builds lack pickPaths and never
+// reach here, so the sandboxed server-side browser stays the only option there.
+
+/** True when running under Electron with the native picker bridge available. */
+function _hasNativePicker() {
+    return !!(window.electronAPI && typeof window.electronAPI.pickPaths === 'function');
+}
+
+/** Open the native dialog for `mode` ("folder" | "files"), then scan the result. */
+async function nativePick(mode) {
+    let paths = [];
+    try {
+        paths = await window.electronAPI.pickPaths(mode);
+    } catch (err) {
+        showStatus((t('error.browse_failed') || 'Picker failed') + ': ' + err.message, 'error');
+        return;
+    }
+    if (!Array.isArray(paths) || paths.length === 0) return;   // cancelled / empty
+    // A comma-joined list is the scan contract: a single folder has no comma and
+    // takes the directory branch; multiple folders/files are expanded server-side.
+    scanPath.value = paths.join(',');
+    scanFolder();
+}
+
+/** Pop a small folder/files chooser anchored under the Browse button. */
+function showNativePicker(anchor) {
+    // Clicking Browse again while the menu is open closes it (toggle).
+    const existing = document.getElementById('native-pick-menu');
+    if (existing) { existing.remove(); return; }
+
+    const menu = document.createElement('div');
+    menu.id = 'native-pick-menu';
+    menu.className = 'glass-panel native-pick-menu';
+    menu.innerHTML = `
+        <button class="glass-btn" data-mode="folder">${escapeHtml(t('modal.browse_select_folder') || '📁 Select Folder')}</button>
+        <button class="glass-btn" data-mode="files">${escapeHtml(t('modal.browse_select_files') || '📄 Select Files')}</button>
+    `;
+    document.body.appendChild(menu);
+
+    const r = anchor.getBoundingClientRect();
+    menu.style.top  = `${Math.round(r.bottom + 6)}px`;
+    menu.style.left = `${Math.round(r.left)}px`;
+
+    const dismiss = () => {
+        menu.remove();
+        document.removeEventListener('mousedown', onOutside, true);
+        document.removeEventListener('keydown', onKey, true);
+    };
+    const onOutside = (e) => {
+        if (!menu.contains(e.target) && e.target !== anchor && !anchor.contains(e.target)) dismiss();
+    };
+    const onKey = (e) => { if (e.key === 'Escape') dismiss(); };
+
+    menu.addEventListener('click', (e) => {
+        const btn = e.target.closest('button[data-mode]');
+        if (!btn) return;
+        dismiss();
+        nativePick(btn.dataset.mode);
+    });
+
+    // Defer so the click that opened the menu doesn't immediately dismiss it.
+    setTimeout(() => {
+        document.addEventListener('mousedown', onOutside, true);
+        document.addEventListener('keydown', onKey, true);
+    }, 0);
+}
 
 // ═══ Embed-in-progress guard ═══
 // Tracks whether Phase-2 metadata embedding is currently running.
