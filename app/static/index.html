@@ -164,6 +164,8 @@
                     <select id="settings-theme" class="glass-input settings-select">
                         <option value="default" data-i18n="settings.theme_default">Purple Night (default)</option>
                         <option value="midnight-teal" data-i18n="settings.theme_midnight_teal">Midnight Teal</option>
+                        <option value="ember" data-i18n="settings.theme_ember">Ember</option>
+                        <option value="daylight" data-i18n="settings.theme_daylight">Daylight</option>
                     </select>
                 </div>
 
@@ -482,6 +484,7 @@
                 <span class="conf-evidence-slot" data-evidence hidden></span>
                 <button class="glass-btn match-action-btn match-edit-btn" data-edit></button>
                 <button class="glass-btn match-action-btn" data-nfo></button>
+                <button class="glass-btn match-action-btn match-remove-btn" data-remove></button>
             </div>
         </div>
     </template>
@@ -494,6 +497,7 @@
                 <div class="scene-title" data-nomatch></div>
                 <div class="file-name match-original match-original-nomatch" data-original></div>
                 <button class="glass-btn match-edit-manual" data-edit></button>
+                <button class="glass-btn match-edit-manual match-remove-btn" data-remove></button>
             </div>
         </div>
     </template>
@@ -509,5 +513,6 @@
     <script src="/static/js/browse.js"></script>
     <script src="/static/js/manual.js"></script>
     <script src="/static/js/ui.js"></script>
+    <script src="/static/js/contextmenu.js"></script>
 </body>
 </html>

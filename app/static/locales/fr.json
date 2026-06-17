@@ -15,6 +15,8 @@
   "settings.theme": "Thème",
   "settings.theme_default": "Purple Night (par défaut)",
   "settings.theme_midnight_teal": "Turquoise nuit",
+  "settings.theme_ember": "Braise",
+  "settings.theme_daylight": "Lumière du jour",
   "settings.cancel": "Annuler",
   "settings.save": "Enregistrer",
   "settings.saving": "Enregistrement…",
@@ -208,5 +210,10 @@
   "show_remaining.singular": "Afficher {count} fichier restant",
   "show_remaining.plural": "Afficher {count} fichiers restants",
   "undo.success": "Renommage annulé avec succès !",
-  "undo.none": "Aucune opération à annuler"
+  "undo.none": "Aucune opération à annuler",
+  "ctx.copy": "Copier",
+  "ctx.copied": "Copié",
+  "match.remove": "Retirer",
+  "match.remove_hint": "Masquer ce fichier dans l'application (ne le supprime pas du disque)",
+  "match.removed": "Retiré de la liste"
 }

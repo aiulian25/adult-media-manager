@@ -318,6 +318,7 @@ function _buildMatchRow({ result, index }) {
         const editBtn = node.querySelector('[data-edit]');
         editBtn.textContent = `✏️ ${t('match.edit_manually')}`;
         editBtn.addEventListener('click', () => openManualEditModal(orig));
+        _wireRemoveButton(node, orig);
         return node;
     }
 
@@ -411,8 +412,58 @@ function _buildMatchRow({ result, index }) {
     nfoBtn.id = `nfo-btn-${index}`;
     nfoBtn.textContent = `📄 ${t('match.write_nfo')}`;
     nfoBtn.addEventListener('click', () => writeNfo(index));
+    _wireRemoveButton(node, orig);
 
     return node;
+}
+
+// Wire the per-row "Remove" button. Removing a file hides it from the app for
+// this session — it is NOT deleted from disk — so it is no longer matched,
+// renamed, or available for manual edit. Shared by the matched and no-match rows.
+function _wireRemoveButton(node, orig) {
+    const removeBtn = node.querySelector('[data-remove]');
+    if (!removeBtn) return;
+    removeBtn.textContent = `✕ ${t('match.remove')}`;
+    removeBtn.title = t('match.remove_hint');
+    removeBtn.addEventListener('click', () => removeMatchedFile(orig && orig.path));
+}
+
+// Drop a file from the match results AND the scanned list by path, so it stops
+// being displayed, matched, renamed, or editable. Does NOT touch the file on
+// disk. Selection is preserved across the re-index by remembering paths, so
+// removing one row doesn't disturb which other rows stay selected (mirrors the
+// post-rename prune in rename.js). A re-scan brings the file back if still there.
+function removeMatchedFile(path) {
+    if (!path) return;
+
+    // Remember selected match paths (minus the one being removed) to restore after.
+    const selMatchPaths = new Set(
+        [...selectedMatchIndices].map(i => matchedResults[i] && matchedResults[i].original
+            ? matchedResults[i].original.path : null).filter(Boolean)
+    );
+    selMatchPaths.delete(path);
+
+    // Same for the scanned-list selection, so a later re-Match stays consistent.
+    const selScanPaths = new Set(
+        [...selectedScannedIndices].map(i => scannedFiles[i] ? scannedFiles[i].path : null).filter(Boolean)
+    );
+    selScanPaths.delete(path);
+
+    matchedResults = matchedResults.filter(r => !(r.original && r.original.path === path));
+    scannedFiles   = scannedFiles.filter(f => f.path !== path);
+
+    selectedMatchIndices = new Set(
+        matchedResults.map((r, i) => (r.original && selMatchPaths.has(r.original.path)) ? i : null)
+                      .filter(i => i !== null)
+    );
+    selectedScannedIndices = new Set(
+        scannedFiles.map((f, i) => selScanPaths.has(f.path) ? i : null).filter(i => i !== null)
+    );
+
+    displayMatches(false);   // re-render the match view without the removed row
+    if (typeof showToast === 'function') {
+        showToast(t('match.removed'), '', 'info', 1500);
+    }
 }
 
 // ── "Needs review" queue (Suggested-Fields summary) ──────────────────────────

@@ -143,7 +143,7 @@ _SETTINGS_KEY_MAX_LEN = 512   # sanity cap — real keys are well under this
 # a path-injection vector.  Keep these in sync with the locale files that ship
 # under app/static/locales/ and the <option>s in the Settings UI.
 _ALLOWED_LOCALES: frozenset[str] = frozenset({"en", "de", "es", "fr", "ja", "pt"})
-_ALLOWED_THEMES:  frozenset[str] = frozenset({"default", "midnight-teal"})
+_ALLOWED_THEMES:  frozenset[str] = frozenset({"default", "midnight-teal", "ember", "daylight"})
 _DEFAULT_LOCALE = "en"
 _DEFAULT_THEME  = "default"
 

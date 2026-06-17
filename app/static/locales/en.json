@@ -15,6 +15,8 @@
   "settings.theme": "Theme",
   "settings.theme_default": "Purple Night (default)",
   "settings.theme_midnight_teal": "Midnight Teal",
+  "settings.theme_ember": "Ember",
+  "settings.theme_daylight": "Daylight",
   "settings.cancel": "Cancel",
   "settings.save": "Save",
   "settings.saving": "Saving…",
@@ -208,5 +210,10 @@
   "show_remaining.singular": "Show {count} remaining file",
   "show_remaining.plural": "Show {count} remaining files",
   "undo.success": "Rename undone successfully!",
-  "undo.none": "No operations to undo"
+  "undo.none": "No operations to undo",
+  "ctx.copy": "Copy",
+  "ctx.copied": "Copied",
+  "match.remove": "Remove",
+  "match.remove_hint": "Hide this file from the app (does not delete it from disk)",
+  "match.removed": "Removed from list"
 }

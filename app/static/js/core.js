@@ -54,7 +54,7 @@ async function loadI18n() {
 // Themes are gated behind a whitelist on the server; the client only ships one
 // for now ("default"). Applying sets a data-theme hook on <html> so future
 // themes can override CSS variables without any JS change.
-const ALLOWED_THEMES = ['default', 'midnight-teal'];
+const ALLOWED_THEMES = ['default', 'midnight-teal', 'ember', 'daylight'];
 function applyTheme(theme) {
     const t = ALLOWED_THEMES.includes(theme) ? theme : 'default';
     document.documentElement.setAttribute('data-theme', t);
@@ -670,10 +670,19 @@ async function openSettingsModal() {
         }
     }
 
-    // Clear inputs on every open for security (never pre-fill key values)
+    // Clear inputs on every open for security (never pre-fill key values), and
+    // re-mask any field left revealed from a previous session so the next key the
+    // user types isn't shown in cleartext by default.
     ['settings-tpdb-key', 'settings-stashdb-key'].forEach(id => {
         const el = document.getElementById(id);
-        if (el) { el.value = ''; el.disabled = false; }
+        if (el) { el.value = ''; el.disabled = false; el.type = 'password'; }
+        const eyeBtn = document.querySelector(`.settings-eye-btn[data-target="${id}"]`);
+        if (eyeBtn) {
+            eyeBtn.setAttribute('aria-pressed', 'false');
+            eyeBtn.innerHTML =
+                '<svg class="eye-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">' +
+                '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>';
+        }
     });
 
     // Pre-fill the preference selects from the cached values so they show the
@@ -775,12 +784,26 @@ document.addEventListener('DOMContentLoaded', () => {
     });
     document.getElementById('settings-save').addEventListener('click', saveSettings);
 
-    // Show/hide toggle for each key input
+    // Show/hide toggle for each key input. We swap the eye ↔ eye-off icon so the
+    // toggle gives clear feedback: key fields open EMPTY (never pre-filled, for
+    // security), so without the icon change the button looked dead even when it
+    // worked. (Env-managed rows hide the eye entirely via CSS — the real key lives
+    // server-side and is never sent to the client, so there is nothing to reveal.)
+    const EYE_ICON =
+        '<svg class="eye-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">' +
+        '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>';
+    const EYE_OFF_ICON =
+        '<svg class="eye-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">' +
+        '<path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/>' +
+        '<line x1="1" y1="1" x2="23" y2="23"/></svg>';
     document.querySelectorAll('.settings-eye-btn').forEach(btn => {
         btn.addEventListener('click', () => {
             const inp = document.getElementById(btn.dataset.target);
             if (!inp) return;
-            inp.type = inp.type === 'password' ? 'text' : 'password';
+            const reveal = inp.type === 'password';
+            inp.type = reveal ? 'text' : 'password';
+            btn.innerHTML = reveal ? EYE_OFF_ICON : EYE_ICON;
+            btn.setAttribute('aria-pressed', String(reveal));
         });
     });
 

@@ -131,6 +131,31 @@ body {
     white-space: nowrap;
 }
 
+/* ═══ Right-click copy menu (shared: browser + Electron) ═══ */
+.context-menu {
+    position: fixed;
+    z-index: 3000;
+    min-width: 140px;
+    padding: 6px;
+    border-radius: 10px;
+    background: rgba(20, 12, 32, 0.92);
+}
+.context-menu-item {
+    display: block;
+    width: 100%;
+    text-align: left;
+    padding: 8px 12px;
+    border: none;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--text-primary);
+    font-size: 13px;
+    cursor: pointer;
+}
+.context-menu-item:hover {
+    background: rgba(255, 255, 255, 0.08);
+}
+
 /* ═══ Top Bar ═══ */
 .topbar {
     display: flex;
@@ -788,6 +813,19 @@ input.input-error {
 .match-action-btn  { font-size: 11px; width: 100%; margin-top: 6px; }
 .match-edit-btn    { margin-top: 10px; }
 .match-edit-manual { font-size: 12px; }
+
+/* Per-row "Remove" button — hides the file from the app (never deletes on disk).
+   Red-tinted so it reads as a discard action, distinct from edit/NFO. */
+.match-remove-btn {
+    color: var(--accent);
+    border-color: rgba(255, 71, 87, 0.35);
+}
+.match-remove-btn:hover {
+    background: linear-gradient(135deg, var(--error) 0%, #b23030 100%);
+    border-color: transparent;
+    color: #fff;
+    box-shadow: 0 4px 16px rgba(255, 71, 87, 0.4);
+}
 
 /* Windowing "Show all N more" button (shared by scan + match lists). */
 .show-all-btn { margin: 10px auto 0; display: block; font-size: 12px; }
@@ -1535,6 +1573,12 @@ input.input-error {
     color: var(--primary);
 }
 
+/* Env-managed keys are disabled and never sent to the client, so there is
+   nothing to reveal — hide the eye toggle rather than leave a dead control. */
+.settings-key-row.is-env-locked .settings-eye-btn {
+    display: none;
+}
+
 /* Source notes — three states */
 .settings-source-note {
     font-size: .73rem;
@@ -1797,4 +1841,137 @@ input.input-error {
 [data-theme="midnight-teal"] .glass-select:focus,
 [data-theme="midnight-teal"] .scanbar-input:focus {
     box-shadow: 0 0 0 3px rgba(34, 211, 238, 0.12);
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   THEME: Daylight  (data-theme="daylight")
+   A clean, warm LIGHT theme — soft porcelain background, frosted-white panels,
+   deep plum-charcoal text. Keeps the app's plum/magenta identity but tuned to
+   pop on light. Pure CSS-variable + targeted overrides (the base CSS assumes a
+   dark canvas, so a few hard-coded dark surfaces are re-stated for light here).
+   ════════════════════════════════════════════════════════════════════════ */
+[data-theme="daylight"] {
+    --primary: #8e2de2;
+    --primary-dark: #6d1bb5;
+    --accent: #d6266e;
+    --accent-light: #ff5fa2;
+
+    /* Background — warm porcelain, not stark white */
+    --bg-dark: #f6f4f1;
+    --bg-dark-2: #ece8e3;
+
+    /* Glass panels — frosted white with a soft plum edge that reads on light */
+    --glass-bg: rgba(255, 255, 255, 0.72);
+    --glass-border: rgba(120, 90, 150, 0.18);
+
+    /* Text — deep plum-charcoal (softer than pure black) */
+    --text-primary: #2a2330;
+    --text-secondary: #6b5e78;
+    --text-muted: #9a8fa6;
+
+    /* States — darkened so they stay legible on a light surface */
+    --success: #0f9d58;
+    --warning: #c77700;
+    --error: #d93645;
+}
+
+/* Lighter, softer panel shadow (the dark theme's heavy black shadow is wrong on light) */
+[data-theme="daylight"] .glass-panel { box-shadow: 0 8px 24px rgba(80, 60, 100, 0.12); }
+
+/* Pastel glow blobs, kept faint so the canvas stays clean */
+[data-theme="daylight"] .bg-blobs { opacity: 0.55; }
+[data-theme="daylight"] .blob-1 { background: radial-gradient(circle, #d6b3ff 0%, transparent 70%); }
+[data-theme="daylight"] .blob-2 { background: radial-gradient(circle, #ffc0dd 0%, transparent 70%); }
+[data-theme="daylight"] .blob-3 { background: radial-gradient(circle, #ffd9b0 0%, transparent 70%); }
+
+[data-theme="daylight"] .logo-icon { filter: drop-shadow(0 0 8px rgba(142, 45, 226, 0.35)); }
+
+/* Generic glass buttons → subtle plum-on-light */
+[data-theme="daylight"] .glass-btn { background: rgba(142, 45, 226, 0.07); }
+[data-theme="daylight"] .glass-btn:hover {
+    background: rgba(142, 45, 226, 0.14);
+    border-color: var(--primary);
+    box-shadow: 0 4px 12px rgba(142, 45, 226, 0.18);
+}
+
+/* Inputs are dark-filled in the base CSS — restate them as light fields */
+[data-theme="daylight"] .glass-input,
+[data-theme="daylight"] .glass-select,
+[data-theme="daylight"] .scanbar-input {
+    background: rgba(255, 255, 255, 0.85);
+}
+[data-theme="daylight"] .glass-input:focus,
+[data-theme="daylight"] .glass-select:focus,
+[data-theme="daylight"] .scanbar-input:focus {
+    box-shadow: 0 0 0 3px rgba(142, 45, 226, 0.14);
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   THEME: Ember  (data-theme="ember")
+   A warm, cinematic DARK theme — molten amber-gold primary (Scan/Rename) and a
+   warm coral secondary (Match) over a deep espresso-charcoal canvas. Deliberately
+   warm: no cold blue/teal/violet. Pure CSS-variable + targeted overrides, no JS
+   or markup changes, identical on every build.
+   ════════════════════════════════════════════════════════════════════════ */
+[data-theme="ember"] {
+    --primary: #f0a830;
+    --primary-dark: #d4861a;
+    --accent: #ff6f5e;
+    --accent-light: #ff9b80;
+
+    /* Background — deep warm espresso-charcoal */
+    --bg-dark: #14100c;
+    --bg-dark-2: #1d1711;
+
+    /* Glass panels — warm amber-tinted with a gold edge */
+    --glass-bg: rgba(42, 32, 22, 0.55);
+    --glass-border: rgba(240, 168, 64, 0.16);
+
+    /* Text — warm cream → tan → taupe */
+    --text-primary: #fbf3e8;
+    --text-secondary: #d8c3a8;
+    --text-muted: #9c8a72;
+
+    /* States */
+    --success: #7ed98c;
+    --warning: #ffd166;
+    --error: #f0463c;
+}
+
+/* Warm glow blobs → amber, coral, burnt-orange ember */
+[data-theme="ember"] .blob-1 { background: radial-gradient(circle, #f0a830 0%, transparent 70%); }
+[data-theme="ember"] .blob-2 { background: radial-gradient(circle, #ff6f5e 0%, transparent 70%); }
+[data-theme="ember"] .blob-3 { background: radial-gradient(circle, #c2410c 0%, transparent 70%); }
+
+[data-theme="ember"] .logo-icon { filter: drop-shadow(0 0 8px rgba(240, 168, 64, 0.5)); }
+
+/* Neutral warm generic buttons (e.g. Browse) — no gold fill until hover */
+[data-theme="ember"] .glass-btn { background: rgba(255, 240, 220, 0.04); }
+[data-theme="ember"] .glass-btn:hover {
+    background: rgba(255, 240, 220, 0.09);
+    border-color: var(--primary);
+    box-shadow: 0 4px 12px rgba(240, 168, 64, 0.28);
+}
+
+/* Scan (and Rename) = molten gold; Match = warm coral */
+[data-theme="ember"] .btn-scan,
+[data-theme="ember"] .btn-rename {
+    background: linear-gradient(135deg, #f5b342 0%, #e08a1e 100%);
+}
+[data-theme="ember"] .btn-match {
+    background: linear-gradient(135deg, #ff7e6b 0%, #f25238 100%);
+}
+[data-theme="ember"] .btn-scan:hover,
+[data-theme="ember"] .btn-rename:hover {
+    box-shadow: 0 4px 20px rgba(240, 168, 64, 0.5);
+}
+[data-theme="ember"] .btn-match:hover {
+    box-shadow: 0 4px 20px rgba(255, 111, 94, 0.5);
+}
+
+/* Input/select focus ring → amber */
+[data-theme="ember"] .glass-input:focus,
+[data-theme="ember"] .glass-select:focus,
+[data-theme="ember"] .scanbar-input:focus {
+    box-shadow: 0 0 0 3px rgba(240, 168, 64, 0.14);
 }
