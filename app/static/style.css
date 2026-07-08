@@ -550,7 +550,8 @@ input.input-error {
 }
 
 .scanbar-input {
-    flex: 1;
+    flex: 0 1 440px;      /* smaller than full-width; leaves room for the actions */
+    min-width: 150px;
     padding: 10px 13px;
     background: var(--raised);
     border: 1px solid var(--border);
@@ -2008,4 +2009,20 @@ input.input-error {
 @media (prefers-reduced-motion: reduce) {
     * { animation: none !important; }
     .reset-hint { transition: none; }
+}
+
+/* ── Scan bar: keep Scan/Match/Rename grouped and always visible at the top
+      (moved out of the old bottom action bar so it never scrolls off with many
+      results). margin-left:auto right-aligns the action cluster; the path input
+      is capped (.scanbar-input) so the row doesn't stretch it full-width. ── */
+.scanbar { flex-wrap: wrap; row-gap: 10px; }
+.scanbar-actions {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+.scanbar-actions .btn-rename { padding: 8px 15px; }
+@media (max-width: 720px) {
+    .scanbar-actions { margin-left: 0; width: 100%; justify-content: flex-end; }
 }

@@ -136,9 +136,17 @@
             <label class="cb-label"><input type="checkbox" id="recursive" checked><span data-i18n="scan.recursive">Recursive</span></label>
             <label class="cb-label" title="" data-i18n-attr="title" data-i18n="scan.skip_organized_hint"><input type="checkbox" id="skip-organized"><span data-i18n="scan.skip_organized">Skip organized</span></label>
             <label class="cb-label" title="" data-i18n-attr="title" data-i18n="match.rematch_hint"><input type="checkbox" id="ignore-cache"><span data-i18n="match.rematch">Re-match</span></label>
-            <button id="btn-scan" class="glass-btn btn-scan" data-i18n="nav.scan">Scan</button>
-            <button id="btn-stop-scan" class="glass-btn btn-stop-scan hidden" data-i18n="nav.stop_scan">Stop</button>
-            <button id="btn-match" class="glass-btn btn-match" data-i18n="nav.match" disabled>Match</button>
+            <div class="scanbar-actions">
+                <button id="btn-scan" class="glass-btn btn-scan" data-i18n="nav.scan">Scan</button>
+                <button id="btn-stop-scan" class="glass-btn btn-stop-scan hidden" data-i18n="nav.stop_scan">Stop</button>
+                <button id="btn-match" class="glass-btn btn-match" data-i18n="nav.match" disabled>Match</button>
+                <button id="btn-rename" class="glass-btn btn-rename" disabled>
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                        <path d="M20 6 9 17l-5-5"/>
+                    </svg>
+                    <span data-i18n="nav.rename">Rename</span>
+                </button>
+            </div>
         </div>
 
         <!-- ═══ Status ═══ -->
@@ -155,18 +163,6 @@
             </div>
         </div>
 
-        <!-- ═══ Action Bar (metadata summary + Rename) ═══ -->
-        <footer class="glass-panel actionbar">
-            <div class="actionbar-summary" id="actionbar-summary" data-i18n="actionbar.ready">Ready — scan a folder, then Match to look up metadata.</div>
-            <div class="actionbar-actions">
-                <button id="btn-rename" class="glass-btn btn-rename" disabled>
-                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-                        <path d="M20 6 9 17l-5-5"/>
-                    </svg>
-                    <span data-i18n="nav.rename">Rename</span>
-                </button>
-            </div>
-        </footer>
     </div>
 
     <!-- ═══ Settings Modal ═══ -->
