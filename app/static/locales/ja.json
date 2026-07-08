@@ -235,5 +235,15 @@
   "toolbar.metadata.embedded": "埋め込みのみ（ファイル内）",
   "toolbar.metadata.sidecar": "サイドカーのみ（.nfo）",
   "settings.metadata_mode": "既定のメタデータ書き込み",
-  "settings.metadata_mode_hint": "名前変更/保存時のメタデータの書き込み方法。「両方」（推奨）はタグをファイルに埋め込み、.nfo サイドカーも書き込みます。再起動後も保持されます。"
+  "settings.metadata_mode_hint": "名前変更/保存時のメタデータの書き込み方法。「両方」（推奨）はタグをファイルに埋め込み、.nfo サイドカーも書き込みます。再起動後も保持されます。",
+  "app.subtitle": "メディアをスキャン・照合・リネーム",
+  "nav.new_scan": "新規スキャン",
+  "toolbar.insert": "挿入",
+  "toolbar.presets": "プリセット",
+  "welcome.title": "AMM へようこそ",
+  "welcome.subtitle": "フォルダをスキャンして、メディアの整理を始めましょう。",
+  "actionbar.ready": "準備完了 — フォルダをスキャンし、「照合」でメタデータを取得します。",
+  "settings.theme_legacy": "レガシー（デフォルト）",
+  "settings.theme_dark": "ダーク",
+  "settings.theme_light": "ライト"
 }

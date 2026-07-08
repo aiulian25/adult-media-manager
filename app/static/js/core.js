@@ -51,12 +51,17 @@ async function loadI18n() {
     }
 }
 
-// Themes are gated behind a whitelist on the server; the client only ships one
-// for now ("default"). Applying sets a data-theme hook on <html> so future
-// themes can override CSS variables without any JS change.
-const ALLOWED_THEMES = ['default', 'midnight-teal', 'ember', 'daylight'];
+// Three flat themes share one token contract in style.css. Applying sets a
+// data-theme hook on <html>; the CSS re-points tokens per theme (no per-theme
+// JS). 'default' is Legacy (purple). Older builds shipped extra themes
+// (midnight-teal/ember/daylight) — a stored value from those degrades to
+// Legacy and is rewritten so the picker and server stay consistent.
+const ALLOWED_THEMES = ['default', 'dark', 'light'];
 function applyTheme(theme) {
     const t = ALLOWED_THEMES.includes(theme) ? theme : 'default';
+    if (t !== theme && localStorage.getItem('amm_theme') === theme) {
+        localStorage.setItem('amm_theme', t);   // migrate retired theme id
+    }
     document.documentElement.setAttribute('data-theme', t);
 }
 
@@ -382,7 +387,24 @@ document.addEventListener('DOMContentLoaded', async () => {
     document.querySelectorAll('.preset-btn').forEach(btn => {
         btn.addEventListener('click', () => {
             template.value = btn.dataset.template;
+            document.querySelectorAll('.preset-btn').forEach(b => b.classList.toggle('active', b === btn));
             updateTemplatePreview();           // immediate preview on preset pick
+        });
+    });
+
+    // Insert-variable chips — drop a {token} at the caret in the template field,
+    // then re-run the live preview via the same 'input' path typing uses.
+    document.querySelectorAll('#insert-chips .tvar-chip').forEach(chip => {
+        chip.addEventListener('click', () => {
+            const token = `{${chip.dataset.var}}`;
+            const start = template.selectionStart ?? template.value.length;
+            const end   = template.selectionEnd   ?? template.value.length;
+            template.value = template.value.slice(0, start) + token + template.value.slice(end);
+            const caret = start + token.length;
+            template.focus();
+            try { template.setSelectionRange(caret, caret); } catch (_) {}
+            document.querySelectorAll('.preset-btn').forEach(b => b.classList.remove('active'));
+            updateTemplatePreview();
         });
     });
 

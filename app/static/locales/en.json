@@ -235,5 +235,15 @@
   "toolbar.metadata.embedded": "Embedded only (in file)",
   "toolbar.metadata.sidecar": "Sidecar only (.nfo)",
   "settings.metadata_mode": "Default metadata write",
-  "settings.metadata_mode_hint": "How metadata is saved on rename/save. \"Both\" (recommended) embeds tags in the file AND writes a .nfo sidecar for extra assurance. Persisted across restarts."
+  "settings.metadata_mode_hint": "How metadata is saved on rename/save. \"Both\" (recommended) embeds tags in the file AND writes a .nfo sidecar for extra assurance. Persisted across restarts.",
+  "app.subtitle": "Scan, match & rename your media",
+  "nav.new_scan": "new scan",
+  "toolbar.insert": "Insert",
+  "toolbar.presets": "Presets",
+  "welcome.title": "Welcome to AMM",
+  "welcome.subtitle": "Scan a folder to get started organizing your media collection.",
+  "actionbar.ready": "Ready — scan a folder, then Match to look up metadata.",
+  "settings.theme_legacy": "Legacy (default)",
+  "settings.theme_dark": "Dark",
+  "settings.theme_light": "Light"
 }

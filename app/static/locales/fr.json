@@ -235,5 +235,15 @@
   "toolbar.metadata.embedded": "Intégré seulement (fichier)",
   "toolbar.metadata.sidecar": "Sidecar seulement (.nfo)",
   "settings.metadata_mode": "Écriture des métadonnées par défaut",
-  "settings.metadata_mode_hint": "Comment les métadonnées sont enregistrées lors du renommage/de l'enregistrement. « Les deux » (recommandé) intègre les tags dans le fichier ET écrit un sidecar .nfo. Conservé entre les redémarrages."
+  "settings.metadata_mode_hint": "Comment les métadonnées sont enregistrées lors du renommage/de l'enregistrement. « Les deux » (recommandé) intègre les tags dans le fichier ET écrit un sidecar .nfo. Conservé entre les redémarrages.",
+  "app.subtitle": "Scannez, associez et renommez vos médias",
+  "nav.new_scan": "nouveau scan",
+  "toolbar.insert": "Insérer",
+  "toolbar.presets": "Préréglages",
+  "welcome.title": "Bienvenue sur AMM",
+  "welcome.subtitle": "Scannez un dossier pour organiser votre collection.",
+  "actionbar.ready": "Prêt — scannez un dossier, puis Associer pour les métadonnées.",
+  "settings.theme_legacy": "Classique (défaut)",
+  "settings.theme_dark": "Sombre",
+  "settings.theme_light": "Clair"
 }

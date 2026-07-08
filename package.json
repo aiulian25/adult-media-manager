@@ -1,6 +1,6 @@
 {
   "name": "adult-media-manager",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "desktopName": "adult-media-manager.desktop",
   "description": "Adult Media Manager — Smart metadata organizer for adult content",
   "main": "electron/main.js",

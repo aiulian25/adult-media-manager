@@ -235,5 +235,15 @@
   "toolbar.metadata.embedded": "Nur eingebettet (in Datei)",
   "toolbar.metadata.sidecar": "Nur Sidecar (.nfo)",
   "settings.metadata_mode": "Standard-Metadatenschreibweise",
-  "settings.metadata_mode_hint": "Wie Metadaten beim Umbenennen/Speichern geschrieben werden. \"Beides\" (empfohlen) bettet Tags in die Datei ein UND schreibt eine .nfo-Sidecar-Datei. Bleibt über Neustarts erhalten."
+  "settings.metadata_mode_hint": "Wie Metadaten beim Umbenennen/Speichern geschrieben werden. \"Beides\" (empfohlen) bettet Tags in die Datei ein UND schreibt eine .nfo-Sidecar-Datei. Bleibt über Neustarts erhalten.",
+  "app.subtitle": "Medien scannen, zuordnen & umbenennen",
+  "nav.new_scan": "Neuer Scan",
+  "toolbar.insert": "Einfügen",
+  "toolbar.presets": "Vorlagen",
+  "welcome.title": "Willkommen bei AMM",
+  "welcome.subtitle": "Scanne einen Ordner, um deine Mediensammlung zu organisieren.",
+  "actionbar.ready": "Bereit — Ordner scannen, dann Zuordnen für Metadaten.",
+  "settings.theme_legacy": "Klassisch (Standard)",
+  "settings.theme_dark": "Dunkel",
+  "settings.theme_light": "Hell"
 }

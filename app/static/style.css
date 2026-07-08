@@ -6,30 +6,90 @@
     box-sizing: border-box;
 }
 
+/* ═══════════════════════════════════════════════════════════════════════
+   THEME TOKENS — three flat themes share one token contract.
+   :root defines LEGACY (default, purple). [data-theme="dark"|"light"] below
+   only re-point these tokens; every component reads the tokens, so switching
+   theme needs no per-component rules. Legacy keeps the old variable NAMES
+   (--primary, --glass-bg, --text-primary…) re-pointed to flat values so the
+   2000 lines of existing component CSS keep working, now flat.
+   ═══════════════════════════════════════════════════════════════════════ */
 :root {
-    /* Primary colors - Purple/Magenta theme */
+    /* Accent (Legacy = brand purple) */
     --primary: #b24bf3;
     --primary-dark: #8e2de2;
-    --accent: #ff006e;
-    --accent-light: #ff6fb5;
-    
-    /* Background */
-    --bg-dark: #0a0014;
-    --bg-dark-2: #150020;
-    
-    /* Glass panels */
-    --glass-bg: rgba(138, 43, 226, 0.08);
-    --glass-border: rgba(178, 75, 243, 0.15);
-    
+    --accent: #c46bff;
+    --accent-light: #d79bff;
+    --accent-2: #c46bff;
+    --accent-soft: rgba(178, 75, 243, 0.16);
+    --on-accent: #ffffff;
+
+    /* Grounds & panels (flat) */
+    --ground: #0e0b16;
+    --bg-dark: #0e0b16;
+    --bg-dark-2: #161022;
+    --panel: #181328;
+    --raised: #1f1836;
+    --chip: #221a36;
+    --chip-border: #332a4a;
+
+    /* Borders */
+    --border: #2c2340;
+    --border-soft: #241c33;
+    --glass-bg: #181328;      /* legacy alias → solid panel */
+    --glass-border: #2c2340;  /* legacy alias → solid border */
+
     /* Text */
-    --text-primary: #ffffff;
-    --text-secondary: #c7a4ff;
-    --text-muted: #8b7ba8;
-    
-    /* States */
-    --success: #00ff88;
-    --warning: #ffc107;
-    --error: #ff4757;
+    --text-primary: #efeaf9;
+    --text-secondary: #c3b3e0;
+    --text-muted: #8f82a8;
+    --text: #efeaf9;
+    --muted: #a99ac4;
+    --faint: #7a6f96;
+
+    /* Semantic (match confidence / states) — independent of accent */
+    --success: #49c07a;  --good: #49c07a;  --good-soft: rgba(73, 192, 122, 0.15);
+    --warning: #e0b24a;  --warn: #e0b24a;  --warn-soft: rgba(224, 178, 74, 0.15);
+    --error:   #ec6785;  --bad:  #ec6785;  --bad-soft:  rgba(236, 103, 133, 0.15);
+
+    /* Shape */
+    --radius: 13px;
+    --shadow: 0 1px 0 rgba(255, 255, 255, 0.02), 0 8px 24px rgba(0, 0, 0, 0.28);
+    --mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+/* ═══ DARK theme (indigo, near-black) ═══ */
+[data-theme="dark"] {
+    --primary: #5b6cff;  --primary-dark: #4b5cf0;
+    --accent: #7280ff;   --accent-light: #96a0ff;  --accent-2: #7280ff;
+    --accent-soft: rgba(91, 108, 255, 0.16);  --on-accent: #ffffff;
+    --ground: #0c0d10;   --bg-dark: #0c0d10;  --bg-dark-2: #15171c;
+    --panel: #15171c;    --raised: #1b1e24;   --chip: #1e222a;  --chip-border: #2c313b;
+    --border: #282c34;   --border-soft: #20242b;
+    --glass-bg: #15171c; --glass-border: #282c34;
+    --text-primary: #e7e9ee;  --text-secondary: #b9c0cc;  --text-muted: #949aa6;
+    --text: #e7e9ee;     --muted: #949aa6;  --faint: #666c77;
+    --success: #38b26c;  --good: #38b26c;  --good-soft: rgba(56, 178, 108, 0.14);
+    --warning: #d8a33f;  --warn: #d8a33f;  --warn-soft: rgba(216, 163, 63, 0.14);
+    --error:   #e0596a;  --bad:  #e0596a;  --bad-soft:  rgba(224, 89, 106, 0.14);
+    --shadow: 0 1px 0 rgba(255, 255, 255, 0.02), 0 8px 24px rgba(0, 0, 0, 0.28);
+}
+
+/* ═══ LIGHT theme (indigo on white) ═══ */
+[data-theme="light"] {
+    --primary: #4a5bf5;  --primary-dark: #3a4be8;
+    --accent: #3a4be8;   --accent-light: #6d7cf7;  --accent-2: #3a4be8;
+    --accent-soft: rgba(74, 91, 245, 0.10);  --on-accent: #ffffff;
+    --ground: #f4f6f9;   --bg-dark: #f4f6f9;  --bg-dark-2: #ffffff;
+    --panel: #ffffff;    --raised: #fafbfc;   --chip: #f1f3f6;  --chip-border: #e2e6eb;
+    --border: #e3e7ec;   --border-soft: #eef1f5;
+    --glass-bg: #ffffff; --glass-border: #e3e7ec;
+    --text-primary: #181b21;  --text-secondary: #3d4450;  --text-muted: #5b6370;
+    --text: #181b21;     --muted: #5b6370;  --faint: #949ba6;
+    --success: #1f9d57;  --good: #1f9d57;  --good-soft: rgba(31, 157, 87, 0.12);
+    --warning: #b07d24;  --warn: #b07d24;  --warn-soft: rgba(176, 125, 36, 0.13);
+    --error:   #d1495b;  --bad:  #d1495b;  --bad-soft:  rgba(209, 73, 91, 0.11);
+    --shadow: 0 1px 2px rgba(20, 24, 33, 0.05), 0 6px 18px rgba(20, 24, 33, 0.06);
 }
 
 body {
@@ -40,8 +100,10 @@ body {
     overflow-x: hidden;
 }
 
-/* ═══ Animated Background ═══ */
-.bg-blobs {
+/* ═══ Animated Background (retired in the flat revamp — kept hidden so the
+       markup can stay untouched) ═══ */
+.bg-blobs { display: none !important; }
+.bg-blobs-legacy-unused {
     position: fixed;
     width: 100%;
     height: 100%;
@@ -104,14 +166,12 @@ body {
     min-height: 100vh;
 }
 
-/* ═══ Glass Panel ═══ */
+/* ═══ Panel (flat) ═══ */
 .glass-panel {
-    background: var(--glass-bg);
-    backdrop-filter: blur(20px);
-    -webkit-backdrop-filter: blur(20px);
-    border: 1px solid var(--glass-border);
-    border-radius: 16px;
-    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
 }
 
 /* ═══ Native picker menu (Electron deb/AppImage Browse button) ═══ */
@@ -229,12 +289,10 @@ body {
 }
 
 .topbar-title {
-    font-size: 18px;
+    font-size: 19px;
     font-weight: 700;
-    background: linear-gradient(135deg, var(--primary) 0%, var(--accent) 100%);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    background-clip: text;
+    letter-spacing: -0.01em;
+    color: var(--text-primary);
     cursor: pointer;
     transition: opacity 0.15s ease;
 }
@@ -281,18 +339,19 @@ body {
 }
 
 .preset-btn {
-    padding: 4px 10px;
-    font-size: 11px;
-    background: rgba(178, 75, 243, 0.1);
-    border: 1px solid var(--glass-border);
-    border-radius: 6px;
-    color: var(--text-secondary);
+    padding: 5px 11px;
+    font-size: 12px;
+    font-weight: 500;
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    color: var(--text-muted);
     cursor: pointer;
-    transition: all 0.2s;
+    transition: all 0.14s;
 }
 
-.preset-btn:hover {
-    background: rgba(178, 75, 243, 0.2);
+.preset-btn:hover, .preset-btn.active {
+    background: var(--accent-soft);
     color: var(--primary);
     border-color: var(--primary);
 }
@@ -351,48 +410,51 @@ input.input-error {
     gap: 10px;
 }
 
-/* ═══ Buttons ═══ */
+/* ═══ Buttons (flat) ═══ */
 .glass-btn {
-    padding: 8px 16px;
-    background: rgba(178, 75, 243, 0.1);
-    border: 1px solid var(--glass-border);
-    border-radius: 8px;
+    padding: 8px 14px;
+    background: var(--raised);
+    border: 1px solid var(--border);
+    border-radius: 9px;
     color: var(--text-primary);
-    font-size: 14px;
+    font-size: 13px;
     font-weight: 500;
     cursor: pointer;
-    transition: all 0.2s;
+    transition: border-color 0.14s, color 0.14s, background 0.14s;
     display: inline-flex;
     align-items: center;
-    gap: 8px;
+    gap: 7px;
 }
 
 .glass-btn:hover {
-    background: rgba(178, 75, 243, 0.2);
     border-color: var(--primary);
-    transform: translateY(-1px);
-    box-shadow: 0 4px 12px rgba(178, 75, 243, 0.3);
+    color: var(--text-primary);
 }
 
 .glass-btn:active {
-    transform: translateY(0);
+    transform: translateY(0.5px);
 }
 
 .glass-btn:disabled {
-    opacity: 0.4;
+    opacity: 0.45;
     cursor: not-allowed;
     pointer-events: none;
 }
 
-.btn-rename, .btn-scan, .btn-match {
-    background: linear-gradient(135deg, var(--primary) 0%, var(--accent) 100%);
-    border-color: transparent;
+.btn-rename, .btn-scan, .btn-match, .btn-primary {
+    background: var(--primary);
+    border-color: var(--primary);
+    color: var(--on-accent);
     font-weight: 600;
 }
 
-.btn-rename:hover, .btn-scan:hover, .btn-match:hover {
-    box-shadow: 0 4px 20px rgba(178, 75, 243, 0.5);
+.btn-rename:hover, .btn-scan:hover, .btn-match:hover, .btn-primary:hover {
+    background: var(--accent-2);
+    border-color: var(--accent-2);
+    color: var(--on-accent);
+    box-shadow: 0 4px 14px var(--accent-soft);
 }
+.btn-rename svg, .btn-scan svg, .btn-match svg { opacity: 1; }
 
 /* Toggle visibility of the scan/stop buttons (no global .hidden utility). */
 .btn-scan.hidden, .btn-stop-scan.hidden { display: none; }
@@ -432,22 +494,22 @@ input.input-error {
 .scan-stopped-title { font-weight: 600; color: var(--warning, #ffc107); }
 .scan-stopped-sub { font-size: .82rem; color: var(--text-muted); margin-top: 2px; }
 
-/* ═══ Inputs ═══ */
+/* ═══ Inputs (flat) ═══ */
 .glass-input, .glass-select {
-    padding: 8px 12px;
-    background: rgba(0, 0, 0, 0.3);
-    border: 1px solid var(--glass-border);
-    border-radius: 8px;
+    padding: 9px 11px;
+    background: var(--raised);
+    border: 1px solid var(--border);
+    border-radius: 9px;
     color: var(--text-primary);
     font-size: 13px;
     font-family: 'Inter', sans-serif;
-    transition: all 0.2s;
+    transition: border-color 0.14s, box-shadow 0.14s;
 }
 
 .glass-input:focus, .glass-select:focus {
     outline: none;
     border-color: var(--primary);
-    box-shadow: 0 0 0 3px rgba(178, 75, 243, 0.1);
+    box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
 .glass-input.mono {
@@ -489,17 +551,18 @@ input.input-error {
 
 .scanbar-input {
     flex: 1;
-    padding: 10px 14px;
-    background: rgba(0, 0, 0, 0.3);
-    border: 1px solid var(--glass-border);
-    border-radius: 8px;
+    padding: 10px 13px;
+    background: var(--raised);
+    border: 1px solid var(--border);
+    border-radius: 9px;
     color: var(--text-primary);
-    font-size: 14px;
+    font-size: 13.5px;
 }
 
 .scanbar-input:focus {
     outline: none;
     border-color: var(--primary);
+    box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
 .cb-label {
@@ -565,10 +628,10 @@ input.input-error {
     display: flex;
     align-items: center;
     justify-content: center;
-    border: 1px solid var(--glass-border);
+    border: 1px solid var(--primary);
     border-radius: 50%;
-    color: #fff;
-    background: linear-gradient(135deg, var(--primary) 0%, var(--accent) 100%);
+    color: var(--on-accent);
+    background: var(--primary);
     box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
     cursor: pointer;
     opacity: 0;
@@ -593,11 +656,11 @@ input.input-error {
 }
 
 .welcome-message h2 {
-    font-size: 28px;
+    font-size: 26px;
     margin-bottom: 15px;
-    background: linear-gradient(135deg, var(--primary) 0%, var(--accent) 100%);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
+    color: var(--text-primary);
+    font-weight: 700;
+    letter-spacing: -0.01em;
 }
 
 .welcome-message p {
@@ -1854,207 +1917,95 @@ input.input-error {
     background: rgba(178, 75, 243, 0.12);
 }
 
+/* ═══════════════════════════════════════════════════════════════════════
+   REVAMP LAYOUT (flat) — header / controls card / chips / action bar.
+   Overrides earlier layout rules by source order (equal specificity).
+   Shared across Docker / deb / AppImage; every colour reads a theme token.
+   ═══════════════════════════════════════════════════════════════════════ */
 
-/* ════════════════════════════════════════════════════════════════════════
-   THEME: Midnight Teal  (data-theme="midnight-teal")
-   Dark, near-black teal-tinted background with a cyan primary action (Scan)
-   and a purple secondary action (Match). Pure CSS-variable + targeted overrides
-   on the existing markup — no JS/markup logic changes, identical on every build.
-   ════════════════════════════════════════════════════════════════════════ */
-[data-theme="midnight-teal"] {
-    /* Accents: cyan primary, purple secondary */
-    --primary: #1fc8db;
-    --primary-dark: #0b9eb4;
-    --accent: #b327e8;
-    --accent-light: #cc63ff;
+/* ── Top bar: brand (logo + AMM + subtitle) │ actions ── */
+.topbar { padding: 13px 16px; margin-bottom: 12px; }
+.topbar-left { gap: 12px; align-items: center; }
+.logo-icon { filter: none; flex: none; }
+.brand-text { display: flex; flex-direction: column; min-width: 0; line-height: 1.2; }
+.brand-sub { font-size: 12.5px; color: var(--text-muted); margin-top: 1px; }
+.topbar-title { display: inline-flex; align-items: center; gap: 8px; background: none; border: 0; padding: 0; font-family: inherit; }
+.reset-hint {
+    font-size: 10px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase;
+    color: var(--primary); background: var(--accent-soft); padding: 2px 7px; border-radius: 20px;
+    opacity: 0; transform: translateX(-4px); transition: opacity 0.15s, transform 0.15s;
+}
+.topbar-title:hover .reset-hint { opacity: 1; transform: none; }
+.topbar-right { gap: 8px; align-items: center; }
 
-    /* Background — near-black with a subtle teal tint */
-    --bg-dark: #070d0e;
-    --bg-dark-2: #0d1518;
+/* ── Controls card (Source / Action / Metadata / Template) ── */
+.controls-card { padding: 16px; margin-bottom: 12px; }
+.ctl-grid {
+    display: grid;
+    grid-template-columns: 160px 150px 200px 1fr;
+    gap: 14px;
+    align-items: start;
+}
+.controls-card .toolbar-group { gap: 6px; min-width: 0; }
+.controls-card .template-group { min-width: 0; }
+.controls-card .glass-input,
+.controls-card .glass-select { width: 100%; }
 
-    /* Glass panels — dark charcoal with a faint cyan edge */
-    --glass-bg: rgba(15, 27, 29, 0.6);
-    --glass-border: rgba(34, 211, 238, 0.12);
+/* chips + presets row */
+.chips-row {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 16px; flex-wrap: wrap; margin-top: 14px;
+}
+.chips-cluster { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+.chips-key { font-size: 11px; color: var(--faint); margin-right: 2px; letter-spacing: 0.02em; }
+.tvar-chip {
+    font-family: var(--mono); font-size: 11.5px; color: var(--text-primary);
+    background: var(--chip); border: 1px solid var(--chip-border);
+    padding: 4px 9px; border-radius: 7px; cursor: pointer; transition: all 0.13s;
+}
+.tvar-chip:hover { border-color: var(--primary); color: var(--primary); }
+.controls-card .template-presets { margin-top: 0; gap: 6px; flex-wrap: wrap; }
 
-    /* Text — white headings, muted teal-grey labels */
-    --text-primary: #ffffff;
-    --text-secondary: #9fc3c6;
-    --text-muted: #6b8587;
-
-    /* States */
-    --success: #00e0a4;
-    --warning: #ffc107;
-    --error: #ff5a6a;
+/* live preview line */
+.controls-card .template-preview {
+    margin-top: 14px; padding-top: 12px; border-top: 1px dashed var(--border-soft);
+    color: var(--text-secondary);
 }
 
-/* Background glow blobs → teal/cyan with a single subtle purple */
-[data-theme="midnight-teal"] .blob-1 { background: radial-gradient(circle, #0fb8cc 0%, transparent 70%); }
-[data-theme="midnight-teal"] .blob-2 { background: radial-gradient(circle, #11d3e6 0%, transparent 70%); }
-[data-theme="midnight-teal"] .blob-3 { background: radial-gradient(circle, #7a1fb8 0%, transparent 70%); }
+/* small options row (No subfolders) */
+.controls-options { display: flex; align-items: center; gap: 16px; margin-top: 12px; flex-wrap: wrap; }
+.controls-options .cb-label { font-size: 12.5px; }
 
-/* Logo glow → teal */
-[data-theme="midnight-teal"] .logo-icon { filter: drop-shadow(0 0 8px rgba(34, 211, 238, 0.5)); }
+/* ── Bottom action bar (relocated Rename + summary) ── */
+.actionbar {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 16px; padding: 13px 16px; margin-top: 12px; flex-wrap: wrap;
+}
+.actionbar-summary {
+    display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+    font-size: 12.5px; color: var(--text-muted);
+}
+.actionbar-summary b { color: var(--text-primary); font-weight: 600; }
+.actionbar-actions { display: flex; align-items: center; gap: 10px; }
+.actionbar .btn-rename { padding: 9px 16px; }
 
-/* Neutral dark generic buttons (e.g. Browse) — no purple tint */
-[data-theme="midnight-teal"] .glass-btn { background: rgba(255, 255, 255, 0.04); }
-[data-theme="midnight-teal"] .glass-btn:hover {
-    background: rgba(255, 255, 255, 0.08);
-    border-color: var(--primary);
-    box-shadow: 0 4px 12px rgba(34, 211, 238, 0.25);
+/* ── Native <select> arrow tuned per theme (token-driven) ── */
+.glass-select {
+    appearance: none; -webkit-appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23888' stroke-width='2.5'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+    background-repeat: no-repeat; background-position: right 10px center; padding-right: 28px;
 }
 
-/* Scan (and Rename) = cyan; Match = purple — distinct primary/secondary actions */
-[data-theme="midnight-teal"] .btn-scan,
-[data-theme="midnight-teal"] .btn-rename {
-    background: linear-gradient(135deg, #22d3ee 0%, #0697b0 100%);
+/* ── Responsive ── */
+@media (max-width: 860px) {
+    .ctl-grid { grid-template-columns: 1fr 1fr; }
+    .controls-card .template-group { grid-column: 1 / -1; }
 }
-[data-theme="midnight-teal"] .btn-match {
-    background: linear-gradient(135deg, #a31fe0 0%, #c026d3 100%);
+@media (max-width: 560px) {
+    .ctl-grid { grid-template-columns: 1fr; }
+    .topbar-right { flex-wrap: wrap; }
 }
-[data-theme="midnight-teal"] .btn-scan:hover,
-[data-theme="midnight-teal"] .btn-rename:hover {
-    box-shadow: 0 4px 20px rgba(34, 211, 238, 0.5);
-}
-[data-theme="midnight-teal"] .btn-match:hover {
-    box-shadow: 0 4px 20px rgba(192, 38, 211, 0.5);
-}
-
-/* Input/select focus ring → teal */
-[data-theme="midnight-teal"] .glass-input:focus,
-[data-theme="midnight-teal"] .glass-select:focus,
-[data-theme="midnight-teal"] .scanbar-input:focus {
-    box-shadow: 0 0 0 3px rgba(34, 211, 238, 0.12);
-}
-
-/* ════════════════════════════════════════════════════════════════════════
-   THEME: Daylight  (data-theme="daylight")
-   A clean, warm LIGHT theme — soft porcelain background, frosted-white panels,
-   deep plum-charcoal text. Keeps the app's plum/magenta identity but tuned to
-   pop on light. Pure CSS-variable + targeted overrides (the base CSS assumes a
-   dark canvas, so a few hard-coded dark surfaces are re-stated for light here).
-   ════════════════════════════════════════════════════════════════════════ */
-[data-theme="daylight"] {
-    --primary: #8e2de2;
-    --primary-dark: #6d1bb5;
-    --accent: #d6266e;
-    --accent-light: #ff5fa2;
-
-    /* Background — warm porcelain, not stark white */
-    --bg-dark: #f6f4f1;
-    --bg-dark-2: #ece8e3;
-
-    /* Glass panels — frosted white with a soft plum edge that reads on light */
-    --glass-bg: rgba(255, 255, 255, 0.72);
-    --glass-border: rgba(120, 90, 150, 0.18);
-
-    /* Text — deep plum-charcoal (softer than pure black) */
-    --text-primary: #2a2330;
-    --text-secondary: #6b5e78;
-    --text-muted: #9a8fa6;
-
-    /* States — darkened so they stay legible on a light surface */
-    --success: #0f9d58;
-    --warning: #c77700;
-    --error: #d93645;
-}
-
-/* Lighter, softer panel shadow (the dark theme's heavy black shadow is wrong on light) */
-[data-theme="daylight"] .glass-panel { box-shadow: 0 8px 24px rgba(80, 60, 100, 0.12); }
-
-/* Pastel glow blobs, kept faint so the canvas stays clean */
-[data-theme="daylight"] .bg-blobs { opacity: 0.55; }
-[data-theme="daylight"] .blob-1 { background: radial-gradient(circle, #d6b3ff 0%, transparent 70%); }
-[data-theme="daylight"] .blob-2 { background: radial-gradient(circle, #ffc0dd 0%, transparent 70%); }
-[data-theme="daylight"] .blob-3 { background: radial-gradient(circle, #ffd9b0 0%, transparent 70%); }
-
-[data-theme="daylight"] .logo-icon { filter: drop-shadow(0 0 8px rgba(142, 45, 226, 0.35)); }
-
-/* Generic glass buttons → subtle plum-on-light */
-[data-theme="daylight"] .glass-btn { background: rgba(142, 45, 226, 0.07); }
-[data-theme="daylight"] .glass-btn:hover {
-    background: rgba(142, 45, 226, 0.14);
-    border-color: var(--primary);
-    box-shadow: 0 4px 12px rgba(142, 45, 226, 0.18);
-}
-
-/* Inputs are dark-filled in the base CSS — restate them as light fields */
-[data-theme="daylight"] .glass-input,
-[data-theme="daylight"] .glass-select,
-[data-theme="daylight"] .scanbar-input {
-    background: rgba(255, 255, 255, 0.85);
-}
-[data-theme="daylight"] .glass-input:focus,
-[data-theme="daylight"] .glass-select:focus,
-[data-theme="daylight"] .scanbar-input:focus {
-    box-shadow: 0 0 0 3px rgba(142, 45, 226, 0.14);
-}
-
-/* ════════════════════════════════════════════════════════════════════════
-   THEME: Ember  (data-theme="ember")
-   A warm, cinematic DARK theme — molten amber-gold primary (Scan/Rename) and a
-   warm coral secondary (Match) over a deep espresso-charcoal canvas. Deliberately
-   warm: no cold blue/teal/violet. Pure CSS-variable + targeted overrides, no JS
-   or markup changes, identical on every build.
-   ════════════════════════════════════════════════════════════════════════ */
-[data-theme="ember"] {
-    --primary: #f0a830;
-    --primary-dark: #d4861a;
-    --accent: #ff6f5e;
-    --accent-light: #ff9b80;
-
-    /* Background — deep warm espresso-charcoal */
-    --bg-dark: #14100c;
-    --bg-dark-2: #1d1711;
-
-    /* Glass panels — warm amber-tinted with a gold edge */
-    --glass-bg: rgba(42, 32, 22, 0.55);
-    --glass-border: rgba(240, 168, 64, 0.16);
-
-    /* Text — warm cream → tan → taupe */
-    --text-primary: #fbf3e8;
-    --text-secondary: #d8c3a8;
-    --text-muted: #9c8a72;
-
-    /* States */
-    --success: #7ed98c;
-    --warning: #ffd166;
-    --error: #f0463c;
-}
-
-/* Warm glow blobs → amber, coral, burnt-orange ember */
-[data-theme="ember"] .blob-1 { background: radial-gradient(circle, #f0a830 0%, transparent 70%); }
-[data-theme="ember"] .blob-2 { background: radial-gradient(circle, #ff6f5e 0%, transparent 70%); }
-[data-theme="ember"] .blob-3 { background: radial-gradient(circle, #c2410c 0%, transparent 70%); }
-
-[data-theme="ember"] .logo-icon { filter: drop-shadow(0 0 8px rgba(240, 168, 64, 0.5)); }
-
-/* Neutral warm generic buttons (e.g. Browse) — no gold fill until hover */
-[data-theme="ember"] .glass-btn { background: rgba(255, 240, 220, 0.04); }
-[data-theme="ember"] .glass-btn:hover {
-    background: rgba(255, 240, 220, 0.09);
-    border-color: var(--primary);
-    box-shadow: 0 4px 12px rgba(240, 168, 64, 0.28);
-}
-
-/* Scan (and Rename) = molten gold; Match = warm coral */
-[data-theme="ember"] .btn-scan,
-[data-theme="ember"] .btn-rename {
-    background: linear-gradient(135deg, #f5b342 0%, #e08a1e 100%);
-}
-[data-theme="ember"] .btn-match {
-    background: linear-gradient(135deg, #ff7e6b 0%, #f25238 100%);
-}
-[data-theme="ember"] .btn-scan:hover,
-[data-theme="ember"] .btn-rename:hover {
-    box-shadow: 0 4px 20px rgba(240, 168, 64, 0.5);
-}
-[data-theme="ember"] .btn-match:hover {
-    box-shadow: 0 4px 20px rgba(255, 111, 94, 0.5);
-}
-
-/* Input/select focus ring → amber */
-[data-theme="ember"] .glass-input:focus,
-[data-theme="ember"] .glass-select:focus,
-[data-theme="ember"] .scanbar-input:focus {
-    box-shadow: 0 0 0 3px rgba(240, 168, 64, 0.14);
+@media (prefers-reduced-motion: reduce) {
+    * { animation: none !important; }
+    .reset-hint { transition: none; }
 }

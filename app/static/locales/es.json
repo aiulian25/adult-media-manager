@@ -235,5 +235,15 @@
   "toolbar.metadata.embedded": "Solo incrustado (en archivo)",
   "toolbar.metadata.sidecar": "Solo sidecar (.nfo)",
   "settings.metadata_mode": "Escritura de metadatos predeterminada",
-  "settings.metadata_mode_hint": "Cómo se guardan los metadatos al renombrar/guardar. \"Ambos\" (recomendado) incrusta etiquetas en el archivo Y escribe un sidecar .nfo para mayor seguridad. Se mantiene entre reinicios."
+  "settings.metadata_mode_hint": "Cómo se guardan los metadatos al renombrar/guardar. \"Ambos\" (recomendado) incrusta etiquetas en el archivo Y escribe un sidecar .nfo para mayor seguridad. Se mantiene entre reinicios.",
+  "app.subtitle": "Escanea, empareja y renombra tus medios",
+  "nav.new_scan": "nuevo escaneo",
+  "toolbar.insert": "Insertar",
+  "toolbar.presets": "Ajustes",
+  "welcome.title": "Bienvenido a AMM",
+  "welcome.subtitle": "Escanea una carpeta para empezar a organizar tu colección.",
+  "actionbar.ready": "Listo — escanea una carpeta y pulsa Emparejar para buscar metadatos.",
+  "settings.theme_legacy": "Clásico (predeterminado)",
+  "settings.theme_dark": "Oscuro",
+  "settings.theme_light": "Claro"
 }

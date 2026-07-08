@@ -235,5 +235,15 @@
   "toolbar.metadata.embedded": "Apenas incorporado (no ficheiro)",
   "toolbar.metadata.sidecar": "Apenas sidecar (.nfo)",
   "settings.metadata_mode": "Gravação de metadados predefinida",
-  "settings.metadata_mode_hint": "Como os metadados são guardados ao renomear/guardar. \"Ambos\" (recomendado) incorpora etiquetas no ficheiro E escreve um sidecar .nfo. Mantido entre reinícios."
+  "settings.metadata_mode_hint": "Como os metadados são guardados ao renomear/guardar. \"Ambos\" (recomendado) incorpora etiquetas no ficheiro E escreve um sidecar .nfo. Mantido entre reinícios.",
+  "app.subtitle": "Digitalize, corresponda e renomeie sua mídia",
+  "nav.new_scan": "novo scan",
+  "toolbar.insert": "Inserir",
+  "toolbar.presets": "Predefinições",
+  "welcome.title": "Bem-vindo ao AMM",
+  "welcome.subtitle": "Digitalize uma pasta para começar a organizar sua coleção.",
+  "actionbar.ready": "Pronto — digitalize uma pasta e use Corresponder para buscar metadados.",
+  "settings.theme_legacy": "Clássico (padrão)",
+  "settings.theme_dark": "Escuro",
+  "settings.theme_light": "Claro"
 }

@@ -3,14 +3,14 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Adult Media Manager</title>
+    <title>AMM — Adult Media Manager</title>
     <link rel="icon" type="image/png" href="/static/icon.png">
     <link rel="stylesheet" href="/static/style.css">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 </head>
 <body>
-    <!-- Background -->
+    <!-- Background (retired in the flat revamp; hidden via CSS, markup kept harmless) -->
     <div class="bg-blobs">
         <div class="blob blob-1"></div>
         <div class="blob blob-2"></div>
@@ -21,76 +21,13 @@
         <!-- ═══ Top Bar ═══ -->
         <header class="glass-panel topbar">
             <div class="topbar-left">
-                <img src="/static/icon.png" alt="Adult Media Manager" class="logo-icon" width="28" height="28" style="border-radius:50%;" onerror="this.style.display='none'">
-                <span class="topbar-title" id="btn-home" title="New scan / Reset">Adult Media Manager</span>
-            </div>
-            <div class="topbar-center">
-                <div class="toolbar">
-                    <div class="toolbar-group">
-                        <label class="toolbar-label" data-i18n="toolbar.source">Source</label>
-                        <select id="datasource" class="glass-select">
-                            <option value="tpdb">ThePornDB</option>
-                            <option value="stashdb" selected>StashDB</option>
-                        </select>
-                    </div>
-                    <div class="toolbar-group">
-                        <label class="toolbar-label" data-i18n="toolbar.action">Action</label>
-                        <select id="action" class="glass-select">
-                            <option value="test" data-i18n="toolbar.action.test">Test (Dry Run)</option>
-                            <option value="move" data-i18n="toolbar.action.move">Move</option>
-                            <option value="copy" data-i18n="toolbar.action.copy">Copy</option>
-                            <option value="hardlink" data-i18n="toolbar.action.hardlink">Hard Link</option>
-                            <option value="symlink" data-i18n="toolbar.action.symlink">Symlink</option>
-                        </select>
-                    </div>
-                    <div class="toolbar-group">
-                        <label class="toolbar-label" data-i18n="toolbar.metadata">Metadata</label>
-                        <select id="embed-mode" class="glass-select"
-                                title="How scene metadata is written. Both (recommended): tags written INTO the file (fast in-place, remux fallback) AND a matching .nfo sidecar — maximum player compatibility. Embedded only: container tags only, no .nfo (players must read embedded tags; the .nfo-based rich metadata and rescan skip won't apply). Sidecar only: just the .nfo, file untouched. Default comes from Settings and persists across restarts.">
-                            <option value="smart" data-i18n="toolbar.metadata.both">Both — file + .nfo</option>
-                            <option value="embed_only" data-i18n="toolbar.metadata.embedded">Embedded only (in file)</option>
-                            <option value="nfo_only" data-i18n="toolbar.metadata.sidecar">Sidecar only (.nfo)</option>
-                        </select>
-                    </div>
-                    <div class="toolbar-group template-group">
-                        <label class="toolbar-label" data-i18n="toolbar.template">Template</label>
-                        <input type="text" id="template" class="glass-input mono"
-                               value="{site}/{performer}/{site}.{date}.{scene}.{quality}" spellcheck="false">
-                        <div class="template-presets">
-                            <button class="preset-btn" data-template="{site}/{performer}/{site}.{date}.{scene}.{quality}" title="Site/Date Organized">Site</button>
-                            <button class="preset-btn" data-template="{performer}/{site} - {scene} ({date})" title="Performer Focus">Performer</button>
-                            <button class="preset-btn" data-template="{site}/{year}/{date}.{scene}" title="Studio Organized">Studio</button>
-                            <button class="preset-btn" data-template="{performer} - {scene} ({site})" title="Simple">Simple</button>
-                        </div>
-                        <div id="template-preview" class="template-preview" aria-live="polite"></div>
-                        <div id="template-warning" class="template-warning" aria-live="polite"></div>
-                    </div>
-                    <div class="toolbar-group" style="align-self:flex-end;padding-bottom:2px;">
-                        <label class="toolbar-label" style="display:flex;align-items:center;gap:6px;cursor:pointer;user-select:none;">
-                            <input type="checkbox" id="flat-rename" checked style="accent-color:var(--primary);width:14px;height:14px;">
-                            <span data-i18n="toolbar.no_subfolders">No subfolders</span>
-                        </label>
-                    </div>
+                <img src="/static/icon.png" alt="AMM" class="logo-icon" width="34" height="34" style="border-radius:50%;" onerror="this.style.display='none'">
+                <div class="brand-text">
+                    <button class="topbar-title" id="btn-home" title="New scan / Reset">AMM <span class="reset-hint" data-i18n="nav.new_scan">new scan</span></button>
+                    <span class="brand-sub" data-i18n="app.subtitle">Scan, match &amp; rename your media</span>
                 </div>
             </div>
             <div class="topbar-right">
-<!-- Language is now chosen in the Settings panel (gated behind one Save
-                     button) together with theme + API keys, so the standalone
-                     toolbar selector was removed. -->
-                <button id="btn-settings" class="glass-btn" title="Settings">
-                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <circle cx="12" cy="12" r="3"/>
-                        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
-                    </svg>
-                    <span data-i18n="nav.settings">Settings</span>
-                </button>
-                <button id="btn-history" class="glass-btn" title="View rename history">
-                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M3 3v5h5M3.05 13A9 9 0 1 0 6 5.3L3 8"/>
-                        <path d="M12 7v5l4 2"/>
-                    </svg>
-                    <span data-i18n="nav.history">History</span>
-                </button>
                 <button id="btn-library" class="glass-btn" title="Library — catalog stats &amp; duplicates">
                     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                         <ellipse cx="12" cy="5" rx="9" ry="3"/>
@@ -99,14 +36,89 @@
                     </svg>
                     <span data-i18n="nav.library">Library</span>
                 </button>
-                <button id="btn-rename" class="glass-btn btn-rename" disabled>
-                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-                        <path d="M20 6 9 17l-5-5"/>
+                <button id="btn-history" class="glass-btn" title="View rename history">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M3 3v5h5M3.05 13A9 9 0 1 0 6 5.3L3 8"/>
+                        <path d="M12 7v5l4 2"/>
                     </svg>
-                    <span data-i18n="nav.rename">Rename</span>
+                    <span data-i18n="nav.history">History</span>
+                </button>
+                <button id="btn-settings" class="glass-btn" title="Settings">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="12" cy="12" r="3"/>
+                        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+                    </svg>
+                    <span data-i18n="nav.settings">Settings</span>
                 </button>
             </div>
         </header>
+
+        <!-- ═══ Controls ═══ -->
+        <section class="glass-panel controls-card">
+            <div class="ctl-grid">
+                <div class="toolbar-group">
+                    <label class="toolbar-label" data-i18n="toolbar.source">Source</label>
+                    <select id="datasource" class="glass-select">
+                        <option value="tpdb">ThePornDB</option>
+                        <option value="stashdb" selected>StashDB</option>
+                    </select>
+                </div>
+                <div class="toolbar-group">
+                    <label class="toolbar-label" data-i18n="toolbar.action">Action</label>
+                    <select id="action" class="glass-select">
+                        <option value="test" data-i18n="toolbar.action.test">Test (Dry Run)</option>
+                        <option value="move" data-i18n="toolbar.action.move">Move</option>
+                        <option value="copy" data-i18n="toolbar.action.copy">Copy</option>
+                        <option value="hardlink" data-i18n="toolbar.action.hardlink">Hard Link</option>
+                        <option value="symlink" data-i18n="toolbar.action.symlink">Symlink</option>
+                    </select>
+                </div>
+                <div class="toolbar-group">
+                    <label class="toolbar-label" data-i18n="toolbar.metadata">Metadata</label>
+                    <select id="embed-mode" class="glass-select"
+                            title="How scene metadata is written. Both (recommended): tags written INTO the file (fast in-place, remux fallback) AND a matching .nfo sidecar — maximum player compatibility. Embedded only: container tags only, no .nfo. Sidecar only: just the .nfo, file untouched. Default comes from Settings and persists across restarts.">
+                        <option value="smart" data-i18n="toolbar.metadata.both">Both — file + .nfo</option>
+                        <option value="embed_only" data-i18n="toolbar.metadata.embedded">Embedded only (in file)</option>
+                        <option value="nfo_only" data-i18n="toolbar.metadata.sidecar">Sidecar only (.nfo)</option>
+                    </select>
+                </div>
+                <div class="toolbar-group template-group">
+                    <label class="toolbar-label" data-i18n="toolbar.template">Naming template</label>
+                    <input type="text" id="template" class="glass-input mono"
+                           value="{site}/{performer}/{site}.{date}.{scene}.{quality}" spellcheck="false">
+                </div>
+            </div>
+
+            <div class="chips-row">
+                <div class="chips-cluster" id="insert-chips">
+                    <span class="chips-key" data-i18n="toolbar.insert">Insert</span>
+                    <button type="button" class="tvar-chip" data-var="site">site</button>
+                    <button type="button" class="tvar-chip" data-var="performer">performer</button>
+                    <button type="button" class="tvar-chip" data-var="scene">scene</button>
+                    <button type="button" class="tvar-chip" data-var="date">date</button>
+                    <button type="button" class="tvar-chip" data-var="year">year</button>
+                    <button type="button" class="tvar-chip" data-var="quality">quality</button>
+                    <button type="button" class="tvar-chip" data-var="duration">duration</button>
+                </div>
+                <div class="chips-cluster template-presets">
+                    <span class="chips-key" data-i18n="toolbar.presets">Presets</span>
+                    <button class="preset-btn" data-template="{site}/{performer}/{site}.{date}.{scene}.{quality}" title="Site/Date Organized">Site</button>
+                    <button class="preset-btn" data-template="{performer}/{site} - {scene} ({date})" title="Performer Focus">Performer</button>
+                    <button class="preset-btn" data-template="{site}/{year}/{date}.{scene}" title="Studio Organized">Studio</button>
+                    <button class="preset-btn" data-template="{performer} - {scene} ({site})" title="Simple">Simple</button>
+                </div>
+            </div>
+
+            <div id="template-preview" class="template-preview" aria-live="polite"></div>
+            <div id="template-warning" class="template-warning" aria-live="polite"></div>
+
+            <div class="controls-options">
+                <label class="cb-label">
+                    <input type="checkbox" id="flat-rename" checked>
+                    <span data-i18n="toolbar.no_subfolders">No subfolders</span>
+                </label>
+            </div>
+        </section>
 
         <!-- ═══ Scan Bar ═══ -->
         <div class="glass-panel scanbar">
@@ -138,10 +150,23 @@
         <!-- ═══ Results Area ═══ -->
         <div class="results-container" id="results-container">
             <div class="welcome-message">
-                <h2>🔞 Welcome to Adult Media Manager</h2>
-                <p>Scan a folder to get started organizing your adult media collection.</p>
+                <h2 data-i18n="welcome.title">Welcome to AMM</h2>
+                <p data-i18n="welcome.subtitle">Scan a folder to get started organizing your media collection.</p>
             </div>
         </div>
+
+        <!-- ═══ Action Bar (metadata summary + Rename) ═══ -->
+        <footer class="glass-panel actionbar">
+            <div class="actionbar-summary" id="actionbar-summary" data-i18n="actionbar.ready">Ready — scan a folder, then Match to look up metadata.</div>
+            <div class="actionbar-actions">
+                <button id="btn-rename" class="glass-btn btn-rename" disabled>
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                        <path d="M20 6 9 17l-5-5"/>
+                    </svg>
+                    <span data-i18n="nav.rename">Rename</span>
+                </button>
+            </div>
+        </footer>
     </div>
 
     <!-- ═══ Settings Modal ═══ -->
@@ -170,10 +195,9 @@
                 <div class="settings-pref-row">
                     <label class="settings-pref-label" for="settings-theme" data-i18n="settings.theme">Theme</label>
                     <select id="settings-theme" class="glass-input settings-select">
-                        <option value="default" data-i18n="settings.theme_default">Purple Night (default)</option>
-                        <option value="midnight-teal" data-i18n="settings.theme_midnight_teal">Midnight Teal</option>
-                        <option value="ember" data-i18n="settings.theme_ember">Ember</option>
-                        <option value="daylight" data-i18n="settings.theme_daylight">Daylight</option>
+                        <option value="default" data-i18n="settings.theme_legacy">Legacy (default)</option>
+                        <option value="dark" data-i18n="settings.theme_dark">Dark</option>
+                        <option value="light" data-i18n="settings.theme_light">Light</option>
                     </select>
                 </div>
 
@@ -227,7 +251,7 @@
                     <p class="settings-key-desc">
                         Free, community-driven database.
                         Register at <a href="https://stashdb.org/register" target="_blank" rel="noopener">stashdb.org</a>
-                        (invite code: <code>3bf7c4b8-b7a6-45b8-a8a6-8b38c10b8fa6</code>).
+                        (invite code: <code>3bf7c4b8-b7a6-45b8-a8a6-8b38c10b8fa6</code>).
                         After login, click your username → copy the API key.
                     </p>
                     <div class="settings-input-wrap">
@@ -278,7 +302,7 @@
                 <button class="modal-close" id="preview-modal-close" aria-label="Cancel">&times;</button>
             </div>
             <div class="modal-body" style="padding:0">
-                <div id="preview-modal-summary" style="padding:.6rem 1.2rem;font-size:.85rem;color:var(--text-muted);border-bottom:1px solid rgba(255,255,255,.08)"></div>
+                <div id="preview-modal-summary" style="padding:.6rem 1.2rem;font-size:.85rem;color:var(--text-muted);border-bottom:1px solid var(--border-soft)"></div>
                 <div id="preview-modal-list" style="max-height:55vh;overflow-y:auto;padding:1rem 1.2rem;display:flex;flex-direction:column;gap:.5rem"></div>
             </div>
             <div class="modal-footer" style="display:flex;gap:.8rem;justify-content:flex-end;padding:.8rem 1.2rem">
@@ -307,7 +331,7 @@
                     <div id="browse-path" class="browse-path" style="margin-bottom:0;flex:1;"></div>
                     <label class="cb-label" style="white-space:nowrap;font-size:13px;"><input type="checkbox" id="browse-show-hidden"><span data-i18n="modal.browse_show_hidden">Show hidden</span></label>
                 </div>
-                <div id="selection-counter" style="display:none; padding: 8px; margin-bottom: 10px; background: rgba(178, 75, 243, 0.2); border-radius: 8px; text-align: center; font-size: 14px;"></div>
+                <div id="selection-counter" style="display:none; padding: 8px; margin-bottom: 10px; background: var(--accent-soft); border-radius: 8px; text-align: center; font-size: 14px;"></div>
                 <div id="browse-kbd-hint" style="display:none; margin-bottom:10px; font-size:12px; color:var(--text-muted); text-align:center;" data-i18n="modal.browse_kbd_hint">Tip: click checkboxes, or use ↑/↓ to move · Space to toggle · Shift+↑/↓ or Shift+Click for a range · Ctrl+A to select all</div>
                 <div id="browse-list" class="browse-list"></div>
             </div>
@@ -363,7 +387,7 @@
             <div class="modal-body" style="max-height: 70vh; overflow-y: auto;">
                 <div style="margin-bottom: 20px;">
                     <label style="display: block; margin-bottom: 5px; color: var(--text-secondary);">File:</label>
-                    <div id="manual-edit-filename" style="padding: 10px; background: rgba(178, 75, 243, 0.1); border-radius: 8px; font-size: 14px;"></div>
+                    <div id="manual-edit-filename" style="padding: 10px; background: var(--raised); border-radius: 8px; font-size: 14px;"></div>
                 </div>
 
                 <div style="margin-bottom: 15px;">
@@ -469,20 +493,15 @@
         </svg>
     </button>
 
-    <!-- ═══ Drag-and-Drop Overlay ═══ -->
-    <!-- Full-viewport overlay shown while user holds a drag over the window.
-         It receives the drop event and hands off to the JS drop handler.
-         aria-hidden keeps it invisible to screen readers when inactive. -->
     <!-- ═══ Embed Progress Banner ═══ -->
-    <!-- Shown (fixed bottom bar) while Phase-2 metadata embedding is running.
-         Keeps the user informed even if they scroll away from the status bar.
-         JS manages visibility via .hidden class. -->
+    <!-- Shown (fixed bottom bar) while Phase-2 metadata embedding is running. -->
     <div id="embed-banner" class="embed-banner hidden" role="status" aria-live="polite" aria-atomic="false">
         <span class="embed-spinner" aria-hidden="true"></span>
         <span id="embed-banner-text">Embedding metadata…</span>
         <span class="embed-banner-warning">⚠ Do not close or navigate away</span>
     </div>
 
+    <!-- ═══ Drag-and-Drop Overlay ═══ -->
     <div id="drop-overlay" class="drop-overlay" aria-hidden="true">
         <div class="drop-overlay-inner">
             <svg class="drop-overlay-icon" viewBox="0 0 64 64" fill="none"
@@ -499,11 +518,6 @@
     </div>
 
     <!-- ═══ Match-row templates (review item R3) ═══ -->
-    <!-- Static row structure lives here (markup + CSS classes, no inline styles)
-         and is cloned per result in displayMatches(), instead of building one
-         giant innerHTML string. Dynamic text is set via textContent (XSS-safe by
-         construction) and handlers via addEventListener (no inline on* / JSON
-         string-escaping). [data-*] hooks mark the fill points. -->
     <template id="tpl-match-row">
         <div class="match-item glass-panel selectable">
             <div class="match-checkbox-wrap">

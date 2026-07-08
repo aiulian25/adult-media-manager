@@ -1,4 +1,4 @@
-# 🔞 Adult Media Manager
+# Adult Media Manager
 
 **Self-hosted media organizer for adult collections — powered by ThePornDB & StashDB**
 
@@ -6,7 +6,7 @@ Automatically identifies, tags, and renames adult scene files using metadata fro
 
 ---
 
-## ⚠️ Age Restriction
+## Age Restriction
 
 **THIS SOFTWARE IS INTENDED FOR ADULTS ONLY (18+)**
 
@@ -14,32 +14,54 @@ By using this software you confirm you are of legal age to access adult content 
 
 ---
 
-## ✨ Features at a Glance
+## Screenshots
 
-| | |
-|---|---|
-| 🎯 Smart detection | 7 filename pattern formats — parses site, date, performers, quality automatically |
-| 🔍 Two databases | [ThePornDB](https://theporndb.net/) and [StashDB](https://stashdb.org/) — use one or both |
-| 🔗 Paste a scene link | Paste a `stashdb.org/scenes/…` or `theporndb.net/scenes/…` URL in manual edit and **Fetch** full metadata in one click |
-| 🧬 Fingerprint matching | OSHash + perceptual-hash (pHash) lookups for exact, "✓ Verified" matches |
-| ⚡ Live streaming scan & match | Results appear as they're found; **Stop** a scan or **Cancel** a match at any time and keep the partial results |
-| 💾 Match cache | Confirmed matches are remembered (by content hash) — rescans are instant and skip the API; **Re-match** forces a refresh |
-| 🗂️ Incremental rescan & duplicates | A catalog tracks organised files so re-scans skip them; same-content duplicates are detected |
-| 🎚️ Confidence bands & review queue | High / Medium / Low colour bands + filters to batch-confirm strong matches and focus on the ambiguous middle |
-| 📝 Naming templates | 6 built-in + fully custom with a **live preview** and unknown-variable warnings |
-| 🏷️ Metadata write modes | **Embed in file + NFO**, **Smart in-place** (`mkvpropedit`/`AtomicParsley`, no remux), or **NFO only** |
-| 📄 NFO sidecars | Writes Kodi/Jellyfin/Plex-compatible `.nfo` files alongside renamed files |
-| 🖱️ Drag & drop | Drop files or folders directly onto the browser window |
-| 🎨 Themes | Selectable colour themes (Purple Night, Midnight Teal) |
-| ⚙️ Settings UI | Add API keys, pick language & theme in the browser — no config file editing required |
-| 🌍 6 languages | English, German, French, Spanish, Portuguese, Japanese |
-| 📜 History & per-row revert | Every action is logged; move/copy/hardlink/symlink can each be reverted individually |
-| 🐳 Docker | Single-container, named volume, PUID/PGID support |
-| 📦 Native Linux | Self-installing AppImage + `.deb` package — no Python required |
+Clean, flat interface with a live naming-template preview and three built-in themes (Legacy, Dark, Light) — shown here in **Dark**.
+
+<p align="center">
+  <img src="docs/screenshots/amm-dark.png" alt="AMM main interface — scan, match and rename media" width="900">
+</p>
+
+**Confidence-scored matching** — every file gets a High / Medium band, a provenance badge (Verified / Cached), a thumbnail, tags and one-click actions:
+
+<p align="center">
+  <img src="docs/screenshots/amm-match.png" alt="AMM match results with confidence scores, badges and thumbnails" width="900">
+</p>
+
+| Manual metadata entry | Settings |
+|:---------------------:|:--------:|
+| [![Manual metadata entry — paste a StashDB or ThePornDB URL and Fetch, or edit by hand](docs/screenshots/amm-manual-edit.png)](docs/screenshots/amm-manual-edit.png) | [![Settings — language, theme, metadata write mode and API keys](docs/screenshots/amm-settings.png)](docs/screenshots/amm-settings.png) |
+
+> _Screenshots use placeholder data — the studios, performers and thumbnails shown are entirely fictional._
 
 ---
 
-## 🆕 What's New in v1.2.0
+## Features at a Glance
+
+| | |
+|---|---|
+| Smart detection | 7 filename pattern formats — parses site, date, performers, quality automatically |
+| Two databases | [ThePornDB](https://theporndb.net/) and [StashDB](https://stashdb.org/) — use one or both |
+| Paste a scene link | Paste a `stashdb.org/scenes/…` or `theporndb.net/scenes/…` URL in manual edit and **Fetch** full metadata in one click |
+| Fingerprint matching | OSHash + perceptual-hash (pHash) lookups for exact, "Verified" matches |
+| Live streaming scan & match | Results appear as they're found; **Stop** a scan or **Cancel** a match at any time and keep the partial results |
+| Match cache | Confirmed matches are remembered (by content hash) — rescans are instant and skip the API; **Re-match** forces a refresh |
+| Incremental rescan & duplicates | A catalog tracks organised files so re-scans skip them; same-content duplicates are detected |
+| Confidence bands & review queue | High / Medium / Low colour bands + filters to batch-confirm strong matches and focus on the ambiguous middle |
+| Naming templates | 6 built-in + fully custom with a **live preview** and unknown-variable warnings |
+| Metadata write modes | **Embed in file + NFO**, **Smart in-place** (`mkvpropedit`/`AtomicParsley`, no remux), or **NFO only** |
+| NFO sidecars | Writes Kodi/Jellyfin/Plex-compatible `.nfo` files alongside renamed files |
+| Drag & drop | Drop files or folders directly onto the browser window |
+| Themes | Three built-in themes — **Legacy**, **Dark**, **Light** — switchable in Settings |
+| Settings UI | Add API keys, pick language & theme in the browser — no config file editing required |
+| 6 languages | English, German, French, Spanish, Portuguese, Japanese |
+| History & per-row revert | Every action is logged; move/copy/hardlink/symlink can each be reverted individually |
+| Docker | Single-container, named volume, PUID/PGID support |
+| Native Linux | Self-installing AppImage + `.deb` package — no Python required |
+
+---
+
+## What's New in v1.2.0
 
 - **Native file & folder picker (AppImage/deb).** The **Browse** button now opens your desktop's native file chooser — multi-select files *or* folders, with hidden-file support — instead of the in-app browser. Docker/browser installs keep the built-in server-side browser.
 - **Cancel a running match.** The **Match** button turns into **Cancel** while matching is in progress, so you can stop a long run at any time and keep the matches already found. (Available in all 6 languages.)
@@ -50,7 +72,7 @@ See the [v1.2.0 release notes](https://github.com/aiulian25/adult-media-manager/
 
 ---
 
-## 🔑 API Keys
+## API Keys
 
 Two databases are supported. Both are free. You need at least one.
 
@@ -75,7 +97,7 @@ Community-maintained database with strong coverage of indie and clip-site conten
 
 ---
 
-## 🐳 Quick Start — Docker
+## Quick Start — Docker
 
 ### 1. Get the files
 
@@ -93,7 +115,7 @@ AMM_PORT=8887          # port the UI will be on
 PUID=1000              # your user ID: run  id -u
 PGID=1000              # your group ID: run  id -g
 
-# Optional — you can also add keys via the ⚙ Settings page in the UI
+# Optional — you can also add keys via the Settings page in the UI
 TPDB_API_KEY=your_tpdb_key_here
 STASHDB_API_KEY=your_stashdb_key_here
 ```
@@ -120,20 +142,20 @@ Open **http://localhost:8887** (or your configured port).
 
 ### 5. Add API keys (alternative to editing `.env`)
 
-Click **⚙ Settings** in the top-right of the UI. Enter your keys and click **Save**. Keys take effect immediately — no restart needed. Keys set in `.env` always take priority over saved keys.
+Click **Settings** in the top-right of the UI. Enter your keys and click **Save**. Keys take effect immediately — no restart needed. Keys set in `.env` always take priority over saved keys.
 
 ---
 
-## 📦 Native Linux Packages
+## Native Linux Packages
 
 No Docker required. Ships a self-contained Python 3.12 runtime — no system Python dependency.
 
 ### AppImage (recommended — no root required)
 
-1. Download `Adult.Media.Manager-1.3.0.AppImage`
+1. Download `Adult.Media.Manager-1.4.0.AppImage`
 2. Make it executable:
    ```bash
-   chmod +x Adult.Media.Manager-1.3.0.AppImage
+   chmod +x Adult.Media.Manager-1.4.0.AppImage
    ```
 3. Double-click it (or run it from the terminal)
 
@@ -147,7 +169,7 @@ From that point, launch it from your application menu. The original downloaded f
 ### .deb Package (Debian / Ubuntu / Mint)
 
 ```bash
-sudo apt install ./adult-media-manager_1.3.0_amd64.deb
+sudo apt install ./adult-media-manager_1.4.0_amd64.deb
 ```
 
 Launch **Adult Media Manager** from your application menu, or:
@@ -161,16 +183,16 @@ Launch **Adult Media Manager** from your application menu, or:
 Requires [RPM Fusion](https://rpmfusion.org/) enabled for the `ffmpeg` / `mkvtoolnix` media tools:
 
 ```bash
-sudo dnf install ./adult-media-manager-1.3.0.x86_64.rpm
+sudo dnf install ./adult-media-manager-1.4.0.x86_64.rpm
 ```
 
 Remove with `sudo dnf remove adult-media-manager`.
 
-**API keys in native installs:** Use the **⚙ Settings** page inside the app. Keys are stored in `~/.local/share/adult-media-manager/settings.json`.
+**API keys in native installs:** Use the **Settings** page inside the app. Keys are stored in `~/.local/share/adult-media-manager/settings.json`.
 
 ---
 
-## 📖 Usage Guide
+## Usage Guide
 
 ### Basic Workflow
 
@@ -180,7 +202,7 @@ Scan → Match → Review → Rename
 
 1. **Scan** — Enter a folder path, drag & drop files/folders onto the window, or click **Browse** (on the AppImage/deb this opens your native file chooser — pick multiple files *or* folders at once). Enable **Recursive** to include subfolders. Click **Scan**. Results stream in live; a **Stop** button appears so you can halt a long scan and keep whatever was found so far. Enable **Skip organized** to exclude files AMM has already processed (incremental rescan).
 
-2. **Match** — Select a datasource (TPDB or StashDB) and click **Match**. Matches stream in with confidence scores, thumbnails, and performers. The app first tries exact **fingerprint** lookups (OSHash / perceptual hash) — those show a **✓ Verified** badge. Previously confirmed matches are served instantly from the local cache (**⚡ Cached** / **★ Confirmed** badges); tick **Re-match** to ignore the cache and re-query the API. While matching is running the **Match** button becomes **Cancel** — stop a long run at any time and keep the matches already found.
+2. **Match** — Select a datasource (TPDB or StashDB) and click **Match**. Matches stream in with confidence scores, thumbnails, and performers. The app first tries exact **fingerprint** lookups (OSHash / perceptual hash) — those show a **Verified** badge. Previously confirmed matches are served instantly from the local cache (**Cached** / **Confirmed** badges); tick **Re-match** to ignore the cache and re-query the API. While matching is running the **Match** button becomes **Cancel** — stop a long run at any time and keep the matches already found.
 
 3. **Review** — Confidence is shown as **High / Medium / Low** colour bands. Use the filter bar to view only the *review* (ambiguous middle), *high*, *confirmed*, or *unmatched* items, and **Select high-confidence** to batch-confirm strong matches at once. Files already organised (via `.nfo` sidecar) appear in a collapsed section and are skipped by default. To edit by hand, open **Manual edit** — you can paste a **StashDB** or **ThePornDB** scene URL and click **Fetch** to auto-fill all fields.
 
@@ -202,7 +224,7 @@ Metadata is written in the background after the files move; a progress banner tr
 
 ### Review Queue & Confidence
 
-Each match shows a colour-coded confidence band (High ≥ 80 · Medium 50–79 · Low < 50) plus provenance badges (**✓ Verified** fingerprint, **⚡ Cached**, **★ Confirmed**). The filter bar lets you triage at scale: batch-confirm the **high** band, then spend your attention on the **review** band. Confirming or renaming a match records it in the cache so a future rescan trusts it automatically.
+Each match shows a colour-coded confidence band (High ≥ 80 · Medium 50–79 · Low < 50) plus provenance badges (**Verified** fingerprint, **Cached**, **Confirmed**). The filter bar lets you triage at scale: batch-confirm the **high** band, then spend your attention on the **review** band. Confirming or renaming a match records it in the cache so a future rescan trusts it automatically.
 
 ### Drag & Drop
 
@@ -213,11 +235,11 @@ Drop files or folders directly onto the browser window at any time.
 
 ### Settings
 
-Click **⚙** (top-right) to open Settings. There you can set your **interface language** (6 supported) and **colour theme** (Purple Night, Midnight Teal), and manage API keys. Each API key row shows its current status:
+Click **** (top-right) to open Settings. There you can set your **interface language** (6 supported) and **colour theme** (Purple Night, Midnight Teal), and manage API keys. Each API key row shows its current status:
 
-- 🟢 **Saved** — key stored in the app's settings file
-- 🟣 **Set via environment** — key comes from `.env` / shell environment (read-only in UI)
-- ⚪ **Not configured** — no key set
+- **Saved** — key stored in the app's settings file
+- **Set via environment** — key comes from `.env` / shell environment (read-only in UI)
+- **Not configured** — no key set
 
 ### History & Undo
 
@@ -225,7 +247,7 @@ Click **History** to see every action AMM has performed. Each move/copy/hardlink
 
 ---
 
-## 📝 Naming Templates
+## Naming Templates
 
 ### Built-in Templates
 
@@ -259,7 +281,7 @@ Click **History** to see every action AMM has performed. Each move/copy/hardlink
 
 ---
 
-## 🔒 Privacy & Security
+## Privacy & Security
 
 - **API keys** — stored in `.env` (Docker) or `~/.local/share/adult-media-manager/settings.json` (native); never returned in API responses
 - **Path validation** — every path is checked against an allowlist of permitted roots before any file operation; paths outside the allowlist are rejected with 403
@@ -268,7 +290,7 @@ Click **History** to see every action AMM has performed. Each move/copy/hardlink
 
 ---
 
-## 🗂️ REST API
+## REST API
 
 | Method | Endpoint | Description |
 |---|---|---|
@@ -300,7 +322,7 @@ Click **History** to see every action AMM has performed. Each move/copy/hardlink
 
 ---
 
-## ⚙️ Environment Variables (Docker)
+## Environment Variables (Docker)
 
 | Variable | Default | Description |
 |---|---|---|
@@ -322,7 +344,7 @@ Click **History** to see every action AMM has performed. Each move/copy/hardlink
 
 ---
 
-## 🐛 Troubleshooting
+## Troubleshooting
 
 **"Path not found" or "Access denied" on scan**
 - **Docker:** check the path is mounted in `docker-compose.yml` using the exact same path inside and outside the container.
@@ -339,7 +361,7 @@ Click **History** to see every action AMM has performed. Each move/copy/hardlink
 - Metadata is embedded in the background after files move. The progress banner re-attaches after a page refresh and survives brief server hiccups. If the server restarted mid-embed, the `.nfo` sidecars are already written; re-run the embed for any files that still need it.
 
 **No results from TPDB / StashDB**
-- Verify your API key in **⚙ Settings** — the badge shows whether the key is saved or env-managed.
+- Verify your API key in **Settings** — the badge shows whether the key is saved or env-managed.
 - Test connectivity from Docker: `docker exec adult-media-manager curl -s https://theporndb.net/api/health`
 
 **Permission denied on renamed files**
@@ -350,7 +372,7 @@ Click **History** to see every action AMM has performed. Each move/copy/hardlink
 
 ---
 
-## 📄 License
+## License
 
 MIT — see [LICENSE](LICENSE).
 
@@ -358,7 +380,7 @@ MIT — see [LICENSE](LICENSE).
 
 ---
 
-## 🙏 Acknowledgements
+## Acknowledgements
 
 - [ThePornDB](https://theporndb.net/) — adult content metadata API
 - [StashDB](https://stashdb.org/) — community-maintained adult scene database
