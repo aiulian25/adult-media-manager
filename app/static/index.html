@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Adult Media Manager</title>
-    <link rel="icon" type="image/svg+xml" href="/Adult%20Media%20Manager.png">
+    <link rel="icon" type="image/png" href="/static/icon.png">
     <link rel="stylesheet" href="/static/style.css">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -21,8 +21,8 @@
         <!-- ═══ Top Bar ═══ -->
         <header class="glass-panel topbar">
             <div class="topbar-left">
-                <img src="/Adult%20Media%20Manager.png" alt="Adult Media Manager" class="logo-icon" width="28" height="28" style="border-radius:6px; display:none;" onerror="this.style.display='none'">
-                <span class="topbar-title" id="btn-home" title="New scan / Reset">🔞 Adult Media Manager</span>
+                <img src="/static/icon.png" alt="Adult Media Manager" class="logo-icon" width="28" height="28" style="border-radius:50%;" onerror="this.style.display='none'">
+                <span class="topbar-title" id="btn-home" title="New scan / Reset">Adult Media Manager</span>
             </div>
             <div class="topbar-center">
                 <div class="toolbar">
@@ -46,10 +46,10 @@
                     <div class="toolbar-group">
                         <label class="toolbar-label" data-i18n="toolbar.metadata">Metadata</label>
                         <select id="embed-mode" class="glass-select"
-                                title="How metadata is written. Embed in file + NFO (default): write tags INTO the video via FFmpeg AND a matching .nfo sidecar. Smart in-place + NFO: faster in-place tagging for MKV/MP4 where possible (remux otherwise), plus the .nfo. NFO sidecar only: write just the .nfo and leave the video untouched.">
-                            <option value="embed" data-i18n="toolbar.metadata.embed">Embed in file + NFO</option>
-                            <option value="smart" data-i18n="toolbar.metadata.smart">Smart in-place + NFO</option>
-                            <option value="nfo_only" data-i18n="toolbar.metadata.nfo_only">NFO sidecar only</option>
+                                title="How scene metadata is written. Both (recommended): tags written INTO the file (fast in-place, remux fallback) AND a matching .nfo sidecar — maximum player compatibility. Embedded only: container tags only, no .nfo (players must read embedded tags; the .nfo-based rich metadata and rescan skip won't apply). Sidecar only: just the .nfo, file untouched. Default comes from Settings and persists across restarts.">
+                            <option value="smart" data-i18n="toolbar.metadata.both">Both — file + .nfo</option>
+                            <option value="embed_only" data-i18n="toolbar.metadata.embedded">Embedded only (in file)</option>
+                            <option value="nfo_only" data-i18n="toolbar.metadata.sidecar">Sidecar only (.nfo)</option>
                         </select>
                     </div>
                     <div class="toolbar-group template-group">
@@ -90,6 +90,14 @@
                         <path d="M12 7v5l4 2"/>
                     </svg>
                     <span data-i18n="nav.history">History</span>
+                </button>
+                <button id="btn-library" class="glass-btn" title="Library — catalog stats &amp; duplicates">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <ellipse cx="12" cy="5" rx="9" ry="3"/>
+                        <path d="M3 5v14a9 3 0 0 0 18 0V5"/>
+                        <path d="M3 12a9 3 0 0 0 18 0"/>
+                    </svg>
+                    <span data-i18n="nav.library">Library</span>
                 </button>
                 <button id="btn-rename" class="glass-btn btn-rename" disabled>
                     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
@@ -167,6 +175,16 @@
                         <option value="ember" data-i18n="settings.theme_ember">Ember</option>
                         <option value="daylight" data-i18n="settings.theme_daylight">Daylight</option>
                     </select>
+                </div>
+
+                <div class="settings-pref-row">
+                    <label class="settings-pref-label" for="settings-embed-mode" data-i18n="settings.metadata_mode">Default metadata write</label>
+                    <select id="settings-embed-mode" class="glass-input settings-select">
+                        <option value="smart" data-i18n="toolbar.metadata.both">Both — file + .nfo</option>
+                        <option value="embed_only" data-i18n="toolbar.metadata.embedded">Embedded only (in file)</option>
+                        <option value="nfo_only" data-i18n="toolbar.metadata.sidecar">Sidecar only (.nfo)</option>
+                    </select>
+                    <p class="settings-pref-hint" data-i18n="settings.metadata_mode_hint">Sets how metadata is saved when you rename or save. "Both" (recommended) embeds tags in the file AND writes a .nfo sidecar for extra assurance. Persisted across restarts.</p>
                 </div>
 
                 <!-- ── API keys ─────────────────────────────────────────── -->
@@ -313,6 +331,24 @@
             <div class="modal-footer">
                 <button id="history-undo" class="glass-btn" data-i18n="history.undo">Undo Last</button>
                 <button id="history-ok" class="glass-btn btn-primary" data-i18n="modal.history_close">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ═══ Library Modal (catalog stats + duplicates) ═══ -->
+    <div id="library-modal" class="modal hidden">
+        <div class="modal-content glass-panel">
+            <div class="modal-header">
+                <h3 data-i18n="library.title">Library</h3>
+                <button class="modal-close" id="library-close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div id="library-stats" class="library-stats"></div>
+                <h4 class="library-section-title" data-i18n="library.duplicate_groups">Duplicate groups</h4>
+                <div id="library-dupes" class="library-dupes"></div>
+            </div>
+            <div class="modal-footer">
+                <button id="library-ok" class="glass-btn btn-primary" data-i18n="modal.history_close">Close</button>
             </div>
         </div>
     </div>

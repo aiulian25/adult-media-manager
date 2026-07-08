@@ -1,6 +1,7 @@
 {
   "app.title": "Adult Media Manager",
   "nav.history": "History",
+  "nav.library": "Library",
   "nav.rename": "Rename",
   "nav.browse": "Browse",
   "nav.scan": "Scan",
@@ -216,5 +217,23 @@
   "ctx.copied": "Copied",
   "match.remove": "Remove",
   "match.remove_hint": "Hide this file from the app (does not delete it from disk)",
-  "match.removed": "Removed from list"
+  "match.removed": "Removed from list",
+  "library.title": "Library",
+  "library.tracked": "Tracked",
+  "library.organized": "Organised",
+  "library.confirmed": "Confirmed",
+  "library.duplicate_groups": "Duplicate groups",
+  "library.dupes_none": "No duplicate files found",
+  "library.copies": "{n} copies",
+  "library.identical": "Identical",
+  "library.similar": "Similar (re-encode)",
+  "library.loading": "Loading…",
+  "library.load_failed": "Failed to load library",
+  "rename.companions_moved": "+{n} companion file(s) moved",
+  "status.scan_skipped": "{count} skipped (not media/hidden/unreadable)",
+  "toolbar.metadata.both": "Both — file + .nfo",
+  "toolbar.metadata.embedded": "Embedded only (in file)",
+  "toolbar.metadata.sidecar": "Sidecar only (.nfo)",
+  "settings.metadata_mode": "Default metadata write",
+  "settings.metadata_mode_hint": "How metadata is saved on rename/save. \"Both\" (recommended) embeds tags in the file AND writes a .nfo sidecar for extra assurance. Persisted across restarts."
 }

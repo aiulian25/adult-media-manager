@@ -16,6 +16,8 @@ import shutil
 from pathlib import Path
 from typing import Optional
 
+import httpx
+
 import time as _time
 import uuid
 
@@ -32,7 +34,9 @@ from app.core.matcher import score_match, find_best_match
 from app.core.formatter import (
     apply_template, build_new_path, TEMPLATES, TEMPLATE_VARS, extract_template_vars,
 )
-from app.core.renamer import execute_rename, RenameAction, RenameResult
+from app.core.renamer import (
+    execute_rename, execute_rename_with_companions, RenameAction, RenameResult,
+)
 from app.core.history import RenameHistory, HistoryEntry
 from app.core.catalog import Catalog
 from app.core.jobs import JobStore
@@ -40,12 +44,44 @@ from app.core.embedder import (
     validate_embed_mode, ffmpeg_metadata_args, build_mkv_tags_xml, plan_embed,
 )
 from app.api.tpdb import TPDBClient
-from app.api.stashdb import StashDBClient, compute_oshash, compute_phash_ffmpeg
+from app.api.stashdb import (
+    StashDBClient, compute_oshash, compute_phash_ffmpeg, compute_phash_ffmpeg_sync,
+)
 
+
+def _resolve_app_version() -> str:
+    """Resolve the app version from ONE source, so no stale literal can drift.
+
+    Priority:
+      1. ``AMM_VERSION`` env — Docker sets it from the Dockerfile ``ARG`` (which
+         also drives the image ``LABEL``); the Electron launcher sets it from
+         ``package.json`` via ``app.getVersion()``.
+      2. ``package.json`` on disk — dev runs from the repo root, and the packaged
+         deb/AppImage ship it at ``resources/app/package.json``. (It is NOT copied
+         into the Docker image, which is exactly why Docker uses the env above.)
+      3. ``"0.0.0"`` — an honest "unknown", never a stale hard-coded release number.
+    """
+    env = os.getenv("AMM_VERSION", "").strip()
+    if env:
+        return env
+    for cand in (
+        Path(__file__).resolve().parent.parent / "package.json",
+        Path.cwd() / "package.json",
+    ):
+        try:
+            v = json.loads(cand.read_text(encoding="utf-8")).get("version")
+            if v:
+                return str(v)
+        except Exception:
+            continue
+    return "0.0.0"
+
+
+APP_VERSION = _resolve_app_version()
 
 app = FastAPI(
     title="Adult Media Manager",
-    version="1.1.0",
+    version=APP_VERSION,
     description="Professional metadata organizer for adult content"
 )
 
@@ -146,6 +182,11 @@ _ALLOWED_LOCALES: frozenset[str] = frozenset({"en", "de", "es", "fr", "ja", "pt"
 _ALLOWED_THEMES:  frozenset[str] = frozenset({"default", "midnight-teal", "ember", "daylight"})
 _DEFAULT_LOCALE = "en"
 _DEFAULT_THEME  = "default"
+# Persisted default metadata write mode (embedder.EMBED_MODES). Not a secret, so
+# it is returned to the browser like locale/theme; the client uses it to seed the
+# per-rename Metadata selector and sends it back on rename/save. "smart" =
+# "Both (file + .nfo)", the recommended default.
+_DEFAULT_EMBED_MODE = "smart"
 
 
 def _effective_locale() -> str:
@@ -156,6 +197,12 @@ def _effective_locale() -> str:
 def _effective_theme() -> str:
     val = _load_settings().get("theme")
     return val if val in _ALLOWED_THEMES else _DEFAULT_THEME
+
+
+def _effective_embed_mode() -> str:
+    from app.core.embedder import EMBED_MODES
+    val = _load_settings().get("embed_mode")
+    return val if val in EMBED_MODES else _DEFAULT_EMBED_MODE
 
 
 def _load_settings() -> dict:
@@ -331,13 +378,19 @@ async def index():
 @app.get("/Adult%20Media%20Manager.png")
 @app.get("/Adult Media Manager.png")
 async def logo():
-    """Serve the app logo as an inline SVG (no file needed)."""
-    from fastapi.responses import Response
+    """Serve the round app logo (kept for backward compat with cached favicons).
+
+    The canonical asset is /static/icon.png; this legacy path just serves the same
+    round PNG so any old reference still gets the current logo, not the retired
+    placeholder SVG. Falls back to a tiny round SVG if the file is somehow missing.
+    """
+    icon = STATIC_DIR / "icon.png"
+    if icon.is_file():
+        return FileResponse(str(icon), media_type="image/png")
     svg = (
         '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">'
-        '<rect width="64" height="64" rx="12" fill="#1a0030"/>'
-        '<circle cx="32" cy="32" r="22" fill="none" stroke="#b24bf3" stroke-width="4"/>'
-        '<text x="32" y="40" font-size="28" text-anchor="middle" fill="#b24bf3" font-family="sans-serif">A</text>'
+        '<circle cx="32" cy="32" r="32" fill="#14100c"/>'
+        '<circle cx="32" cy="32" r="20" fill="none" stroke="#b24bf3" stroke-width="4"/>'
         '</svg>'
     )
     return Response(content=svg, media_type="image/svg+xml")
@@ -513,6 +566,27 @@ def _parse_nfo(nfo_path: Path) -> dict | None:
 # behaves identically on Docker/deb/AppImage.
 _SCAN_PROBE_DURATION: bool = os.getenv("AMM_SCAN_PROBE_DURATION", "1") == "1"
 
+# Compute a perceptual hash (pHash) for each scanned video and store it in the
+# catalog so duplicate detection can catch *re-encodes* — the same scene at a
+# different bitrate/resolution/container has a DIFFERENT oshash (exact bytes) but a
+# near-identical pHash. OFF by default (unlike duration): pHash needs an ffmpeg
+# frame-decode per file — materially heavier than the header-only ffprobe — so it
+# is opt-in for users who want near-duplicate grouping. Set AMM_SCAN_PHASH=1 to
+# enable. Purely a performance/opt-in knob (mirrors AMM_SCAN_PROBE_DURATION); when
+# off, no ffmpeg runs at scan time and the phash column stays NULL — zero
+# regression. Behaves identically on Docker/deb/AppImage (same ffmpeg dependency).
+_SCAN_PHASH: bool = os.getenv("AMM_SCAN_PHASH", "0") == "1"
+
+# When renaming an API-matched scene, download the scene's poster image and save
+# it next to the video as "<stem>-poster.jpg" (referenced by the NFO) so
+# Jellyfin/Plex show it. ON by default; set AMM_FETCH_POSTERS=0 to disable the
+# server-side fetch (e.g. for zero-egress deployments — the browser already loads
+# these same CDN images during matching, so this adds no new trust boundary, but
+# some users want the server itself to make no outbound image requests). The
+# manual-edit poster path never touches the network — it copies the locally
+# generated thumbnail — so it is unaffected by this flag.
+_FETCH_POSTERS: bool = os.getenv("AMM_FETCH_POSTERS", "1") == "1"
+
 
 def _probe_duration_seconds(path: Path) -> Optional[float]:
     """Return media duration in seconds via ffprobe, or None on any failure.
@@ -615,16 +689,22 @@ def _build_file_entry(p: Path) -> Optional[dict]:
 
     duration_seconds = None
     oshash = None
+    phash = None
     if is_video_file(p):
         oshash = compute_oshash(p)
         if _SCAN_PROBE_DURATION:
             duration_seconds = _probe_duration_seconds(p)
+        # pHash (opt-in via AMM_SCAN_PHASH) — enables near-duplicate detection of
+        # re-encodes. Best-effort: None on any failure, so scanning never breaks.
+        if _SCAN_PHASH:
+            phash = compute_phash_ffmpeg_sync(p)
 
     return {
         "path":             str(p),
         "filename":         p.name,
         "size":             file_size,
         "oshash":           oshash,
+        "phash":            phash,
         "duration_seconds": duration_seconds,
         "media_type":       det.media_type.value,
         "clean_name":       det.clean_name,
@@ -639,6 +719,10 @@ def _build_file_entry(p: Path) -> Optional[dict]:
         "source":           det.source,
         "video_format":     det.video_format,
         "group":            det.group,
+        # Subtitle files are companions of a video, not standalone scenes (F2).
+        # The UI hides a subtitle row when its sibling video is in the same scan
+        # (it will be moved along with the video); orphan subtitles still show.
+        "is_companion":     is_subtitle_file(p),
         # NFO-derived flags — None when no sidecar found
         "already_organized": nfo_meta is not None,
         "nfo_metadata":      nfo_meta,
@@ -772,6 +856,12 @@ async def scan_stream(request: Request, session_id: str = Query(...)):
         total = len(paths)
         scanned = 0
         stopped = False
+        # Why files were skipped, for the "K skipped" summary (F9). Directories
+        # (rglob includes them) are structural, not skipped *files*, so they are
+        # deliberately not tallied here.
+        skip_non_media = 0
+        skip_hidden = 0
+        skip_unreadable = 0
         batch: list[dict] = []   # accumulate for a single catalog upsert
 
         async def _flush_upsert():
@@ -793,7 +883,22 @@ async def scan_stream(request: Request, session_id: str = Query(...)):
 
                 entry = await asyncio.to_thread(_build_file_entry, p)
                 if entry is None:
-                    # Non-media / hidden / unreadable — advance progress only.
+                    # Classify WHY this candidate was skipped, for the summary
+                    # (F9). Order mirrors _build_file_entry's own skip checks
+                    # (not-a-file → hidden → non-media → otherwise unreadable), so
+                    # the reason matches what actually caused the None.
+                    try:
+                        if not p.is_file():
+                            pass  # directory / non-regular — not a skipped file
+                        elif p.name.startswith('.'):
+                            skip_hidden += 1
+                        elif p.suffix.lower() not in _SCAN_MEDIA_EXTS:
+                            skip_non_media += 1
+                        else:
+                            skip_unreadable += 1   # media ext but stat/detect failed
+                    except OSError:
+                        skip_unreadable += 1
+                    # Advance progress only.
                     yield (
                         "event: progress\ndata: "
                         + json.dumps({"done": i + 1, "total": total, "filename": p.name})
@@ -830,7 +935,17 @@ async def scan_stream(request: Request, session_id: str = Query(...)):
 
         yield (
             "event: done\ndata: "
-            + json.dumps({"scanned": scanned, "total": total, "stopped": stopped})
+            + json.dumps({
+                "scanned": scanned, "total": total, "stopped": stopped,
+                # Breakdown of skipped candidates (F9). Sums to (files − scanned)
+                # for a flat scan; directories and skip_organized files are not
+                # counted here (they aren't "skipped media").
+                "skipped": {
+                    "non_media": skip_non_media,
+                    "hidden": skip_hidden,
+                    "unreadable": skip_unreadable,
+                },
+            })
             + "\n\n"
         )
 
@@ -871,6 +986,8 @@ def _stashdb_scene_to_dict(s) -> dict:
         "duration": s.duration,  # seconds — used for duration match scoring (D1)
         "poster_url": s.poster_url,
         "thumbnail_url": s.poster_url,  # StashDB doesn't separate thumb/poster
+        "description": s.description,   # synopsis → NFO <plot> (F4)
+        "source": "stashdb",            # → NFO <uniqueid type> (F4)
     }
 
 
@@ -969,6 +1086,8 @@ def _tpdb_scene_to_dict(s) -> dict:
         "duration": s.duration,
         "poster_url": s.poster_url_large,
         "thumbnail_url": s.thumbnail_url_small,
+        "description": s.description,   # synopsis → NFO <plot> (F4)
+        "source": "tpdb",               # → NFO <uniqueid type> (F4)
     }
 
 
@@ -1090,6 +1209,9 @@ async def _match_one_stashdb(file_data: dict, sem: asyncio.Semaphore) -> dict:
                         [_stashdb_scene_to_dict(s) for s in fp_results[1:5]],
                         scene_dict,
                     )
+                    # Register the matched studio so the site autocomplete is
+                    # populated for StashDB users too (parity with TPDB, F7).
+                    _add_known_site(scene_dict.get("site") or "", scene_dict.get("network") or "")
                     return {
                         "original": file_data,
                         "match": scene_dict,
@@ -1142,6 +1264,9 @@ async def _match_one_stashdb(file_data: dict, sem: asyncio.Semaphore) -> dict:
         best_result = find_best_match(scoring_data, results_dicts)
         if best_result:
             best_match, ms = best_result
+            # Register the matched studio for the site autocomplete (parity with
+            # TPDB, F7) — same helper the TPDB path uses; skips empty names.
+            _add_known_site(best_match.get("site") or "", best_match.get("network") or "")
             return {
                 "original": file_data,
                 "match": best_match,
@@ -1169,18 +1294,10 @@ async def _match_one_tpdb(file_data: dict, sem: asyncio.Semaphore, auto_match: b
             if auto:
                 net = auto.network or ""
                 _add_known_site(auto.site, net)
-                scene_dict = {
-                    "id": auto.id,
-                    "title": auto.title,
-                    "site": auto.site,
-                    "network": auto.network,  # plain str|None
-                    "performers": auto.performers,
-                    "release_date": auto.release_date,
-                    "tags": auto.tags,
-                    "duration": auto.duration,  # seconds (D1)
-                    "poster_url": auto.poster_url_large,
-                    "thumbnail_url": auto.thumbnail_url_small,
-                }
+                # One scene-dict builder for every TPDB path (F4) — so description
+                # + source ride along automatically and can't drift from the shape
+                # the search path / lookup endpoint produce.
+                scene_dict = _tpdb_scene_to_dict(auto)
                 ms = score_match(file_data, scene_dict)
                 return {
                     "original": file_data,
@@ -1202,18 +1319,7 @@ async def _match_one_tpdb(file_data: dict, sem: asyncio.Semaphore, auto_match: b
         search_results = await tpdb.search_scene(query=search_query, site=site_filter)
 
         if search_results:
-            results_dicts = [
-                {
-                    "id": s.id, "title": s.title, "site": s.site,
-                    "network": s.network,
-                    "performers": s.performers,
-                    "release_date": s.release_date, "tags": s.tags,
-                    "duration": s.duration,  # seconds (D1)
-                    "poster_url": s.poster_url_large,
-                    "thumbnail_url": s.thumbnail_url_small,
-                }
-                for s in search_results[:5]
-            ]
+            results_dicts = [_tpdb_scene_to_dict(s) for s in search_results[:5]]
             best_result = find_best_match(file_data, results_dicts)
             if best_result:
                 best_match, ms = best_result
@@ -1538,7 +1644,10 @@ async def rename_files(req: RenameRequest, background_tasks: BackgroundTasks):
         if flat:
             new_path = old_path.parent / new_path.name
 
-        result = execute_rename(old_path, new_path, action)
+        # Move the video AND its same-stem companions (subtitles / NFO / artwork)
+        # with the same action, so a rename never orphans a `.srt`/`-poster.jpg`
+        # next to the old name (F2). Companion results ride on result.companions.
+        result = execute_rename_with_companions(old_path, new_path, action)
 
         meta = {
             "title":        scene_data.get("title", ""),
@@ -1546,6 +1655,16 @@ async def rename_files(req: RenameRequest, background_tasks: BackgroundTasks):
             "performers":   scene_data.get("performers", []),
             "release_date": scene_data.get("release_date", ""),
             "tags":         scene_data.get("tags", []),
+            # Scene poster URL (from the API match) — Phase 2 downloads it next to
+            # the renamed file so the NFO can reference it (F3). Empty when the
+            # scene has no poster.
+            "poster_url":   scene_data.get("poster_url", ""),
+            # NFO enrichment (F4): synopsis → <plot>, and provider id/source →
+            # <uniqueid type="tpdb|stashdb">. The scene dict carries "source"
+            # (set by _*_scene_to_dict); fall back to the request datasource.
+            "description":  scene_data.get("description", ""),
+            "id":           scene_data.get("id", ""),
+            "source":       scene_data.get("source") or file_data.get("datasource") or "tpdb",
         }
         # Catalog payload for this op — applied in Phase 2 ONLY after the NFO is
         # actually written, so a file is never flagged "organized" (which the UI
@@ -1577,6 +1696,19 @@ async def rename_files(req: RenameRequest, background_tasks: BackgroundTasks):
             except Exception as e:
                 print(f"WARNING: catalog rename integration failed: {e}")
 
+            # Companion sidecars (F2): each successful companion move gets its own
+            # history entry so it is independently revertible, and its stale
+            # catalog row (subtitles are scanned/upserted too) is forgotten on MOVE.
+            for comp in result.companions:
+                if comp.success and comp.new_path:
+                    history_batch.append(
+                        (comp.old_path, comp.new_path, action.value, True))
+                    try:
+                        if action == RenameAction.MOVE and str(comp.new_path) != str(comp.old_path):
+                            catalog.forget(str(comp.old_path))
+                    except Exception as e:
+                        print(f"WARNING: catalog companion integration failed: {e}")
+
         phase1.append((result, new_path, meta, cat))
 
     # Persist all history entries for this request in a SINGLE disk write,
@@ -1595,6 +1727,9 @@ async def rename_files(req: RenameRequest, background_tasks: BackgroundTasks):
             "action":        result.action.value,
             "error":         result.error,
             "embed_warning": None,
+            # Number of companion sidecars (subtitles/NFO/artwork) moved with this
+            # file (F2) — the UI shows "+N companion file(s)" on the row.
+            "companions_moved": sum(1 for c in result.companions if c.success),
         }
         for result, _, _, _ in phase1
     ]
@@ -1627,47 +1762,106 @@ def _get_embed_sem() -> asyncio.Semaphore:
     return _embed_sem
 
 
+# Poster download (F3). Bounded concurrency so a large batch rename doesn't fire
+# hundreds of simultaneous CDN GETs (the embed gather runs all files at once).
+_POSTER_MAX_BYTES = 20 * 1024 * 1024   # 20 MB cap on a fetched poster
+_poster_sem: Optional[asyncio.Semaphore] = None
+
+
+def _get_poster_sem() -> asyncio.Semaphore:
+    global _poster_sem
+    if _poster_sem is None:
+        _poster_sem = asyncio.Semaphore(4)
+    return _poster_sem
+
+
+async def _download_poster(url: str, dest: Path) -> bool:
+    """Best-effort fetch of an image URL → write it to ``dest`` (<stem>-poster.jpg).
+
+    This is a SERVER-SIDE fetch of a URL supplied by the metadata API, so it is
+    hardened against SSRF/abuse even though the URL comes from a trusted source:
+      • only ``http``/``https`` schemes;
+      • redirects are NOT followed (blocks a redirect to an internal host);
+      • the response must be an ``image/*`` Content-Type;
+      • the body is size-capped (``_POSTER_MAX_BYTES``).
+    Never raises and never partially writes a bad file — returns True only when a
+    valid image was written. The 10 s timeout keeps a slow/unreachable CDN from
+    stalling the background embed. ``dest`` must already be inside a path-validated
+    media directory (the caller derives it from the just-renamed file).
+    """
+    if not url or not isinstance(url, str):
+        return False
+    if not (url.startswith("https://") or url.startswith("http://")):
+        return False
+    try:
+        async with _get_poster_sem():
+            async with httpx.AsyncClient(timeout=10.0, follow_redirects=False) as client:
+                resp = await client.get(
+                    url, headers={"User-Agent": "Adult-Media-Manager/1.0"}
+                )
+            if resp.status_code != 200:
+                return False
+            if not resp.headers.get("content-type", "").lower().startswith("image/"):
+                return False
+            data = resp.content
+            if not data or len(data) > _POSTER_MAX_BYTES:
+                return False
+            dest.write_bytes(data)
+            return True
+    except Exception:
+        return False
+
+
 async def _run_embed_phase(job_id: str, tasks: list, embed_mode: str = "embed") -> None:
     """
     Background task: write metadata for each successfully renamed file.
 
-    embed_mode:
-      "embed"    – remux metadata into the container via FFmpeg, then write NFO.
-      "nfo_only" – write only the NFO sidecar (no FFmpeg remux). Avoids the
-                   heavy read+local-write+NAS-copy-back; near-instant per file.
+    embed_mode (see embedder.EMBED_MODES):
+      "embed"      – remux tags into the container via FFmpeg, then write NFO.
+      "smart"      – fast in-place tag edit (remux fallback), then write NFO.
+      "nfo_only"   – write only the NFO sidecar (no container write).
+      "embed_only" – container tags only (fast in-place), NO NFO sidecar.
 
-    FFmpeg work (embed mode only) is serialised through _EMBED_SEM so NAS
-    bandwidth is not saturated by parallel FFmpeg processes.  Updates
-    _embed_jobs[job_id] as work completes so the client can poll progress.
+    Two independent axes: a CONTAINER write (any mode except nfo_only) and a
+    SIDECAR write (any mode except embed_only). FFmpeg/in-place work is serialised
+    through _EMBED_SEM so NAS bandwidth isn't saturated. Updates _embed_jobs[job_id]
+    as work completes so the client can poll progress.
     """
     job = _embed_jobs.get(job_id)
     if job is None:
         return
 
     embed_sem = _get_embed_sem()
-    nfo_only = embed_mode == "nfo_only"
+    nfo_only   = embed_mode == "nfo_only"     # sidecar, no container
+    embed_only = embed_mode == "embed_only"   # container, no sidecar
 
     async def _embed_one(result, new_path, meta, cat):
         warning = None
-        # Only the FFmpeg remux needs the concurrency cap; the NFO write is a
-        # tiny local XML file, so nfo_only mode skips the semaphore entirely.
+        # Container write for embed/smart/embed_only (skipped for nfo_only). The
+        # concurrency cap matters for the FFmpeg remux; nfo_only skips it entirely.
         if not nfo_only:
             async with embed_sem:
                 ok, err = await _embed_for_mode(result.new_path, meta, embed_mode)
                 if not ok:
                     warning = f"Metadata embedding warning: {err}"
-        nfo_ok = True
-        try:
-            write_nfo(result.new_path, meta)
-        except Exception as nfo_err:
-            nfo_ok = False
-            if not warning:
-                warning = f"NFO write warning: {nfo_err}"
-        # Catalog (R1): only now — once the durable, player-visible NFO actually
-        # exists — record the file as organised. Doing this here (not in Phase 1)
-        # prevents a re-scan from reporting "has metadata + NFO" for a file whose
-        # embed/NFO write failed or never ran (e.g. process killed mid-embed).
-        if cat and nfo_ok:
+        nfo_written = False
+        if not embed_only:  # write the sidecar for nfo_only/smart/embed
+            # Poster (F3): only meaningful alongside the NFO that references it.
+            if _FETCH_POSTERS and meta.get("poster_url"):
+                poster_dest = result.new_path.with_name(result.new_path.stem + "-poster.jpg")
+                if await _download_poster(meta["poster_url"], poster_dest):
+                    meta = {**meta, "poster_path": poster_dest.name}
+            try:
+                write_nfo(result.new_path, meta)
+                nfo_written = True
+            except Exception as nfo_err:
+                if not warning:
+                    warning = f"NFO write warning: {nfo_err}"
+        # Catalog (R1): "organised" is the NFO-on-disk signal (the scan self-heals
+        # against it), so only mark it once the NFO is actually written. embed_only
+        # writes container tags but no NFO, so it is intentionally NOT tracked as
+        # organised — a re-scan would clear the flag anyway (no sidecar on disk).
+        if cat and nfo_written:
             try:
                 catalog.mark_organized(
                     str(result.new_path),
@@ -1799,6 +1993,7 @@ async def get_settings():
         # can pick up the server-saved choice.
         "locale":  _effective_locale(),
         "theme":   _effective_theme(),
+        "embed_mode": _effective_embed_mode(),
     }
 
 
@@ -1807,6 +2002,7 @@ class SaveSettingsRequest(BaseModel):
     stashdb_api_key: Optional[str] = None
     locale:          Optional[str] = None
     theme:           Optional[str] = None
+    embed_mode:      Optional[str] = None
 
     @field_validator("tpdb_api_key", "stashdb_api_key", mode="before")
     @classmethod
@@ -1841,6 +2037,16 @@ class SaveSettingsRequest(BaseModel):
         if v not in _ALLOWED_THEMES:
             raise ValueError(f"Unsupported theme: {v}. Allowed: {sorted(_ALLOWED_THEMES)}")
         return v
+
+    @field_validator("embed_mode", mode="before")
+    @classmethod
+    def _validate_embed_mode_pref(cls, v) -> Optional[str]:
+        if v is None:
+            return None
+        v = str(v).strip()
+        if not v:
+            return None
+        return _validate_embed_mode(v)   # raises on anything outside EMBED_MODES
 
 
 @app.post("/api/settings")
@@ -1879,7 +2085,7 @@ async def save_settings(req: SaveSettingsRequest):
 
     # UI preferences (already whitelist-validated above). A blank/None value
     # means "leave unchanged"; only persist when it actually differs.
-    for pref in ("locale", "theme"):
+    for pref in ("locale", "theme", "embed_mode"):
         new_val = getattr(req, pref)
         if new_val and settings.get(pref) != new_val:
             settings[pref] = new_val
@@ -1912,6 +2118,7 @@ async def save_settings(req: SaveSettingsRequest):
         "stashdb": {"active": stashdb is not None, "source": stashdb_src},
         "locale":  _effective_locale(),
         "theme":   _effective_theme(),
+        "embed_mode": _effective_embed_mode(),
     }
 
 
@@ -2694,6 +2901,9 @@ async def write_nfo_endpoint(req: WriteNfoRequest):
         "release_date": req.scene_data.get("release_date", ""),
         "tags":         req.scene_data.get("tags", []),
         "description":  req.scene_data.get("description", ""),
+        # Provider id/source → <uniqueid> (F4). The scene dict carries "source".
+        "id":           req.scene_data.get("id", ""),
+        "source":       req.scene_data.get("source") or "tpdb",
     }
     try:
         write_nfo(file_path, meta)
@@ -2719,6 +2929,15 @@ def write_nfo(file_path: Path, metadata: dict) -> None:
     release_date = metadata.get("release_date", "")
     tags         = metadata.get("tags", [])
     description  = metadata.get("description", "")
+    # Provider linkage (F4): a scene id + its source ("tpdb"/"stashdb") become a
+    # <uniqueid> so Jellyfin/Kodi can link back to the metadata provider. Skipped
+    # for manual entries (id == "manual") and when no id is present.
+    scene_id     = str(metadata.get("id") or "").strip()
+    source       = (str(metadata.get("source") or "").strip() or "tpdb")
+    # Relative filename of a poster image sitting next to the video (e.g.
+    # "MyScene-poster.jpg"). When present, referenced from the NFO so
+    # Jellyfin/Plex/Kodi display the chosen still. Empty → no poster refs.
+    poster_path  = (metadata.get("poster_path") or "").strip()
     year         = release_date[:4] if release_date else ""
 
     root = ET.Element("movie")
@@ -2735,7 +2954,23 @@ def write_nfo(file_path: Path, metadata: dict) -> None:
     if description:
         ET.SubElement(root, "plot").text       = description
         ET.SubElement(root, "outline").text    = description
+    # Provider id → <uniqueid type="tpdb|stashdb" default="true">. Skip the
+    # sentinel "manual" id (not a real provider reference).
+    if scene_id and scene_id.lower() != "manual":
+        ET.SubElement(root, "uniqueid",
+                      {"type": source, "default": "true"}).text = scene_id
     ET.SubElement(root, "genre").text          = "Adult"
+    # One <genre> per scene tag (in addition to the base "Adult"), so players can
+    # browse by genre. Tags still also appear as <tag> below.
+    for tag in tags:
+        ET.SubElement(root, "genre").text      = tag
+    # Poster references. <thumb> is Kodi's classic form; <art><poster> is the
+    # Jellyfin/Kodi-v17+ form — writing both maximises player compatibility. The
+    # value is a plain relative filename, resolved by the player next to the NFO.
+    if poster_path:
+        ET.SubElement(root, "thumb", {"aspect": "poster"}).text = poster_path
+        art = ET.SubElement(root, "art")
+        ET.SubElement(art, "poster").text = poster_path
     for tag in tags:
         ET.SubElement(root, "tag").text        = tag
     for performer in performers:
@@ -3166,30 +3401,52 @@ async def save_manual_metadata(req: ManualMetadataRequest, background_tasks: Bac
         "performers":   req.performers,
         "release_date": req.release_date or "",
         "tags":         req.tags,
+        # Manually chosen resolution (e.g. "1080p"). Kept so it isn't discarded on
+        # save; it rides along in the confirmed-match cache scene below and feeds
+        # the {quality} naming variable at a later rename (see formatter fallback).
+        "quality":      req.quality or "",
     }
 
-    # ── Fast path: NFO sidecar (tiny local XML) ─────────────────────────────
-    # This is the durable, player-visible result and must not be gated on the
-    # heavy container embed, so it is written synchronously and up front.
-    try:
-        write_nfo(file_path, metadata)
-    except Exception as nfo_err:
-        raise HTTPException(status_code=500, detail=f"Failed to write metadata sidecar: {nfo_err}")
+    # "embed_only" writes container tags but NO sidecar (.nfo / -poster.jpg),
+    # so the whole sidecar path below is gated on this.
+    write_sidecar = req.embed_mode != "embed_only"
 
-    # Optionally mark a preferred thumbnail (cheap local copy)
+    # ── Preferred thumbnail → poster (cheap local copies) ───────────────────
+    # Done BEFORE the NFO write so the NFO can reference the poster. The
+    # DATA_DIR/…/selected.jpg copy is AMM's own UI preview (always kept); the
+    # <video-stem>-poster.jpg beside the video is a media SIDECAR, so it is only
+    # written when write_sidecar. Purely local (ffmpeg frame) — no network.
     thumbnail_url = None
     if req.thumbnail_index is not None:
         thumbnail_dir = DATA_DIR / "thumbnails" / file_path.stem
         source_thumb = thumbnail_dir / f"thumb_{req.thumbnail_index}.jpg"
         if source_thumb.exists():
             dest_thumb = thumbnail_dir / "selected.jpg"
-            import shutil
             shutil.copy2(source_thumb, dest_thumb)
             thumbnail_url = f"/api/thumbnail/{file_path.stem}/selected.jpg"
+            if write_sidecar:
+                try:
+                    poster_dest = file_path.with_name(file_path.stem + "-poster.jpg")
+                    shutil.copy2(source_thumb, poster_dest)
+                    metadata["poster_path"] = poster_dest.name
+                except Exception as poster_err:
+                    # Never fail the save because the poster copy failed (e.g. a
+                    # read-only media mount) — the NFO/metadata still lands.
+                    print(f"WARNING: poster copy failed for {file_path}: {poster_err}")
+
+    # ── Fast path: NFO sidecar (tiny local XML) ─────────────────────────────
+    # This is the durable, player-visible result and must not be gated on the
+    # heavy container embed, so it is written synchronously and up front. Skipped
+    # for embed_only (container tags only).
+    if write_sidecar:
+        try:
+            write_nfo(file_path, metadata)
+        except Exception as nfo_err:
+            raise HTTPException(status_code=500, detail=f"Failed to write metadata sidecar: {nfo_err}")
 
     # ── Heavy path: in-container embed dispatched to the background ──────────
-    # "nfo_only" relies on the sidecar alone; "embed"/"smart" remux the file but
-    # do so off the request path so the UI returns instantly.
+    # "nfo_only" relies on the sidecar alone; every other mode writes container
+    # tags off the request path so the UI returns instantly.
     embed_job_id = None
     if req.embed_mode != "nfo_only":
         embed_job_id = uuid.uuid4().hex
@@ -3209,16 +3466,23 @@ async def save_manual_metadata(req: ManualMetadataRequest, background_tasks: Bac
             "performers": metadata["performers"],
             "release_date": metadata["release_date"],
             "tags": metadata["tags"],
+            # Persist the user's quality so a later rename can use {quality} even
+            # when the filename carries no resolution (formatter falls back to the
+            # scene's quality). Absent for API matches, which have no quality.
+            "quality": metadata["quality"],
             "manual_entry": True,
             "thumbnail_url": thumbnail_url,
         }
         oshash = compute_oshash(file_path)
         _match_cache_confirm(oshash, confirmed_scene, "manual")
-        # Catalog (R1): a manual save is a user-confirmed match at this path.
-        catalog.mark_organized(
-            str(file_path), oshash=oshash, scene_id="manual",
-            source="manual", confidence=100.0, confirmed=True,
-        )
+        # Catalog (R1): "organised" is the NFO-on-disk signal, so only mark it when
+        # a sidecar was written. The match-cache confirm above (oshash-keyed) is
+        # kept for every mode — it's match memory, independent of the NFO.
+        if write_sidecar:
+            catalog.mark_organized(
+                str(file_path), oshash=oshash, scene_id="manual",
+                source="manual", confidence=100.0, confirmed=True,
+            )
     except Exception:
         pass
 
@@ -3273,5 +3537,6 @@ async def health_check():
     """
     return {
         "status": "healthy",
+        "version": APP_VERSION,
         "tpdb_configured": tpdb is not None,
     }

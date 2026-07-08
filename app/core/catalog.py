@@ -40,11 +40,39 @@ _SCHEMA_VERSION = 1
 # are refreshed on every scan; the match columns below are preserved across scans.
 _SCAN_COLUMNS = (
     "oshash",
+    "phash",
     "size",
     "duration",
     "normalized_filename",
     "extracted_date",
 )
+
+# Near-duplicate (pHash) grouping tunables (used by find_duplicates).
+#   _PHASH_HAMMING_MAX   : max bit difference (of 64) still counted as "similar".
+#                          8 tolerates re-encode/resize noise without merging
+#                          unrelated scenes.
+#   _PHASH_GROUP_MAX_ROWS: safety cap — the near-dup pass is O(n²) pairwise, so
+#                          above this many pHash rows we skip it (return only the
+#                          exact-oshash groups) rather than risk a long UI stall.
+_PHASH_HAMMING_MAX = 8
+_PHASH_GROUP_MAX_ROWS = 20000
+
+
+def _split_sizes(raw) -> list[int]:
+    """Split a ``GROUP_CONCAT(size, char(10))`` blob into a list of ints.
+
+    Positionally parallel to the same row's ``GROUP_CONCAT(path)``. Any
+    unparseable entry becomes 0 so the list length always matches the paths list.
+    """
+    if not raw:
+        return []
+    out: list[int] = []
+    for part in str(raw).split("\n"):
+        try:
+            out.append(int(part))
+        except (ValueError, TypeError):
+            out.append(0)
+    return out
 
 
 class Catalog:
@@ -114,6 +142,7 @@ class Catalog:
             (
                 e.get("path"),
                 e.get("oshash"),
+                e.get("phash"),
                 e.get("size"),
                 e.get("duration_seconds"),
                 e.get("normalized_name"),
@@ -130,11 +159,16 @@ class Catalog:
                 self._conn.executemany(
                     """
                     INSERT INTO files
-                        (path, oshash, size, duration, normalized_filename,
+                        (path, oshash, phash, size, duration, normalized_filename,
                          extracted_date, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(path) DO UPDATE SET
                         oshash=excluded.oshash,
+                        -- Preserve a previously computed pHash when this scan
+                        -- didn't compute one (AMM_SCAN_PHASH off): NULL must not
+                        -- wipe an existing hash. A pHash-on rescan (non-NULL)
+                        -- refreshes it, so in-place re-encodes still update.
+                        phash=COALESCE(excluded.phash, files.phash),
                         size=excluded.size,
                         duration=excluded.duration,
                         normalized_filename=excluded.normalized_filename,
@@ -298,30 +332,120 @@ class Catalog:
             return {"total": 0, "organized": 0, "confirmed": 0, "duplicates": 0}
 
     def find_duplicates(self) -> list[dict]:
-        """Return groups of paths that share an oshash (same content, ≥2 copies)."""
+        """Return duplicate groups. Each group is
+        ``{kind, count, paths, sizes[, oshash]}`` (``sizes`` are per-file byte
+        sizes, positionally parallel to ``paths``, for the UI) where ``kind`` is:
+
+          • ``"oshash"`` — byte-identical copies (same content fingerprint).
+          • ``"phash"``  — near-duplicates (same scene, different encode/resize):
+            pHashes within :data:`_PHASH_HAMMING_MAX` bits that span ≥2 distinct
+            oshashes. Only produced when pHashes exist (opt-in AMM_SCAN_PHASH).
+
+        The near-dup pass is O(n²) over pHash rows, so it is skipped above
+        :data:`_PHASH_GROUP_MAX_ROWS` (exact groups are still returned).
+        """
         if not self._conn:
             return []
+        groups: list[dict] = []
         try:
             with self._lock:
+                # 1) Exact content dups — identical bytes (grouped in SQL).
+                #    paths and sizes are concatenated in the same row-visitation
+                #    order, so they line up positionally after the split.
                 cur = self._conn.execute(
-                    """SELECT oshash, GROUP_CONCAT(path, char(10)) AS paths,
+                    """SELECT oshash,
+                              GROUP_CONCAT(path, char(10)) AS paths,
+                              GROUP_CONCAT(COALESCE(size, 0), char(10)) AS sizes,
                               COUNT(*) AS n
                        FROM files
                        WHERE oshash IS NOT NULL AND oshash != ''
                        GROUP BY oshash HAVING COUNT(*) > 1
                        ORDER BY n DESC"""
                 )
-                return [
-                    {
+                for r in cur.fetchall():
+                    groups.append({
+                        "kind": "oshash",
                         "oshash": r["oshash"],
                         "count": r["n"],
                         "paths": (r["paths"] or "").split("\n"),
-                    }
-                    for r in cur.fetchall()
-                ]
+                        "sizes": _split_sizes(r["sizes"]),
+                    })
+
+                # 2) Fetch pHash rows for the near-dup pass (done outside the lock).
+                phash_rows = self._conn.execute(
+                    """SELECT path, oshash, phash, size FROM files
+                       WHERE phash IS NOT NULL AND phash != ''"""
+                ).fetchall()
         except Exception as e:
             print(f"WARNING: catalog find_duplicates failed: {e}")
+            return groups
+
+        groups.extend(self._phash_groups(phash_rows))
+        return groups
+
+    @staticmethod
+    def _phash_groups(rows) -> list[dict]:
+        """Cluster pHash rows into near-duplicate groups (union-find, Hamming ≤ cap).
+
+        Pure/self-contained (no DB, no lock) so it is easy to unit-test. Clusters
+        confined to a single oshash are dropped — those are exact copies already
+        reported by the oshash pass; a kept cluster spans ≥2 oshashes, i.e. a real
+        re-encode. Returns ``[{kind:"phash", count, paths}]``.
+        """
+        if len(rows) < 2 or len(rows) > _PHASH_GROUP_MAX_ROWS:
             return []
+
+        # Parse the decimal-string pHashes to ints once (skip unparseable).
+        # Each item: (path, oshash, phash_int, size).
+        items: list[tuple[str, object, int, int]] = []
+        for r in rows:
+            try:
+                items.append((r["path"], r["oshash"], int(r["phash"]),
+                              int(r["size"] or 0)))
+            except (ValueError, TypeError):
+                continue
+
+        n = len(items)
+        parent = list(range(n))
+
+        def _find(i: int) -> int:
+            while parent[i] != i:
+                parent[i] = parent[parent[i]]
+                i = parent[i]
+            return i
+
+        def _union(a: int, b: int) -> None:
+            ra, rb = _find(a), _find(b)
+            if ra != rb:
+                parent[rb] = ra
+
+        for i in range(n):
+            hi = items[i][2]
+            for j in range(i + 1, n):
+                # Hamming distance via popcount of XOR (bin().count is 3.9-safe).
+                if bin(hi ^ items[j][2]).count("1") <= _PHASH_HAMMING_MAX:
+                    _union(i, j)
+
+        clusters: dict[int, list[int]] = {}
+        for i in range(n):
+            clusters.setdefault(_find(i), []).append(i)
+
+        out: list[dict] = []
+        for members in clusters.values():
+            if len(members) < 2:
+                continue
+            # Keep only clusters that mix distinct oshashes (true re-encodes);
+            # a single-oshash cluster is just the exact dups already reported.
+            oshashes = {items[m][1] for m in members if items[m][1]}
+            if len(oshashes) < 2:
+                continue
+            out.append({
+                "kind": "phash",
+                "count": len(members),
+                "paths": [items[m][0] for m in members],
+                "sizes": [items[m][3] for m in members],
+            })
+        return out
 
     def close(self) -> None:
         if self._conn:

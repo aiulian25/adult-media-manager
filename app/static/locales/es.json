@@ -1,6 +1,7 @@
 {
   "app.title": "Adult Media Manager",
   "nav.history": "Historial",
+  "nav.library": "Biblioteca",
   "nav.rename": "Renombrar",
   "nav.browse": "Explorar",
   "nav.scan": "Escanear",
@@ -216,5 +217,23 @@
   "ctx.copied": "Copiado",
   "match.remove": "Quitar",
   "match.remove_hint": "Ocultar este archivo en la app (no se elimina del disco)",
-  "match.removed": "Quitado de la lista"
+  "match.removed": "Quitado de la lista",
+  "library.title": "Biblioteca",
+  "library.tracked": "Registrados",
+  "library.organized": "Organizados",
+  "library.confirmed": "Confirmados",
+  "library.duplicate_groups": "Grupos de duplicados",
+  "library.dupes_none": "No se encontraron duplicados",
+  "library.copies": "{n} copias",
+  "library.identical": "Idénticos",
+  "library.similar": "Similar (recodificado)",
+  "library.loading": "Cargando…",
+  "library.load_failed": "No se pudo cargar la biblioteca",
+  "rename.companions_moved": "+{n} archivo(s) complementario(s) movido(s)",
+  "status.scan_skipped": "{count} omitido(s) (no multimedia/ocultos/ilegibles)",
+  "toolbar.metadata.both": "Ambos — archivo + .nfo",
+  "toolbar.metadata.embedded": "Solo incrustado (en archivo)",
+  "toolbar.metadata.sidecar": "Solo sidecar (.nfo)",
+  "settings.metadata_mode": "Escritura de metadatos predeterminada",
+  "settings.metadata_mode_hint": "Cómo se guardan los metadatos al renombrar/guardar. \"Ambos\" (recomendado) incrusta etiquetas en el archivo Y escribe un sidecar .nfo para mayor seguridad. Se mantiene entre reinicios."
 }

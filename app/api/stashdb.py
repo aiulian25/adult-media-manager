@@ -12,8 +12,10 @@ Auth header: ApiKey: <your_key>
 """
 
 import os
+import json
 import struct
 import asyncio
+import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
@@ -36,6 +38,7 @@ class StashDBScene:
     duration: Optional[int] = None       # seconds
     tags: list[str] = field(default_factory=list)
     poster_url: Optional[str] = None
+    description: Optional[str] = None     # scene synopsis (GraphQL "details")
 
 
 # ─── Queries ───────────────────────────────────────────────────────────────────
@@ -43,6 +46,7 @@ class StashDBScene:
 _SCENE_FIELDS = """
   id
   title
+  details
   date
   duration
   studio { name parent { name } }
@@ -110,6 +114,17 @@ def compute_oshash(file_path: Path) -> Optional[str]:
 
 
 # ─── pHash via ffmpeg ──────────────────────────────────────────────────────────
+
+# The ffmpeg frame filter that defines the pHash *input pixels*. Both the async
+# extractor (match path) and the sync one (scan path) MUST use this identical
+# filter: it fully determines the 32×32 greyscale bytes fed to
+# _phash_from_gray_frame, so changing it silently changes the meaning of every
+# stored pHash. Keeping it in one constant is what guarantees a scan-computed
+# pHash equals a match-computed one for the same file (no drift between paths).
+_PHASH_FRAME_VF = "scale=32:32:force_original_aspect_ratio=disable,format=gray"
+# Seek point (fraction through the video) for the sampled frame — shared too.
+_PHASH_SEEK_FRACTION = 0.2
+
 
 def _phash_from_gray_frame(raw: bytes) -> Optional[str]:
     """
@@ -197,18 +212,17 @@ async def compute_phash_ffmpeg(file_path: Path) -> Optional[str]:
         if probe.returncode != 0:
             return None
 
-        import json as _json
-        info = _json.loads(probe_out)
+        info = json.loads(probe_out)
         duration = float(info.get("format", {}).get("duration", 0))
         if duration <= 0:
             return None
-        seek = duration * 0.2  # 20% in
+        seek = duration * _PHASH_SEEK_FRACTION
 
         # ── Step 2: extract one 32×32 greyscale frame ────────────────────
         frame_cmd = [
             "ffmpeg", "-ss", str(seek), "-i", str(file_path),
             "-vframes", "1",
-            "-vf", "scale=32:32:force_original_aspect_ratio=disable,format=gray",
+            "-vf", _PHASH_FRAME_VF,
             "-f", "rawvideo", "-pix_fmt", "gray",
             "pipe:1",
         ]
@@ -227,6 +241,51 @@ async def compute_phash_ffmpeg(file_path: Path) -> Optional[str]:
         # blocks the loop (matching runs several files concurrently).
         return await asyncio.to_thread(_phash_from_gray_frame, raw)
 
+    except Exception:
+        return None
+
+
+def compute_phash_ffmpeg_sync(file_path: Path) -> Optional[str]:
+    """
+    Synchronous sibling of :func:`compute_phash_ffmpeg` for the scan path.
+
+    Scan builds file entries in a worker thread (``asyncio.to_thread`` in
+    scan_stream) that cannot await the async version, so this mirrors it with
+    blocking ``subprocess.run`` calls. It shares the exact frame filter
+    (``_PHASH_FRAME_VF``), seek point (``_PHASH_SEEK_FRACTION``) and hash function
+    (``_phash_from_gray_frame``) as the async path, so a scan-computed pHash is
+    byte-for-byte the same value the fingerprint match would compute — no drift.
+
+    Best-effort and never raises: a missing ffmpeg/ffprobe, an unreadable file, or
+    a slow mount simply yields ``None`` and the pHash column stays empty for that
+    file. Requires ffmpeg + ffprobe on PATH (identical assumption to the existing
+    duration probe and thumbnail extraction on every build target).
+    """
+    try:
+        probe = subprocess.run(
+            ["ffprobe", "-v", "quiet", "-print_format", "json",
+             "-show_entries", "format=duration", str(file_path)],
+            capture_output=True, timeout=15,
+        )
+        if probe.returncode != 0:
+            return None
+        info = json.loads(probe.stdout or b"{}")
+        duration = float(info.get("format", {}).get("duration", 0))
+        if duration <= 0:
+            return None
+        seek = duration * _PHASH_SEEK_FRACTION
+
+        ff = subprocess.run(
+            ["ffmpeg", "-ss", str(seek), "-i", str(file_path),
+             "-vframes", "1",
+             "-vf", _PHASH_FRAME_VF,
+             "-f", "rawvideo", "-pix_fmt", "gray",
+             "pipe:1"],
+            capture_output=True, timeout=30,
+        )
+        if ff.returncode != 0 or len(ff.stdout) < 1024:
+            return None
+        return _phash_from_gray_frame(ff.stdout)
     except Exception:
         return None
 
@@ -366,4 +425,5 @@ class StashDBClient:
             duration=data.get("duration"),
             tags=tags,
             poster_url=poster_url,
+            description=data.get("details") or None,
         )

@@ -102,7 +102,7 @@ async function scanFolder() {
             es.close();
             _scanEventSource = null;
             const d = JSON.parse(e.data);
-            _finishScan({ stopped: !!d.stopped, path });
+            _finishScan({ stopped: !!d.stopped, path, skipped: d.skipped });
             _scanResolve = null;
             resolve();
         });
@@ -131,10 +131,17 @@ async function scanFolder() {
 // Finalise a scan run: render results (or the right empty/error/stopped state),
 // reset the buttons, and — when the scan was cut short — explain that not every
 // file was scanned (so not all will be matched or available for manual edit).
-function _finishScan({ stopped = false, error = null, path = '' } = {}) {
+function _finishScan({ stopped = false, error = null, path = '', skipped = null } = {}) {
     _setScanRunning(false);
     btnScan.disabled = false;
     progressFill.style.width = '100%';
+
+    // "K skipped (not media/hidden/unreadable)" note (F9) — explains the gap when
+    // a drop/scan surfaces fewer files than expected. Appended to the found line.
+    const nSkipped = skipped
+        ? (skipped.non_media || 0) + (skipped.hidden || 0) + (skipped.unreadable || 0)
+        : 0;
+    const skipSuffix = nSkipped > 0 ? ' · ' + t('status.scan_skipped', { count: nSkipped }) : '';
 
     if (error) {
         showStatus(t('status.scan_failed'), 'error');
@@ -151,11 +158,11 @@ function _finishScan({ stopped = false, error = null, path = '' } = {}) {
             _renderEmptyState('🛑', t('empty.scan_stopped_title'),
                               t('empty.scan_stopped_subtitle'));
         } else if (skipOrganized && skipOrganized.checked) {
-            showStatus(t('status.found', { count: 0 }), 'info');
+            showStatus(t('status.found', { count: 0 }) + skipSuffix, 'info');
             _renderEmptyState('✅', t('empty.all_organized_title'),
                               t('empty.all_organized_subtitle', { path }));
         } else {
-            showStatus(t('status.found', { count: 0 }), 'info');
+            showStatus(t('status.found', { count: 0 }) + skipSuffix, 'info');
             _renderEmptyState('🔍', t('empty.scan_title'),
                               t('empty.scan_subtitle', { path }));
         }
@@ -174,11 +181,11 @@ function _finishScan({ stopped = false, error = null, path = '' } = {}) {
         _renderScanStoppedNotice(scannedFiles.length);
         progressFill.style.width = '0%';
     } else {
-        showStatus(t('status.found', { count: scannedFiles.length }), 'success');
+        showStatus(t('status.found', { count: scannedFiles.length }) + skipSuffix, 'success');
         setTimeout(() => {
             statusBar.classList.add('hidden');
             progressFill.style.width = '0%';
-        }, 2000);
+        }, nSkipped > 0 ? 4500 : 2000);   // linger longer when there's a skip note
     }
 }
 
@@ -274,12 +281,54 @@ function _renderScannedRows(listEl, entries, rowHtmlFn) {
     listEl.appendChild(btn);
 }
 
+// Directory of a file path (everything before the last "/").
+function _dirOf(path) {
+    const i = path.lastIndexOf('/');
+    return i >= 0 ? path.slice(0, i) : '';
+}
+// Filename stem (drop the last extension).
+function _stemOf(name) {
+    const i = name.lastIndexOf('.');
+    return i > 0 ? name.slice(0, i) : name;
+}
+// True when a subtitle entry has a sibling *video* in the same scan/dir — i.e. it
+// will be carried along by that video's rename (F2 backend companion move), so it
+// need not appear as a standalone match row. Handles multi-part langs
+// ("Scene.eng.srt" → tries "Scene.eng" then "Scene") against the video stems.
+function _subtitleHasSiblingVideo(sub, videoStemsByDir) {
+    const set = videoStemsByDir.get(_dirOf(sub.path));
+    if (!set) return false;
+    let base = _stemOf(sub.filename);          // strip ".srt"  → "Scene.eng"
+    while (base.length) {
+        if (set.has(base)) return true;
+        const d = base.lastIndexOf('.');
+        if (d <= 0) break;
+        base = base.slice(0, d);               // "Scene.eng" → "Scene"
+    }
+    return false;
+}
+
 function displayScannedFiles() {
+    // Map of directory → set of video stems, so subtitle companions can be hidden
+    // when their video is in the same scan (only subtitles are scanned as
+    // companions; NFO/artwork are not media and never appear here).
+    const videoStemsByDir = new Map();
+    scannedFiles.forEach(f => {
+        if (f.is_companion) return;            // non-companion scan rows are videos
+        const dir = _dirOf(f.path);
+        if (!videoStemsByDir.has(dir)) videoStemsByDir.set(dir, new Set());
+        videoStemsByDir.get(dir).add(_stemOf(f.filename));
+    });
+
     // Single pass: partition into new vs already-organised, keeping each file's
     // global index. (Replaces a per-row scannedFiles.indexOf() that was O(n²).)
+    // Subtitle companions with a sibling video are dropped from BOTH lists — they
+    // ride along with the video on rename — but stay in scannedFiles so the
+    // "found N" count remains honest (nothing silently disappears).
     const newEntries = [];   // [globalIndex, file]
     const orgEntries = [];
     scannedFiles.forEach((f, i) => {
+        if (f.is_companion && _subtitleHasSiblingVideo(f, videoStemsByDir)) return;
         (f.already_organized ? orgEntries : newEntries).push([i, f]);
     });
 

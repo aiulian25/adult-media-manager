@@ -16,6 +16,7 @@ from typing import Optional, Any
 TEMPLATE_VARS: frozenset[str] = frozenset({
     "site", "network", "performer", "performers", "scene", "title", "id",
     "clean_name", "date", "year", "month", "day", "quality", "vf", "source", "group",
+    "duration",
 })
 
 
@@ -88,7 +89,22 @@ def apply_template(template: str, bindings: dict[str, Any]) -> str:
     # Performers
     performer = performers_list[0] if performers_list else ""
     performers_str = ", ".join(performers_list) if performers_list else ""
-    
+
+    # Duration → "NNmin" (whole minutes, floored). Read from raw seconds under
+    # either "duration_seconds" (what a scanned file_data carries) or "duration"
+    # (what extract_template_vars binds). Empty string when absent/zero/invalid,
+    # so {duration} simply renders to nothing rather than crashing.
+    _dur_raw = bindings.get("duration_seconds")
+    if _dur_raw is None:
+        _dur_raw = bindings.get("duration")
+    duration_str = ""
+    try:
+        _secs = float(_dur_raw)
+        if _secs > 0:
+            duration_str = f"{int(_secs // 60)}min"
+    except (TypeError, ValueError):
+        duration_str = ""
+
     derived = {
         "year": year,
         "month": month,
@@ -96,6 +112,7 @@ def apply_template(template: str, bindings: dict[str, Any]) -> str:
         "performer": performer,
         "performers": performers_str,
         "title": bindings.get("scene", ""),  # Alias for scene
+        "duration": duration_str,
     }
     
     all_bindings = {**bindings, **derived}
@@ -258,8 +275,16 @@ def extract_template_vars(scene_data: dict, file_data: dict) -> dict[str, Any]:
         "year": None,  # Will be derived from date
         "month": None,  # Will be derived from date
         "day": None,  # Will be derived from date
-        "quality": file_data.get("quality", ""),
+        # Prefer the file's detected resolution; fall back to the scene's quality
+        # (e.g. a manual/confirmed match that carries the user's chosen quality)
+        # so {quality} still resolves when the filename had no resolution token.
+        # Mirrors the scene→file fallback already used for site/date above.
+        "quality": file_data.get("quality") or scene_data.get("quality", ""),
         "vf": file_data.get("video_format", ""),
         "source": file_data.get("source", ""),
         "group": file_data.get("group", ""),
+        # Raw runtime seconds (from the scan's ffprobe / API); apply_template
+        # renders {duration} from this as "NNmin". Falls back to the API scene's
+        # duration when the file wasn't probed at scan time.
+        "duration": file_data.get("duration_seconds") or scene_data.get("duration"),
     }

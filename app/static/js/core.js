@@ -110,6 +110,7 @@ const btnMatch = document.getElementById('btn-match');
 const btnRename = document.getElementById('btn-rename');
 const btnBrowse = document.getElementById('btn-browse');
 const btnHistory = document.getElementById('btn-history');
+const btnLibrary = document.getElementById('btn-library');
 const recursive = document.getElementById('recursive');
 const skipOrganized = document.getElementById('skip-organized');
 const action = document.getElementById('action');
@@ -117,10 +118,23 @@ const template = document.getElementById('template');
 const flatRename = document.getElementById('flat-rename');
 const embedModeSel = document.getElementById('embed-mode');
 
-/** Currently-selected metadata write mode ('embed' | 'smart' | 'nfo_only'). */
+// Metadata write modes exposed in the UI: 'smart' (Both), 'embed_only'
+// (Embedded only), 'nfo_only' (Sidecar only). 'embed' is a legacy API value
+// (remux+NFO) not shown in the picker — treated like 'smart' if ever seen.
+const _UI_EMBED_MODES = ['smart', 'embed_only', 'nfo_only'];
+
+/** Currently-selected metadata write mode; defaults to 'smart' (Both). */
 function _getEmbedMode() {
     const v = embedModeSel && embedModeSel.value;
-    return (v === 'nfo_only' || v === 'smart') ? v : 'embed';
+    return _UI_EMBED_MODES.includes(v) ? v : 'smart';
+}
+
+/** Apply a persisted default metadata mode to the toolbar picker + cache it. */
+function _applyEmbedMode(mode) {
+    const m = _UI_EMBED_MODES.includes(mode) ? mode : 'smart';
+    localStorage.setItem('amm_embed_mode', m);
+    if (embedModeSel) embedModeSel.value = m;
+    return m;
 }
 
 // ─── Live template preview ────────────────────────────────────────────────────
@@ -359,6 +373,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     // server (settings.json) is the durable source of truth and is reconciled
     // immediately after, so a fresh browser/profile still picks up the choice.
     applyTheme(localStorage.getItem('amm_theme') || 'default');
+    _applyEmbedMode(localStorage.getItem('amm_embed_mode') || 'smart');
     await loadI18n();
     applyI18nToDOM();
     reconcilePrefsFromServer();   // fire-and-forget; updates if server differs
@@ -428,6 +443,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     document.getElementById('history-ok').addEventListener('click', () => {
         historyModal.classList.add('hidden');
     });
+
+    // Library modal (catalog stats + duplicates)
+    btnLibrary.addEventListener('click', openLibraryModal);
+    const _libClose = () => document.getElementById('library-modal').classList.add('hidden');
+    document.getElementById('library-close').addEventListener('click', _libClose);
+    document.getElementById('library-ok').addEventListener('click', _libClose);
     
     document.getElementById('history-undo').addEventListener('click', undoLastRename);
 
@@ -595,6 +616,9 @@ async function reconcilePrefsFromServer() {
             await loadI18n();
             applyI18nToDOM();
         }
+
+        // Default metadata write mode (persisted server-side; survives restarts).
+        if (data.embed_mode) _applyEmbedMode(data.embed_mode);
     } catch (_) {
         // Non-fatal — keep the cached values.
     }
@@ -689,8 +713,10 @@ async function openSettingsModal() {
     // current choice instantly; the server fetch below corrects them if needed.
     const langSel  = document.getElementById('settings-lang');
     const themeSel = document.getElementById('settings-theme');
+    const embedSel = document.getElementById('settings-embed-mode');
     if (langSel)  langSel.value  = localStorage.getItem('amm_locale') || 'en';
     if (themeSel) themeSel.value = localStorage.getItem('amm_theme')  || 'default';
+    if (embedSel) embedSel.value = localStorage.getItem('amm_embed_mode') || 'smart';
 
     // Fetch current status from the server
     try {
@@ -701,6 +727,7 @@ async function openSettingsModal() {
             // Server is authoritative for the saved preferences.
             if (langSel  && data.locale) langSel.value  = data.locale;
             if (themeSel && data.theme)  themeSel.value = data.theme;
+            if (embedSel && data.embed_mode) embedSel.value = data.embed_mode;
         }
     } catch (_) {
         // Non-fatal — badges stay in default state
@@ -716,6 +743,7 @@ async function saveSettings() {
     const stashdbVal = document.getElementById('settings-stashdb-key')?.value.trim() || '';
     const localeVal  = document.getElementById('settings-lang')?.value   || 'en';
     const themeVal   = document.getElementById('settings-theme')?.value  || 'default';
+    const embedVal   = document.getElementById('settings-embed-mode')?.value || 'smart';
 
     try {
         const resp = await fetch('/api/settings', {
@@ -726,6 +754,7 @@ async function saveSettings() {
                 stashdb_api_key: stashdbVal || null,
                 locale:          localeVal,
                 theme:           themeVal,
+                embed_mode:      embedVal,
             }),
         });
 
@@ -751,6 +780,9 @@ async function saveSettings() {
         const newTheme = data.theme || themeVal;
         localStorage.setItem('amm_theme', newTheme);
         applyTheme(newTheme);
+
+        // Default metadata write mode → cache + apply to the toolbar picker.
+        _applyEmbedMode(data.embed_mode || embedVal);
 
         const newLocale = data.locale || localeVal;
         if (newLocale !== (localStorage.getItem('amm_locale') || 'en')) {

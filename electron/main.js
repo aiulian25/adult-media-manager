@@ -174,6 +174,10 @@ function startPython() {
         // users can browse and scan any directory on their machine.
         AMM_NATIVE:       "1",
         AMM_HOME:         os.homedir(),
+        // Single version source for the native build: app.getVersion() reads
+        // package.json's version, so the backend's /docs + /api/health match the
+        // app (no stale literal in main.py). See app.main._resolve_app_version.
+        AMM_VERSION:      app.getVersion(),
         // Uvicorn / Python diagnostics
         PYTHONUNBUFFERED: "1",
         // Python must not try to write .pyc files to read-only package dirs

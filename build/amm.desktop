@@ -9,5 +9,4 @@ Categories=AudioVideo;Video;Utility;
 Terminal=false
 StartupWMClass=AdultMediaManager
 StartupNotify=true
-X-AppImage-Version=1.0.0
 Keywords=adult;media;organizer;metadata;rename;scan;

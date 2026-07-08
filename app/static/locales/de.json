@@ -1,6 +1,7 @@
 {
   "app.title": "Adult Media Manager",
   "nav.history": "Verlauf",
+  "nav.library": "Bibliothek",
   "nav.rename": "Umbenennen",
   "nav.browse": "Durchsuchen",
   "nav.scan": "Scannen",
@@ -216,5 +217,23 @@
   "ctx.copied": "Kopiert",
   "match.remove": "Entfernen",
   "match.remove_hint": "Diese Datei in der App ausblenden (wird nicht von der Festplatte gelöscht)",
-  "match.removed": "Aus Liste entfernt"
+  "match.removed": "Aus Liste entfernt",
+  "library.title": "Bibliothek",
+  "library.tracked": "Erfasst",
+  "library.organized": "Organisiert",
+  "library.confirmed": "Bestätigt",
+  "library.duplicate_groups": "Duplikatgruppen",
+  "library.dupes_none": "Keine Duplikate gefunden",
+  "library.copies": "{n} Kopien",
+  "library.identical": "Identisch",
+  "library.similar": "Ähnlich (Re-Encode)",
+  "library.loading": "Wird geladen…",
+  "library.load_failed": "Bibliothek konnte nicht geladen werden",
+  "rename.companions_moved": "+{n} Begleitdatei(en) verschoben",
+  "status.scan_skipped": "{count} übersprungen (kein Medium/versteckt/nicht lesbar)",
+  "toolbar.metadata.both": "Beides — Datei + .nfo",
+  "toolbar.metadata.embedded": "Nur eingebettet (in Datei)",
+  "toolbar.metadata.sidecar": "Nur Sidecar (.nfo)",
+  "settings.metadata_mode": "Standard-Metadatenschreibweise",
+  "settings.metadata_mode_hint": "Wie Metadaten beim Umbenennen/Speichern geschrieben werden. \"Beides\" (empfohlen) bettet Tags in die Datei ein UND schreibt eine .nfo-Sidecar-Datei. Bleibt über Neustarts erhalten."
 }

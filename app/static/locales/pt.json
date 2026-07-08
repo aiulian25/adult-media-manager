@@ -1,6 +1,7 @@
 {
   "app.title": "Adult Media Manager",
   "nav.history": "Histórico",
+  "nav.library": "Biblioteca",
   "nav.rename": "Renomear",
   "nav.browse": "Procurar",
   "nav.scan": "Verificar",
@@ -216,5 +217,23 @@
   "ctx.copied": "Copiado",
   "match.remove": "Remover",
   "match.remove_hint": "Ocultar este ficheiro na aplicação (não o elimina do disco)",
-  "match.removed": "Removido da lista"
+  "match.removed": "Removido da lista",
+  "library.title": "Biblioteca",
+  "library.tracked": "Rastreados",
+  "library.organized": "Organizados",
+  "library.confirmed": "Confirmados",
+  "library.duplicate_groups": "Grupos de duplicados",
+  "library.dupes_none": "Nenhum ficheiro duplicado encontrado",
+  "library.copies": "{n} cópias",
+  "library.identical": "Idênticos",
+  "library.similar": "Semelhante (recodificado)",
+  "library.loading": "A carregar…",
+  "library.load_failed": "Falha ao carregar a biblioteca",
+  "rename.companions_moved": "+{n} ficheiro(s) associado(s) movido(s)",
+  "status.scan_skipped": "{count} ignorado(s) (não multimédia/ocultos/ilegíveis)",
+  "toolbar.metadata.both": "Ambos — ficheiro + .nfo",
+  "toolbar.metadata.embedded": "Apenas incorporado (no ficheiro)",
+  "toolbar.metadata.sidecar": "Apenas sidecar (.nfo)",
+  "settings.metadata_mode": "Gravação de metadados predefinida",
+  "settings.metadata_mode_hint": "Como os metadados são guardados ao renomear/guardar. \"Ambos\" (recomendado) incorpora etiquetas no ficheiro E escreve um sidecar .nfo. Mantido entre reinícios."
 }

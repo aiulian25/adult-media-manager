@@ -25,7 +25,15 @@ Strategy vocabulary (canonical → what it does):
   • (nfo_only)     – no container write at all; the caller writes only the NFO.
 
 Public mode names accepted by the API stay backward-compatible:
-  "embed" ≡ remux-only, "smart" ≡ in-place-then-remux, "nfo_only" ≡ no embed.
+  "embed" ≡ remux-only (+ NFO), "smart" ≡ in-place-then-remux (+ NFO),
+  "nfo_only" ≡ sidecar only (no container write),
+  "embed_only" ≡ in-place-then-remux container write with NO NFO sidecar.
+
+The container-write PLAN is the only thing decided here; whether an NFO sidecar
+is ALSO written is decided by the app layer (per mode: nfo_only/smart/embed write
+one; embed_only does not). "embed_only" therefore shares the fast in-place plan
+with "smart" — the two differ only by the sidecar, which lives outside this pure
+planner.
 """
 
 from typing import Optional
@@ -36,7 +44,10 @@ MATROSKA_EXTS: frozenset[str] = frozenset({".mkv", ".mk3d", ".webm"})
 MP4_LIKE_EXTS: frozenset[str] = frozenset({".mp4", ".m4v", ".mov", ".m4a"})
 
 # Public embed modes (the API/UI contract). Kept stable for backward compat.
-EMBED_MODES: frozenset[str] = frozenset({"embed", "smart", "nfo_only"})
+#   nfo_only    → sidecar only (no container write)
+#   embed_only  → container tags only, NO sidecar
+#   smart/embed → both (container tags + sidecar)
+EMBED_MODES: frozenset[str] = frozenset({"embed", "smart", "nfo_only", "embed_only"})
 
 
 def validate_embed_mode(v: str) -> str:
@@ -130,8 +141,10 @@ def plan_embed(
 
     Args:
         ext: lowercased file extension (e.g. ".mkv").
-        mode: public mode — "nfo_only" | "embed" | "smart" (aliases:
-              "remux" ≡ embed, "inplace" ≡ smart).
+        mode: public mode — "nfo_only" | "embed" | "smart" | "embed_only"
+              (aliases: "remux" ≡ embed, "inplace" ≡ smart). "embed_only" shares
+              "smart"'s in-place container plan — the two differ only by whether
+              the app also writes a sidecar, which is decided outside this planner.
         has_mkvpropedit / has_atomicparsley: whether each in-place tool resolved.
 
     Returns:
@@ -144,8 +157,8 @@ def plan_embed(
     if mode in ("embed", "remux"):
         return ["remux"]
 
-    # "smart" / "inplace": prefer the fast in-place editor for the container,
-    # then fall back to the remux.
+    # "smart" / "inplace" / "embed_only": prefer the fast in-place editor for the
+    # container, then fall back to the remux.
     if ext in MATROSKA_EXTS and has_mkvpropedit:
         return ["mkvpropedit", "remux"]
     if ext in MP4_LIKE_EXTS and has_atomicparsley:

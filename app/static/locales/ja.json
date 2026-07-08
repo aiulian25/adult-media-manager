@@ -1,6 +1,7 @@
 {
   "app.title": "Adult Media Manager",
   "nav.history": "履歴",
+  "nav.library": "ライブラリ",
   "nav.rename": "名前変更",
   "nav.browse": "参照",
   "nav.scan": "スキャン",
@@ -216,5 +217,23 @@
   "ctx.copied": "コピーしました",
   "match.remove": "削除",
   "match.remove_hint": "このファイルをアプリ上で非表示にします（ディスクからは削除されません）",
-  "match.removed": "リストから削除しました"
+  "match.removed": "リストから削除しました",
+  "library.title": "ライブラリ",
+  "library.tracked": "登録済み",
+  "library.organized": "整理済み",
+  "library.confirmed": "確認済み",
+  "library.duplicate_groups": "重複グループ",
+  "library.dupes_none": "重複ファイルは見つかりません",
+  "library.copies": "{n} 個のコピー",
+  "library.identical": "完全一致",
+  "library.similar": "類似（再エンコード）",
+  "library.loading": "読み込み中…",
+  "library.load_failed": "ライブラリの読み込みに失敗しました",
+  "rename.companions_moved": "関連ファイル {n} 件も移動",
+  "status.scan_skipped": "{count} 件スキップ（非メディア/隠し/読み取り不可）",
+  "toolbar.metadata.both": "両方 — ファイル + .nfo",
+  "toolbar.metadata.embedded": "埋め込みのみ（ファイル内）",
+  "toolbar.metadata.sidecar": "サイドカーのみ（.nfo）",
+  "settings.metadata_mode": "既定のメタデータ書き込み",
+  "settings.metadata_mode_hint": "名前変更/保存時のメタデータの書き込み方法。「両方」（推奨）はタグをファイルに埋め込み、.nfo サイドカーも書き込みます。再起動後も保持されます。"
 }

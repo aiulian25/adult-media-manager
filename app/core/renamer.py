@@ -5,8 +5,17 @@ File renamer - handles move, copy, hardlink, symlink operations.
 import shutil
 from pathlib import Path
 from enum import Enum
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
+
+from app.core.detector import SUBTITLE_EXTENSIONS
+
+
+# Non-subtitle sidecar files that belong to a video and should travel with it on
+# a rename: artwork (posters/fanart) and a pre-existing NFO. Combined with
+# SUBTITLE_EXTENSIONS to form the full companion set.
+COMPANION_ART_EXTS: frozenset[str] = frozenset({".jpg", ".jpeg", ".png", ".nfo"})
+_COMPANION_EXTS: frozenset[str] = frozenset(SUBTITLE_EXTENSIONS) | COMPANION_ART_EXTS
 
 
 class RenameAction(str, Enum):
@@ -26,6 +35,10 @@ class RenameResult:
     new_path: Optional[Path]
     action: RenameAction
     error: Optional[str] = None
+    # Results of any companion (subtitle/NFO/artwork) files moved alongside this
+    # video with the same action. Empty for non-video renames or when there are
+    # no companions. Populated by execute_rename_with_companions.
+    companions: list["RenameResult"] = field(default_factory=list)
 
 
 def _copy_file(src: str, dst: str) -> None:
@@ -159,6 +172,85 @@ def execute_rename(
             action=action,
             error=str(e)
         )
+
+
+def find_companions(video_path: Path) -> list[Path]:
+    """Return sidecar files in the same directory that belong to ``video_path``.
+
+    A companion is a subtitle / NFO / artwork file whose name is:
+      • exactly ``<stem><suffix>``      → ``Scene.srt``, ``Scene.nfo``, ``Scene.jpg``
+      • ``<stem>.<...>``                 → ``Scene.eng.srt`` (multi-part sub lang)
+      • ``<stem>-<...>``                 → ``Scene-poster.jpg`` / ``Scene-fanart.jpg``
+
+    The match is deliberately anchored to ``stem`` followed by ``.`` or ``-`` (not a
+    bare prefix), so ``Scene2.srt`` is NOT treated as a companion of ``Scene.mp4``.
+    The video itself and any non-companion extension (including sibling *videos*
+    that happen to share the stem) are excluded. Best-effort: an unreadable
+    directory yields an empty list rather than raising.
+    """
+    stem = video_path.stem
+    if not stem:
+        return []
+    try:
+        siblings = list(video_path.parent.iterdir())
+    except OSError:
+        return []
+
+    out: list[Path] = []
+    for p in siblings:
+        if p == video_path:
+            continue
+        if p.suffix.lower() not in _COMPANION_EXTS:
+            continue
+        try:
+            if not p.is_file():
+                continue
+        except OSError:
+            continue
+        name = p.name
+        if name == stem + p.suffix or name.startswith(stem + ".") or name.startswith(stem + "-"):
+            out.append(p)
+    return out
+
+
+def execute_rename_with_companions(
+    old_path: Path,
+    new_path: Path,
+    action: RenameAction,
+) -> RenameResult:
+    """Rename a video AND co-locate its companion sidecars with the same action.
+
+    Runs :func:`execute_rename` for the video, then for each companion moves it to
+    the video's new stem while PRESERVING everything after the old stem — so
+    ``Scene.eng.srt`` becomes ``NewName.eng.srt`` (keeping the ``.eng`` language
+    tag) and ``Scene-poster.jpg`` becomes ``NewName-poster.jpg``. (Note: this is
+    why we don't use ``new.stem + companion.suffix`` — ``Path.suffix`` of
+    ``Scene.eng.srt`` is only ``.srt`` and would drop ``.eng``.)
+
+    Companions are only chased when the primary actually relocated the file (not a
+    TEST dry-run, a no-op self-rename, or a failure). A companion failure (e.g. its
+    target already exists) is recorded on ``primary.companions`` but never fails the
+    primary. Returns the primary result with companion results attached.
+    """
+    primary = execute_rename(old_path, new_path, action)
+
+    if (
+        not primary.success
+        or action == RenameAction.TEST
+        or old_path.resolve() == new_path.resolve()
+    ):
+        return primary
+
+    old_stem = old_path.stem
+    new_stem = new_path.stem
+    for comp in find_companions(old_path):
+        # comp.name is guaranteed to start with old_stem (see find_companions), so
+        # the remainder is the part to keep verbatim after swapping the stem.
+        remainder = comp.name[len(old_stem):]
+        comp_new = new_path.with_name(new_stem + remainder)
+        primary.companions.append(execute_rename(comp, comp_new, action))
+
+    return primary
 
 
 def batch_execute(operations: list[tuple[Path, Path, RenameAction]]) -> list[RenameResult]:

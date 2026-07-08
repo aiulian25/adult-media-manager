@@ -1,6 +1,7 @@
 {
   "app.title": "Adult Media Manager",
   "nav.history": "Historique",
+  "nav.library": "Bibliothèque",
   "nav.rename": "Renommer",
   "nav.browse": "Parcourir",
   "nav.scan": "Analyser",
@@ -216,5 +217,23 @@
   "ctx.copied": "Copié",
   "match.remove": "Retirer",
   "match.remove_hint": "Masquer ce fichier dans l'application (ne le supprime pas du disque)",
-  "match.removed": "Retiré de la liste"
+  "match.removed": "Retiré de la liste",
+  "library.title": "Bibliothèque",
+  "library.tracked": "Suivis",
+  "library.organized": "Organisés",
+  "library.confirmed": "Confirmés",
+  "library.duplicate_groups": "Groupes de doublons",
+  "library.dupes_none": "Aucun doublon trouvé",
+  "library.copies": "{n} copies",
+  "library.identical": "Identiques",
+  "library.similar": "Similaire (ré-encodage)",
+  "library.loading": "Chargement…",
+  "library.load_failed": "Échec du chargement de la bibliothèque",
+  "rename.companions_moved": "+{n} fichier(s) associé(s) déplacé(s)",
+  "status.scan_skipped": "{count} ignoré(s) (non multimédia/cachés/illisibles)",
+  "toolbar.metadata.both": "Les deux — fichier + .nfo",
+  "toolbar.metadata.embedded": "Intégré seulement (fichier)",
+  "toolbar.metadata.sidecar": "Sidecar seulement (.nfo)",
+  "settings.metadata_mode": "Écriture des métadonnées par défaut",
+  "settings.metadata_mode_hint": "Comment les métadonnées sont enregistrées lors du renommage/de l'enregistrement. « Les deux » (recommandé) intègre les tags dans le fichier ET écrit un sidecar .nfo. Conservé entre les redémarrages."
 }

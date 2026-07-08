@@ -156,6 +156,57 @@ body {
     background: rgba(255, 255, 255, 0.08);
 }
 
+/* ═══ Library modal (catalog stats + duplicates) ═══ */
+.library-stats {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 10px;
+    margin-bottom: 18px;
+}
+.library-tile {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    padding: 14px 8px;
+    border: 1px solid var(--glass-border);
+    border-radius: 12px;
+    background: var(--glass-bg);
+}
+.library-tile-num   { font-size: 1.6rem; font-weight: 700; color: var(--text-primary); }
+.library-tile-label { font-size: .72rem; text-transform: uppercase; letter-spacing: .04em; color: var(--text-muted); }
+.library-section-title { margin: 4px 0 10px; font-size: .9rem; color: var(--text-secondary); }
+.library-dupes { display: flex; flex-direction: column; gap: 10px; }
+.library-group { padding: 12px 14px; }
+.library-group-head { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.library-group-kind {
+    font-size: .7rem; font-weight: 600; padding: 2px 8px; border-radius: 10px;
+    text-transform: uppercase; letter-spacing: .03em;
+}
+.library-kind-oshash { background: rgba(255, 71, 87, 0.18);  color: var(--accent); }
+.library-kind-phash  { background: rgba(255, 193, 7, 0.18);  color: var(--warning); }
+.library-group-count { font-size: .78rem; color: var(--text-muted); }
+.library-dupe-row {
+    display: flex; align-items: center; gap: 10px;
+    padding: 5px 0; border-top: 1px solid var(--glass-border);
+}
+.library-dupe-row:first-of-type { border-top: none; }
+.library-dupe-path {
+    flex: 1; min-width: 0;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    font-size: .82rem; font-family: 'JetBrains Mono', monospace;
+}
+.library-dupe-size { font-size: .78rem; color: var(--text-secondary); white-space: nowrap; }
+.library-remove { font-size: 11px; padding: 3px 8px; }
+.library-empty, .library-loading, .library-error {
+    text-align: center; padding: 18px; color: var(--text-muted);
+}
+.library-error { color: var(--error); }
+
+@media (max-width: 640px) {
+    .library-stats { grid-template-columns: repeat(2, 1fr); }
+}
+
 /* ═══ Top Bar ═══ */
 .topbar {
     display: flex;

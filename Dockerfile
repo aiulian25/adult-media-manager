@@ -1,9 +1,14 @@
 # Adult Media Manager Docker Container
 FROM python:3.11-slim
 
+# Single version source for the image: the ARG default feeds the LABEL AND the
+# runtime ENV (read by app.main._resolve_app_version + docker-entrypoint.sh), so a
+# release bump changes ONE line here. Keep it in sync with package.json's version.
+ARG AMM_VERSION=1.3.0
+
 LABEL maintainer="Adult Media Manager <app@adultmediamanager.local>"
 LABEL description="Adult media metadata organizer with TPDB integration"
-LABEL version="1.2.2"
+LABEL version="${AMM_VERSION}"
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1 \
@@ -14,7 +19,8 @@ ENV PYTHONUNBUFFERED=1 \
     AMM_PORT=8887 \
     PUID=1000 \
     PGID=1000 \
-    DATA_DIR=/data
+    DATA_DIR=/data \
+    AMM_VERSION=${AMM_VERSION}
 
 # Install system dependencies
 RUN apt-get update && \

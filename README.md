@@ -130,10 +130,10 @@ No Docker required. Ships a self-contained Python 3.12 runtime — no system Pyt
 
 ### AppImage (recommended — no root required)
 
-1. Download `Adult.Media.Manager-1.2.2.AppImage`
+1. Download `Adult.Media.Manager-1.3.0.AppImage`
 2. Make it executable:
    ```bash
-   chmod +x Adult.Media.Manager-1.2.2.AppImage
+   chmod +x Adult.Media.Manager-1.3.0.AppImage
    ```
 3. Double-click it (or run it from the terminal)
 
@@ -147,7 +147,7 @@ From that point, launch it from your application menu. The original downloaded f
 ### .deb Package (Debian / Ubuntu / Mint)
 
 ```bash
-sudo apt install ./adult-media-manager_1.2.2_amd64.deb
+sudo apt install ./adult-media-manager_1.3.0_amd64.deb
 ```
 
 Launch **Adult Media Manager** from your application menu, or:
@@ -155,6 +155,16 @@ Launch **Adult Media Manager** from your application menu, or:
 ```bash
 /opt/Adult\ Media\ Manager/adult-media-manager --no-sandbox
 ```
+
+### .rpm Package (Fedora / RHEL / openSUSE)
+
+Requires [RPM Fusion](https://rpmfusion.org/) enabled for the `ffmpeg` / `mkvtoolnix` media tools:
+
+```bash
+sudo dnf install ./adult-media-manager-1.3.0.x86_64.rpm
+```
+
+Remove with `sudo dnf remove adult-media-manager`.
 
 **API keys in native installs:** Use the **⚙ Settings** page inside the app. Keys are stored in `~/.local/share/adult-media-manager/settings.json`.
 
@@ -244,6 +254,7 @@ Click **History** to see every action AMM has performed. Each move/copy/hardlink
 | `{vf}` | Video codec | `x264`, `HEVC` |
 | `{source}` | Source type | `WEB-DL` |
 | `{group}` | Release group | `XLF` |
+| `{duration}` | Runtime in whole minutes | `42min` |
 | `{ext}` | File extension | `mp4`, `mkv` |
 
 ---
@@ -300,6 +311,8 @@ Click **History** to see every action AMM has performed. Each move/copy/hardlink
 | `PGID` | `1000` | Group ID for file ownership |
 | `DATA_DIR` | `/data` | Persistent data directory (history, settings, catalog, cache, embed staging) |
 | `AMM_SCAN_PROBE_DURATION` | `1` | Probe each video's duration at scan time (`ffprobe`) to sharpen match scoring. Set `0` to skip on very large libraries / slow mounts |
+| `AMM_SCAN_PHASH` | `0` | Compute a perceptual hash (pHash) per scanned video so the Duplicates view can group **re-encodes** of the same scene (not just byte-identical copies). Decodes one frame per file with `ffmpeg` — slower scans, so it is opt-in (`1` to enable) |
+| `AMM_FETCH_POSTERS` | `1` | On an API-matched rename, download the scene poster next to the video as `<name>-poster.jpg` (referenced by the `.nfo`) so Jellyfin/Plex show it. Set `0` for zero-egress deployments (no server-side image fetch). Manually chosen posters are copied locally and unaffected |
 | `AMM_MATCH_CACHE_MAX` | `50000` | Max entries in the persistent match cache (`match_cache.json`). `0` = unlimited. Confirmed matches are never evicted |
 | `AMM_DATE_TOLERANCE_DAYS` | `7` | How many days apart a file's date and a scene's date may be and still score as a date match |
 | `AMM_HISTORY_MAX` | `10000` | Max entries kept in `history.json`. `0` = unlimited |

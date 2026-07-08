@@ -395,3 +395,100 @@ async function revertHistoryEntry(id, btnEl) {
     }
 }
 
+// ═══ Library Modal (catalog stats + duplicates) ═══
+// Surfaces the catalog data that the backend already computes but nothing
+// displayed: /api/catalog/stats (totals) and /api/catalog/duplicates (groups of
+// identical or — with AMM_SCAN_PHASH — near-identical files). Read-only; the only
+// action is dropping a copy from the current working list (never deletes on disk).
+let _libraryGroups = [];   // last-fetched duplicate groups, for in-place re-render
+
+async function openLibraryModal() {
+    document.getElementById('library-modal').classList.remove('hidden');
+    const statsEl = document.getElementById('library-stats');
+    const dupesEl  = document.getElementById('library-dupes');
+    statsEl.innerHTML = `<div class="library-loading">${escapeHtml(t('library.loading'))}</div>`;
+    dupesEl.innerHTML = '';
+
+    try {
+        const [statsResp, dupesResp] = await Promise.all([
+            fetch('/api/catalog/stats'),
+            fetch('/api/catalog/duplicates'),
+        ]);
+        if (!statsResp.ok || !dupesResp.ok) throw new Error(t('library.load_failed'));
+        const stats = await statsResp.json();
+        _libraryGroups = (await dupesResp.json()).groups || [];
+
+        statsEl.innerHTML = _libraryStatTiles(stats);
+        _renderLibraryDupes();
+    } catch (err) {
+        statsEl.innerHTML = `<div class="library-error">${escapeHtml(err.message)}</div>`;
+    }
+}
+
+function _libraryStatTiles(s) {
+    const tile = (labelKey, val) =>
+        `<div class="library-tile"><span class="library-tile-num">${Number(val) || 0}</span>` +
+        `<span class="library-tile-label">${escapeHtml(t(labelKey))}</span></div>`;
+    return tile('library.tracked', s.total)
+         + tile('library.organized', s.organized)
+         + tile('library.confirmed', s.confirmed)
+         + tile('library.duplicate_groups', s.duplicates);
+}
+
+// A duplicate path is only "removable" here if it's actually in the current
+// scan/match working list — otherwise Remove would be a confusing no-op, so we
+// omit the button and leave the row informational.
+function _isInWorkingList(path) {
+    try {
+        return (typeof matchedResults !== 'undefined' &&
+                matchedResults.some(r => r.original && r.original.path === path))
+            || (typeof scannedFiles !== 'undefined' &&
+                scannedFiles.some(f => f.path === path));
+    } catch (_) { return false; }
+}
+
+function _renderLibraryDupes() {
+    const dupesEl = document.getElementById('library-dupes');
+    if (!_libraryGroups.length) {
+        dupesEl.innerHTML = `<div class="library-empty">${escapeHtml(t('library.dupes_none'))}</div>`;
+        return;
+    }
+    dupesEl.innerHTML = _libraryGroups.map(g => {
+        const kindLabel = g.kind === 'phash' ? t('library.similar') : t('library.identical');
+        const paths = g.paths || [];
+        const sizes = g.sizes || [];
+        const rows = paths.map((p, i) => {
+            const size = formatFileSize(sizes[i]);
+            const removeBtn = _isInWorkingList(p)
+                ? `<button class="glass-btn library-remove" data-path="${escapeHtml(p)}">✕ ${escapeHtml(t('match.remove'))}</button>`
+                : '';
+            return `<div class="library-dupe-row">
+                        <span class="library-dupe-path" title="${escapeHtml(p)}">${escapeHtml(p)}</span>
+                        <span class="library-dupe-size">${escapeHtml(size)}</span>
+                        ${removeBtn}
+                    </div>`;
+        }).join('');
+        return `<div class="glass-panel library-group">
+                    <div class="library-group-head">
+                        <span class="library-group-kind library-kind-${escapeHtml(g.kind)}">${escapeHtml(kindLabel)}</span>
+                        <span class="library-group-count">${escapeHtml(t('library.copies', { n: g.count }))}</span>
+                    </div>
+                    ${rows}
+                </div>`;
+    }).join('');
+}
+
+// Delegated Remove handler: drop the chosen copy from the working list (reuses
+// match.js:removeMatchedFile — hides it from the app, never deletes on disk),
+// then re-render so the button disappears for the now-removed path.
+(function initLibraryInput() {
+    const dupes = document.getElementById('library-dupes');
+    if (!dupes) return;
+    dupes.addEventListener('click', (e) => {
+        const btn = e.target.closest('.library-remove');
+        if (!btn || !btn.dataset.path) return;
+        if (typeof removeMatchedFile === 'function') removeMatchedFile(btn.dataset.path);
+        _renderLibraryDupes();
+    });
+})();
+

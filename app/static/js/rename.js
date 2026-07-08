@@ -513,6 +513,7 @@ function displayRenameResults(results) {
                             </div>
                             <div class="file-name" style="color: var(--text-muted);">From: ${escapeHtml(result.old_path)}</div>
                             ${result.new_path ? `<div class="file-name">To: ${escapeHtml(result.new_path)}</div>` : ''}
+                            ${result.companions_moved ? `<div style="color: var(--text-secondary); font-size: 11px; margin-top: 4px;">${escapeHtml(t('rename.companions_moved', { n: result.companions_moved }))}</div>` : ''}
                             ${result.error ? `<div style="color: var(--error); font-size: 12px; margin-top: 4px;">${escapeHtml(result.error)}</div>` : ''}
                             ${result.embed_warning ? `<div style="color: var(--warning, #f0a500); font-size: 11px; margin-top: 4px;">⚠️ ${escapeHtml(result.embed_warning)}</div>` : ''}
                         </div>

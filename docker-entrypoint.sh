@@ -47,7 +47,7 @@ umask "${UMASK}"
 
 # Print startup message
 echo "========================================="
-echo "Adult Media Manager v1.0.0"
+echo "Adult Media Manager v${AMM_VERSION:-}"
 echo "========================================="
 echo "Running as UID:GID ${PUID}:${PGID}  umask ${UMASK}"
 echo "Web UI: http://localhost:${AMM_PORT:-8887}"
