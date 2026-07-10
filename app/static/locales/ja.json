@@ -255,5 +255,21 @@
   "settings.update_downloaded": "ダウンロード完了",
   "settings.update_downloaded_msg": "{path} に保存しました",
   "settings.update_download_failed": "ダウンロード失敗",
-  "settings.update_restart": "再起動して更新を完了"
+  "settings.update_restart": "再起動して更新を完了",
+  "settings.update_install": "アップデートをインストール",
+  "settings.update_installing": "インストール中…",
+  "settings.update_installed_ok": "アップデートをインストールしました",
+  "settings.update_installed_ok_msg": "アプリを再起動して更新を完了してください。",
+  "settings.update_install_failed": "インストール失敗",
+  "settings.update_restart_pending": "アップデートをインストール済み — 再起動して完了",
+  "toolbar.preset_site_date": "サイト + 日付",
+  "toolbar.preset_performer_focus": "出演者",
+  "toolbar.preset_studio_organized": "スタジオ",
+  "toolbar.preset_simple": "シンプル",
+  "toolbar.preset_multi_performer": "複数出演者",
+  "toolbar.preset_dated_folders": "日付フォルダ",
+  "match.lookup_error_auth": "照合失敗: APIキーが拒否されました — 結果不明、設定を確認してください",
+  "match.lookup_error_rate_limit": "照合失敗: レート制限 — 結果不明、後で再試行してください",
+  "match.lookup_error_network": "照合失敗: ネットワークエラー — 結果不明、再試行してください",
+  "match.lookup_error_internal": "照合失敗: 内部エラー — 結果不明"
 }

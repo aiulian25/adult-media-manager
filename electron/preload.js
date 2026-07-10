@@ -36,6 +36,10 @@ contextBridge.exposeInMainWorld("electronAPI", {
     // bridge in either direction beyond the version strings.
     getVersions: () => ipcRenderer.invoke("app:versions"),
     relaunchApp: () => ipcRenderer.invoke("app:relaunch"),
+    // Install a downloaded release file (the path returned by the backend's
+    // download endpoint). The main process re-validates the path and runs the
+    // package manager via pkexec (deb/rpm) or an unprivileged copy (AppImage).
+    installUpdate: (filePath) => ipcRenderer.invoke("app:install-update", filePath),
 
     // Opens the native OS picker (GTK/KDE/XDG portal). `mode` is "folder"
     // (directories) or "files" — Linux GTK can't combine the two in one dialog,

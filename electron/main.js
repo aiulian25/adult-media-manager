@@ -2,6 +2,7 @@
 
 const { app, BrowserWindow, nativeImage, shell, dialog, ipcMain } = require("electron");
 const { spawn, execFileSync }                     = require("child_process");
+const { planInstall }                             = require("./update-install");
 const path  = require("path");
 const fs    = require("fs");
 const os    = require("os");
@@ -408,6 +409,11 @@ ipcMain.handle("dialog:open", async (_e, mode) => {
 // upgrade replaces /opt/... underneath a running app the two diverge, and the
 // UI offers a relaunch. AppImage mounts are immutable, so they never diverge
 // there — the downloaded AppImage self-installs on first launch instead.
+// Set when an in-app AppImage upgrade landed on disk: the mounted image can't
+// show an on-disk version change (it is immutable), so this flag is how the UI
+// learns a restart will pick up the new build — and app:relaunch re-execs it.
+let pendingUpdateExec = null;
+
 ipcMain.handle("app:versions", () => {
     let onDisk = null;
     try {
@@ -415,14 +421,83 @@ ipcMain.handle("app:versions", () => {
             fs.readFileSync(path.join(app.getAppPath(), "package.json"), "utf8"));
         onDisk = pkg.version || null;
     } catch {}
-    return { running: app.getVersion(), onDisk };
+    return { running: app.getVersion(), onDisk, pendingUpdate: !!pendingUpdateExec };
 });
 
 // Takes no arguments from the renderer — it can only trigger a clean relaunch.
 ipcMain.handle("app:relaunch", () => {
     killPython();          // app.exit() skips before-quit, so stop the backend here
-    app.relaunch();
+    if (pendingUpdateExec) {
+        // Re-exec the freshly installed AppImage instead of the old mount.
+        // APPIMAGE_EXTRACT_AND_RUN keeps this working on FUSE-less systems.
+        app.relaunch({ execPath: pendingUpdateExec,
+                       env: { ...process.env, APPIMAGE_EXTRACT_AND_RUN: "1" } });
+    } else {
+        app.relaunch();
+    }
     app.exit(0);
+});
+
+// ── In-app update install (update-notifier extension) ─────────────────────────
+// GUI-only upgrade path: double-clicking a downloaded .deb opens the distro's
+// app store, which sees the package name already installed and offers NOTHING
+// (Ubuntu App Center shows a dead "Installed" button). So the app installs the
+// verified download itself: deb/rpm through pkexec — polkit's native password
+// dialog is the user's consent gate — and AppImage as an unprivileged copy over
+// the self-installed location. planInstall re-validates the renderer-supplied
+// path (must be in ~/Downloads, must match our release-artifact names) and maps
+// each format to a FIXED argv: no shell, nothing renderer-shaped is executed.
+// Deliberately IPC-only — the HTTP API keeps zero privileged endpoints, so this
+// is unreachable from Docker or anything else on the network.
+ipcMain.handle("app:install-update", async (_e, filePath) => {
+    const plan = planInstall(filePath, os.homedir());
+    if (plan.error) return { ok: false, error: plan.error };
+    try {
+        fs.accessSync(plan.path, fs.constants.R_OK);
+    } catch {
+        return { ok: false, error: "Downloaded file not found — download it again" };
+    }
+
+    if (plan.kind === "appimage") {
+        try {
+            fs.mkdirSync(path.dirname(plan.dest), { recursive: true });
+            fs.copyFileSync(plan.path, plan.dest);
+            fs.chmodSync(plan.dest, 0o755);
+            pendingUpdateExec = plan.dest;
+            return { ok: true };
+        } catch (err) {
+            return { ok: false, error: err.message };
+        }
+    }
+
+    if (!fs.existsSync("/usr/bin/pkexec")) {
+        return { ok: false,
+                 error: "pkexec not available — install from a terminal instead" };
+    }
+    return await new Promise((resolve) => {
+        const child = spawn(plan.argv[0], plan.argv.slice(1),
+                            { stdio: ["ignore", "pipe", "pipe"] });
+        let errBuf = "";
+        child.stderr.on("data", d => { errBuf += d.toString(); });
+        const timer = setTimeout(() => {
+            child.kill("SIGKILL");
+            resolve({ ok: false, error: "Install timed out" });
+        }, 10 * 60 * 1000);
+        child.on("exit", (code) => {
+            clearTimeout(timer);
+            if (code === 0) return resolve({ ok: true });
+            // pkexec: 126 = auth dialog dismissed, 127 = not authorized.
+            if (code === 126 || code === 127) {
+                return resolve({ ok: false, error: "Authorization cancelled" });
+            }
+            const lastLine = errBuf.trim().split("\n").pop();
+            resolve({ ok: false, error: lastLine || `Installer exited with code ${code}` });
+        });
+        child.on("error", (err) => {
+            clearTimeout(timer);
+            resolve({ ok: false, error: err.message });
+        });
+    });
 });
 
 // ── Single-instance lock ──────────────────────────────────────────────────────

@@ -20,9 +20,13 @@ TEMPLATE_VARS: frozenset[str] = frozenset({
 })
 
 
-# Default templates — date is embedded as file metadata, NOT in filename
+# Preset templates — the ONE list the UI renders its preset buttons from
+# (/api/templates → _renderPresetButtons in core.js), so backend changes here
+# appear in the UI without HTML edits and the two can never drift (F13).
+# "site_date" doubles as the server-side fallback for rename requests that
+# carry no template, and matches the shipped default of the #template input.
 TEMPLATES = {
-    "site_date":        "{site}/{performer}/{site}.{scene}.{quality}",
+    "site_date":        "{site}/{performer}/{site}.{date}.{scene}.{quality}",
     "performer_focus":  "{performer}/{site} - {scene}",
     "studio_organized": "{site}/{year}/{scene}",
     "simple":           "{performer} - {scene} ({site})",

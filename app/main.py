@@ -1355,6 +1355,10 @@ async def _match_one_stashdb(file_data: dict, sem: asyncio.Semaphore) -> dict:
             results = await stashdb.search_scene(query=parsed_title)
 
         if not results:
+            # F15: distinguish "provider call failed" (auth/rate_limit/network)
+            # from "scene not in database" — the UI renders these differently.
+            if stashdb.last_error:
+                no_match["lookup_error"] = stashdb.last_error
             return no_match
 
         results_dicts = [_stashdb_scene_to_dict(s) for s in results[:5]]
@@ -1435,7 +1439,12 @@ async def _match_one_tpdb(file_data: dict, sem: asyncio.Semaphore, auto_match: b
                 }
             return {"original": file_data, "match": None, "confidence": 0, "alternatives": results_dicts}
 
-        return {"original": file_data, "match": None, "confidence": 0, "alternatives": []}
+        # F15: no results at all — if the provider call itself failed, say so
+        # instead of letting it masquerade as "scene not in database".
+        no_match = {"original": file_data, "match": None, "confidence": 0, "alternatives": []}
+        if tpdb.last_error:
+            no_match["lookup_error"] = tpdb.last_error
+        return no_match
 
 
 async def _cached_match(file_data: dict, do_match, refresh: bool, source: str,
@@ -1594,8 +1603,11 @@ async def match_stream(request: Request, session_id: str = Query(...)):
                 result = await _cached_match(
                     file_data, lambda: _match_one_tpdb(file_data, sem, auto_match),
                     req.refresh, "tpdb", cache_updates)
-        except Exception:
-            pass  # leave result as no-match on any transient error
+        except Exception as exc:
+            # F15: never silently downgrade a crash to "No match found" — tag
+            # the row so the UI says the lookup errored, and log server-side.
+            result["lookup_error"] = "internal"
+            print(f"WARNING: match failed for {file_data.get('filename', '?')}: {exc!r}")
 
         await q.put((idx, result))
 
@@ -3785,4 +3797,5 @@ async def health_check():
         "status": "healthy",
         "version": APP_VERSION,
         "tpdb_configured": tpdb is not None,
+        "stashdb_configured": stashdb is not None,
     }

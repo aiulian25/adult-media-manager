@@ -255,5 +255,21 @@
   "settings.update_downloaded": "Download complete",
   "settings.update_downloaded_msg": "Saved to {path}",
   "settings.update_download_failed": "Download failed",
-  "settings.update_restart": "Restart to finish update"
+  "settings.update_restart": "Restart to finish update",
+  "settings.update_install": "Install update",
+  "settings.update_installing": "Installing…",
+  "settings.update_installed_ok": "Update installed",
+  "settings.update_installed_ok_msg": "Restart the app to finish the update.",
+  "settings.update_install_failed": "Install failed",
+  "settings.update_restart_pending": "Update installed — restart to finish",
+  "toolbar.preset_site_date": "Site + Date",
+  "toolbar.preset_performer_focus": "Performer",
+  "toolbar.preset_studio_organized": "Studio",
+  "toolbar.preset_simple": "Simple",
+  "toolbar.preset_multi_performer": "Multi-performer",
+  "toolbar.preset_dated_folders": "Dated folders",
+  "match.lookup_error_auth": "Lookup failed: API key rejected — result unknown, check Settings",
+  "match.lookup_error_rate_limit": "Lookup failed: rate limited — result unknown, retry later",
+  "match.lookup_error_network": "Lookup failed: network error — result unknown, retry",
+  "match.lookup_error_internal": "Lookup failed: internal error — result unknown"
 }

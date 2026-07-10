@@ -62,16 +62,38 @@ class TPDBSite:
     logo_url: Optional[str] = None
 
 
+def _classify_http_error(e: Exception) -> str:
+    """Map an httpx error to a user-meaningful kind: auth | rate_limit | network.
+
+    Lets the caller distinguish "the provider call failed" from "the scene is
+    not in the database" (F15) — without ever surfacing raw exception text
+    (which can echo URLs/headers) to the client.
+    """
+    resp = getattr(e, "response", None)
+    if resp is not None:
+        if resp.status_code in (401, 403):
+            return "auth"
+        if resp.status_code == 429:
+            return "rate_limit"
+    return "network"
+
+
 class TPDBClient:
     """
     ThePornDB API client.
-    
+
     Requires TPDB_API_KEY environment variable.
     """
-    
+
     def __init__(self, api_key: Optional[str] = None):
         """Initialize TPDB client with API key."""
         self.api_key = api_key or os.getenv("TPDB_API_KEY")
+        # Kind of the most recent lookup failure (auth/rate_limit/network),
+        # None after a clean call. Reset on ENTRY to each lookup (not "cleared
+        # after read") so a stale flag can't mislabel a later success; with
+        # concurrent lookups a cross-task read is possible but harmless — the
+        # classified conditions (bad key, rate limit) are global anyway (F15).
+        self.last_error: Optional[str] = None
         if not self.api_key:
             raise ValueError(
                 "TPDB API key required. Set TPDB_API_KEY environment variable "
@@ -114,7 +136,8 @@ class TPDBClient:
             params["site"] = site
         if performer:
             params["performer"] = performer
-        
+
+        self.last_error = None
         try:
             resp = await self._client.get("/scenes", params=params)
             resp.raise_for_status()
@@ -126,7 +149,8 @@ class TPDBClient:
             
             return results
         except httpx.HTTPError as e:
-            print(f"TPDB API error: {e}")
+            self.last_error = _classify_http_error(e)
+            print(f"TPDB API error ({self.last_error}): {e}")
             return []
     
     async def parse_filename(self, filename: str) -> Optional[TPDBScene]:
@@ -143,7 +167,8 @@ class TPDBClient:
             Best matching scene or None
         """
         params = {"parse": filename}
-        
+
+        self.last_error = None
         try:
             resp = await self._client.get("/scenes", params=params)
             resp.raise_for_status()
@@ -154,7 +179,8 @@ class TPDBClient:
                 return self._parse_scene(items[0])
             return None
         except httpx.HTTPError as e:
-            print(f"TPDB parse error: {e}")
+            self.last_error = _classify_http_error(e)
+            print(f"TPDB parse error ({self.last_error}): {e}")
             return None
     
     async def get_scene(self, scene_id: str) -> Optional[TPDBScene]:

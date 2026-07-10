@@ -316,7 +316,18 @@ function _buildMatchRow({ result, index }) {
             .content.firstElementChild.cloneNode(true);
         node.id = `match-item-${index}`;
         node.querySelector('.match-cb').dataset.index = index;
-        node.querySelector('[data-nomatch]').textContent = `❌ ${t('match.no_match')}`;
+        // F15: a failed provider call is NOT "no match" — say the lookup
+        // errored (auth/rate-limit/network/internal) so the user knows the
+        // result is unknown rather than absent. Unknown kinds render as
+        // "internal" so a future kind never shows a raw i18n key.
+        if (result.lookup_error) {
+            const kind = ['auth', 'rate_limit', 'network', 'internal']
+                .includes(result.lookup_error) ? result.lookup_error : 'internal';
+            node.querySelector('[data-nomatch]').textContent =
+                `⚠ ${t('match.lookup_error_' + kind)}`;
+        } else {
+            node.querySelector('[data-nomatch]').textContent = `❌ ${t('match.no_match')}`;
+        }
         // Show the file size even with no match so duplicates can be compared and
         // the user can decide which copy to keep.
         const nmSize = formatFileSize(orig.size);

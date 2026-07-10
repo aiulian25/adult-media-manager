@@ -174,7 +174,41 @@ async function loadTemplateVars() {
         if (!res.ok) return;
         const data = await res.json();
         if (Array.isArray(data.variables)) _validTemplateVars = new Set(data.variables);
+        // Preset buttons come from the SAME response (server TEMPLATES dict) —
+        // one source of truth, so backend preset changes appear here without
+        // HTML edits (F13). On failure the cluster simply stays hidden and the
+        // plain template input remains fully usable.
+        if (data.templates && typeof data.templates === 'object') {
+            _renderPresetButtons(data.templates);
+        }
     } catch (_) { /* offline / non-fatal — unknown-var warnings stay disabled */ }
+}
+
+/** Build the preset buttons from the server's TEMPLATES dict (name → template). */
+function _renderPresetButtons(templates) {
+    const cluster = document.querySelector('.template-presets');
+    if (!cluster) return;
+    cluster.querySelectorAll('.preset-btn').forEach(b => b.remove());
+    const entries = Object.entries(templates).filter(([, v]) => typeof v === 'string' && v);
+    if (!entries.length) return;
+    for (const [key, value] of entries) {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'preset-btn';
+        btn.dataset.template = value;
+        btn.title = value;                       // tooltip shows the real template
+        const i18nKey = 'toolbar.preset_' + key;
+        const label = t(i18nKey);
+        btn.textContent = label === i18nKey ? key.replace(/_/g, ' ') : label;
+        if (template && template.value === value) btn.classList.add('active');
+        btn.addEventListener('click', () => {
+            template.value = value;
+            document.querySelectorAll('.preset-btn').forEach(b => b.classList.toggle('active', b === btn));
+            updateTemplatePreview();             // immediate preview on preset pick
+        });
+        cluster.appendChild(btn);
+    }
+    cluster.hidden = false;
 }
 
 /** Return the list of {placeholder} names in `tpl` not recognised by the formatter. */
@@ -383,14 +417,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     applyI18nToDOM();
     reconcilePrefsFromServer();   // fire-and-forget; updates if server differs
 
-    // Template presets
-    document.querySelectorAll('.preset-btn').forEach(btn => {
-        btn.addEventListener('click', () => {
-            template.value = btn.dataset.template;
-            document.querySelectorAll('.preset-btn').forEach(b => b.classList.toggle('active', b === btn));
-            updateTemplatePreview();           // immediate preview on preset pick
-        });
-    });
+    // Template preset buttons are rendered (and wired) by _renderPresetButtons
+    // once /api/templates answers — see loadTemplateVars below (F13).
 
     // Insert-variable chips — drop a {token} at the caret in the template field,
     // then re-run the live preview via the same 'input' path typing uses.
@@ -762,10 +790,17 @@ async function openSettingsModal() {
 // ── Version / update footer (F17) ────────────────────────────────────────────
 // One shared flow for all targets; the per-target difference is DATA the server
 // sends (native flag, matching asset) — not divergent code paths here.
+
+// Path of the release file the backend last downloaded (this session). Consumed
+// by the in-app installer; never sent anywhere except the Electron IPC bridge,
+// which independently re-validates it before touching a package manager.
+let _updateDownloadPath = null;
+
 async function _refreshVersionFooter(isNative) {
     const textEl    = document.getElementById('settings-version-text');
     const statusEl  = document.getElementById('settings-update-status');
     const dlBtn     = document.getElementById('settings-update-download');
+    const installBtn= document.getElementById('settings-update-install');
     const restartBtn= document.getElementById('settings-update-restart');
     const relLink   = document.getElementById('settings-releases-link');
     if (!textEl || !statusEl || !dlBtn || !restartBtn) return;
@@ -773,6 +808,7 @@ async function _refreshVersionFooter(isNative) {
     // Reset to the quiet state on every open (a previous open may have shown more)
     statusEl.classList.add('svb-hidden');
     dlBtn.classList.add('svb-hidden');
+    if (installBtn) installBtn.classList.add('svb-hidden');
     restartBtn.classList.add('svb-hidden');
 
     try {
@@ -783,18 +819,33 @@ async function _refreshVersionFooter(isNative) {
         if (relLink && v.releases_url) relLink.href = v.releases_url;
 
         // Restart-to-finish: a deb/rpm upgrade replaced the install on disk
-        // underneath the running app. Takes precedence over the download offer —
-        // the update is already here, it just needs a relaunch.
+        // underneath the running app (on-disk version diverges), or an in-app
+        // AppImage upgrade landed (pendingUpdate — the mounted image itself
+        // can't change). Takes precedence over the download offer — the update
+        // is already here, it just needs a relaunch.
         if (isNative && typeof window.electronAPI.getVersions === 'function') {
             try {
                 const vers = await window.electronAPI.getVersions();
-                if (vers && vers.onDisk && vers.running && vers.onDisk !== vers.running) {
-                    statusEl.textContent = t('settings.update_installed', { version: vers.onDisk });
+                const diverged = vers && vers.onDisk && vers.running && vers.onDisk !== vers.running;
+                if (diverged || (vers && vers.pendingUpdate)) {
+                    statusEl.textContent = diverged
+                        ? t('settings.update_installed', { version: vers.onDisk })
+                        : t('settings.update_restart_pending');
                     statusEl.classList.remove('svb-hidden');
                     restartBtn.classList.remove('svb-hidden');
                     return;
                 }
             } catch (_) { /* bridge unavailable — fall through to notice-only */ }
+        }
+
+        // A download from earlier in this session that hasn't been installed
+        // yet: keep offering the install instead of a re-download.
+        if (isNative && _updateDownloadPath &&
+            typeof window.electronAPI.installUpdate === 'function' && v.update) {
+            statusEl.textContent = t('settings.update_available', { version: v.update.latest });
+            statusEl.classList.remove('svb-hidden');
+            if (installBtn) installBtn.classList.remove('svb-hidden');
+            return;
         }
 
         if (v.update) {
@@ -817,6 +868,18 @@ async function _downloadUpdate() {
         const resp = await fetch('/api/version/download', { method: 'POST' });
         const data = await resp.json().catch(() => ({}));
         if (!resp.ok) throw new Error(data.detail || resp.statusText);
+        // When the Electron bridge can install it, hand straight off to the
+        // one-click Install button (the CLI hint stays in the toast as the
+        // fallback for pkexec-less systems). Double-clicking the file instead
+        // dead-ends in the distro store ("Installed", no upgrade offered).
+        const installBtn = document.getElementById('settings-update-install');
+        const canInstall = !!(window.electronAPI &&
+                              typeof window.electronAPI.installUpdate === 'function');
+        if (canInstall && installBtn) {
+            _updateDownloadPath = data.saved_to;
+            dlBtn.classList.add('svb-hidden');
+            installBtn.classList.remove('svb-hidden');
+        }
         const extra = data.install_hint ? ` — ${data.install_hint}` : '';
         showToast(
             t('settings.update_downloaded'),
@@ -828,6 +891,32 @@ async function _downloadUpdate() {
     } finally {
         dlBtn.disabled = false;
         dlBtn.textContent = t('settings.update_download');
+    }
+}
+
+async function _installUpdate() {
+    const installBtn = document.getElementById('settings-update-install');
+    if (!_updateDownloadPath || !window.electronAPI ||
+        typeof window.electronAPI.installUpdate !== 'function') return;
+    installBtn.disabled = true;
+    installBtn.textContent = t('settings.update_installing');
+    try {
+        // deb/rpm: polkit's native password dialog appears here — that prompt
+        // IS the confirmation step. AppImage installs without privilege.
+        const res = await window.electronAPI.installUpdate(_updateDownloadPath);
+        if (!res || !res.ok) throw new Error((res && res.error) || 'Install failed');
+        _updateDownloadPath = null;
+        installBtn.classList.add('svb-hidden');
+        showToast(t('settings.update_installed_ok'),
+                  t('settings.update_installed_ok_msg'), 'success', 8000);
+        // Re-check versions: deb/rpm now diverge on disk, AppImage reports
+        // pendingUpdate — either way the Restart button appears.
+        _refreshVersionFooter(true);
+    } catch (err) {
+        showToast(t('settings.update_install_failed'), err.message, 'error', 8000);
+    } finally {
+        installBtn.disabled = false;
+        installBtn.textContent = t('settings.update_install');
     }
 }
 
@@ -917,6 +1006,8 @@ document.addEventListener('DOMContentLoaded', () => {
     // restart goes through the preload bridge and only exists in the native build.
     document.getElementById('settings-update-download')
         ?.addEventListener('click', _downloadUpdate);
+    document.getElementById('settings-update-install')
+        ?.addEventListener('click', _installUpdate);
     document.getElementById('settings-update-restart')
         ?.addEventListener('click', () => {
             if (window.electronAPI && typeof window.electronAPI.relaunchApp === 'function') {

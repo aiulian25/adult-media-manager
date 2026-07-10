@@ -14,7 +14,7 @@ from app.core.detector import SUBTITLE_EXTENSIONS
 # Non-subtitle sidecar files that belong to a video and should travel with it on
 # a rename: artwork (posters/fanart) and a pre-existing NFO. Combined with
 # SUBTITLE_EXTENSIONS to form the full companion set.
-COMPANION_ART_EXTS: frozenset[str] = frozenset({".jpg", ".jpeg", ".png", ".nfo"})
+COMPANION_ART_EXTS: frozenset[str] = frozenset({".jpg", ".jpeg", ".png", ".webp", ".tbn", ".nfo"})
 _COMPANION_EXTS: frozenset[str] = frozenset(SUBTITLE_EXTENSIONS) | COMPANION_ART_EXTS
 
 

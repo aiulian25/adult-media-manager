@@ -255,5 +255,21 @@
   "settings.update_downloaded": "Téléchargement terminé",
   "settings.update_downloaded_msg": "Enregistré dans {path}",
   "settings.update_download_failed": "Échec du téléchargement",
-  "settings.update_restart": "Redémarrer pour terminer la mise à jour"
+  "settings.update_restart": "Redémarrer pour terminer la mise à jour",
+  "settings.update_install": "Installer la mise à jour",
+  "settings.update_installing": "Installation…",
+  "settings.update_installed_ok": "Mise à jour installée",
+  "settings.update_installed_ok_msg": "Redémarrez l'application pour terminer la mise à jour.",
+  "settings.update_install_failed": "Échec de l'installation",
+  "settings.update_restart_pending": "Mise à jour installée — redémarrez pour terminer",
+  "toolbar.preset_site_date": "Site + Date",
+  "toolbar.preset_performer_focus": "Interprète",
+  "toolbar.preset_studio_organized": "Studio",
+  "toolbar.preset_simple": "Simple",
+  "toolbar.preset_multi_performer": "Multi-interprètes",
+  "toolbar.preset_dated_folders": "Dossiers datés",
+  "match.lookup_error_auth": "Recherche échouée : clé API refusée — résultat inconnu, vérifiez les Réglages",
+  "match.lookup_error_rate_limit": "Recherche échouée : limite de requêtes — résultat inconnu, réessayez plus tard",
+  "match.lookup_error_network": "Recherche échouée : erreur réseau — résultat inconnu, réessayez",
+  "match.lookup_error_internal": "Recherche échouée : erreur interne — résultat inconnu"
 }

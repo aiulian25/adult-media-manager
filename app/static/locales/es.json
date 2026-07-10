@@ -255,5 +255,21 @@
   "settings.update_downloaded": "Descarga completada",
   "settings.update_downloaded_msg": "Guardado en {path}",
   "settings.update_download_failed": "Error en la descarga",
-  "settings.update_restart": "Reiniciar para finalizar la actualización"
+  "settings.update_restart": "Reiniciar para finalizar la actualización",
+  "settings.update_install": "Instalar actualización",
+  "settings.update_installing": "Instalando…",
+  "settings.update_installed_ok": "Actualización instalada",
+  "settings.update_installed_ok_msg": "Reinicia la aplicación para finalizar la actualización.",
+  "settings.update_install_failed": "Error en la instalación",
+  "settings.update_restart_pending": "Actualización instalada — reinicia para finalizar",
+  "toolbar.preset_site_date": "Sitio + Fecha",
+  "toolbar.preset_performer_focus": "Intérprete",
+  "toolbar.preset_studio_organized": "Estudio",
+  "toolbar.preset_simple": "Simple",
+  "toolbar.preset_multi_performer": "Varios intérpretes",
+  "toolbar.preset_dated_folders": "Carpetas por fecha",
+  "match.lookup_error_auth": "Búsqueda fallida: clave API rechazada — resultado desconocido, revisa Ajustes",
+  "match.lookup_error_rate_limit": "Búsqueda fallida: límite de peticiones — resultado desconocido, reintenta más tarde",
+  "match.lookup_error_network": "Búsqueda fallida: error de red — resultado desconocido, reintenta",
+  "match.lookup_error_internal": "Búsqueda fallida: error interno — resultado desconocido"
 }

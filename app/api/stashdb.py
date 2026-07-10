@@ -292,6 +292,25 @@ def compute_phash_ffmpeg_sync(file_path: Path) -> Optional[str]:
 
 # ─── Client ────────────────────────────────────────────────────────────────────
 
+def _classify_error(exc: Exception) -> str:
+    """Map a lookup failure to a user-meaningful kind: auth | rate_limit | network.
+
+    StashDB signals a bad key either as HTTP 401/403 or as a GraphQL
+    "not authorized" error depending on the deployment — both classify as
+    "auth". Raw exception text stays server-side (F15).
+    """
+    if isinstance(exc, httpx.HTTPStatusError):
+        code = exc.response.status_code
+        if code in (401, 403):
+            return "auth"
+        if code == 429:
+            return "rate_limit"
+        return "network"
+    if isinstance(exc, RuntimeError) and "not authorized" in str(exc).lower():
+        return "auth"
+    return "network"
+
+
 class StashDBClient:
     """
     Minimal async GraphQL client for StashDB.
@@ -302,6 +321,11 @@ class StashDBClient:
 
     def __init__(self, api_key: Optional[str] = None):
         self.api_key = api_key or os.getenv("STASHDB_API_KEY")
+        # Kind of the most recent lookup failure (auth/rate_limit/network),
+        # None after a clean call. Reset on ENTRY to each lookup so a stale
+        # flag can't mislabel a later success; cross-task attribution under
+        # concurrency is harmless — the classified conditions are global (F15).
+        self.last_error: Optional[str] = None
         if not self.api_key:
             raise ValueError(
                 "StashDB API key required. Set STASHDB_API_KEY environment variable. "
@@ -348,11 +372,13 @@ class StashDBClient:
             term = f"{performer} {term}"
         if studio:
             term = f"{studio} {term}"
+        self.last_error = None
         try:
             data = await self._query(_Q_SEARCH, {"term": term})
             return [self._parse(s) for s in data.get("searchScene", [])]
         except Exception as exc:
-            print(f"StashDB search error: {exc}")
+            self.last_error = _classify_error(exc)
+            print(f"StashDB search error ({self.last_error}): {exc}")
             return []
 
     async def find_scene_by_id(self, scene_id: str) -> Optional[StashDBScene]:
@@ -385,6 +411,7 @@ class StashDBClient:
             fingerprints.append({"algorithm": "PHASH", "hash": phash})
         if not fingerprints:
             return []
+        self.last_error = None
         try:
             # Outer list = one query group; inner list = fingerprints for that group
             data = await self._query(_Q_FINGERPRINTS, {"fingerprints": [fingerprints]})
@@ -393,7 +420,8 @@ class StashDBClient:
             flat = [scene for group in results_nested for scene in (group or [])]
             return [self._parse(s) for s in flat]
         except Exception as exc:
-            print(f"StashDB fingerprint error: {exc}")
+            self.last_error = _classify_error(exc)
+            print(f"StashDB fingerprint error ({self.last_error}): {exc}")
             return []
 
     # ── parsing ────────────────────────────────────────────────────────

@@ -79,7 +79,7 @@ VIDEO_EXTENSIONS = {
     ".nut", ".mxf", ".roq", ".fli", ".flc",
 }
 
-SUBTITLE_EXTENSIONS = {".srt", ".sub", ".ass", ".ssa", ".idx", ".sup"}
+SUBTITLE_EXTENSIONS = {".srt", ".sub", ".ass", ".ssa", ".idx", ".sup", ".vtt"}
 
 
 # Adult scene filename patterns (priority order)

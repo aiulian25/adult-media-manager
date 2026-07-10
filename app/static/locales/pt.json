@@ -255,5 +255,21 @@
   "settings.update_downloaded": "Download concluído",
   "settings.update_downloaded_msg": "Salvo em {path}",
   "settings.update_download_failed": "Falha no download",
-  "settings.update_restart": "Reiniciar para concluir a atualização"
+  "settings.update_restart": "Reiniciar para concluir a atualização",
+  "settings.update_install": "Instalar atualização",
+  "settings.update_installing": "Instalando…",
+  "settings.update_installed_ok": "Atualização instalada",
+  "settings.update_installed_ok_msg": "Reinicie o aplicativo para concluir a atualização.",
+  "settings.update_install_failed": "Falha na instalação",
+  "settings.update_restart_pending": "Atualização instalada — reinicie para concluir",
+  "toolbar.preset_site_date": "Site + Data",
+  "toolbar.preset_performer_focus": "Artista",
+  "toolbar.preset_studio_organized": "Estúdio",
+  "toolbar.preset_simple": "Simples",
+  "toolbar.preset_multi_performer": "Vários artistas",
+  "toolbar.preset_dated_folders": "Pastas por data",
+  "match.lookup_error_auth": "Falha na busca: chave de API rejeitada — resultado desconhecido, verifique as Configurações",
+  "match.lookup_error_rate_limit": "Falha na busca: limite de requisições — resultado desconhecido, tente mais tarde",
+  "match.lookup_error_network": "Falha na busca: erro de rede — resultado desconhecido, tente novamente",
+  "match.lookup_error_internal": "Falha na busca: erro interno — resultado desconhecido"
 }
