@@ -201,6 +201,9 @@ async function writeNfo(index) {
             body: JSON.stringify({
                 file_path: result.original.path,
                 scene_data: result.match,
+                // Scan-entry fields (duration/quality/codec) → NFO runtime +
+                // streamdetails (F5), matching what a rename's Phase-2 writes.
+                file_data: result.original,
             }),
         });
         const data = await resp.json();
@@ -231,7 +234,7 @@ async function writeAllNfos() {
             const resp = await fetch('/api/write-nfo', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ file_path: r.original.path, scene_data: r.match }),
+                body: JSON.stringify({ file_path: r.original.path, scene_data: r.match, file_data: r.original }),
             });
             const data = await resp.json();
             if (resp.ok) {

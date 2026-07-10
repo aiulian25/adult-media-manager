@@ -69,14 +69,20 @@ def ffmpeg_metadata_args(metadata: dict) -> list[str]:
         site        → album
         release_date→ date
         tags        → comment (comma-separated)
+        description → description + synopsis (mkv: DESCRIPTION/SYNOPSIS tags,
+                      mp4: desc/ldes atoms — both emitted so remux output
+                      matches the in-place writers on either container)
     Empty values are omitted.
     """
+    description = (metadata.get("description") or "").strip()
     pairs = [
         ("title",   (metadata.get("title") or "").strip()),
         ("artist",  ", ".join(metadata.get("performers", []) or [])),
         ("album",   (metadata.get("site") or "")),
         ("date",    (metadata.get("release_date") or "")),
         ("comment", ", ".join(metadata.get("tags", []) or [])),
+        ("description", description),
+        ("synopsis",    description),
     ]
     args: list[str] = []
     for key, value in pairs:
@@ -92,7 +98,7 @@ def build_mkv_tags_xml(metadata: dict) -> Optional[str]:
     Returns the serialised <Tags> element, or None when there are no tag values.
     Field mapping mirrors the FFmpeg path so embedded metadata is consistent:
         performers → ARTIST, site → ALBUM, release_date → DATE_RELEASED,
-        tags → COMMENT, title → TITLE.
+        tags → COMMENT, title → TITLE, description → DESCRIPTION + SYNOPSIS.
     Values are escaped by ElementTree, so API/user-supplied strings are safe.
     """
     import xml.etree.ElementTree as ET
@@ -110,6 +116,10 @@ def build_mkv_tags_xml(metadata: dict) -> Optional[str]:
         simple.append(("COMMENT", comment))
     if metadata.get("title"):
         simple.append(("TITLE", str(metadata["title"])))
+    description = (metadata.get("description") or "").strip()
+    if description:
+        simple.append(("DESCRIPTION", description))
+        simple.append(("SYNOPSIS", description))
 
     if not simple:
         return None

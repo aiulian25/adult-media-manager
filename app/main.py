@@ -1767,6 +1767,13 @@ async def rename_files(req: RenameRequest, background_tasks: BackgroundTasks):
             "description":  scene_data.get("description", ""),
             "id":           scene_data.get("id", ""),
             "source":       scene_data.get("source") or file_data.get("datasource") or "tpdb",
+            # NFO enrichment (F5): probed duration (scan) falls back to the
+            # API's scene duration; network → second <studio>; detector
+            # quality/video_format → <streamdetails>.
+            "duration_seconds": file_data.get("duration_seconds") or scene_data.get("duration"),
+            "network":      scene_data.get("network", ""),
+            "quality":      file_data.get("quality", ""),
+            "video_format": file_data.get("video_format", ""),
         }
         # Catalog payload for this op — applied in Phase 2 ONLY after the NFO is
         # actually written, so a file is never flagged "organized" (which the UI
@@ -2973,6 +2980,10 @@ async def extract_thumbnails(request: ThumbnailRequest):
 class WriteNfoRequest(BaseModel):
     file_path: str
     scene_data: dict
+    # Scan-entry fields for the file (duration_seconds/quality/video_format) so
+    # a per-row "Write NFO" carries the same enrichment as a Phase-2 NFO (F5).
+    # Optional — older clients simply produce an NFO without stream details.
+    file_data: dict = {}
 
     @field_validator("file_path")
     @classmethod
@@ -3006,6 +3017,11 @@ async def write_nfo_endpoint(req: WriteNfoRequest):
         # Provider id/source → <uniqueid> (F4). The scene dict carries "source".
         "id":           req.scene_data.get("id", ""),
         "source":       req.scene_data.get("source") or "tpdb",
+        # NFO enrichment (F5) — mirrors the Phase-2 meta build in rename_files.
+        "duration_seconds": req.file_data.get("duration_seconds") or req.scene_data.get("duration"),
+        "network":      req.scene_data.get("network", ""),
+        "quality":      req.file_data.get("quality", ""),
+        "video_format": req.file_data.get("video_format", ""),
     }
     try:
         write_nfo(file_path, meta)
@@ -3017,6 +3033,14 @@ async def write_nfo_endpoint(req: WriteNfoRequest):
 
 
 # ─── Metadata embedding helper ──────────────────────────────────────────
+
+# Detected quality label → video height for <streamdetails> (F5). Keys are
+# lowercased detector tokens (QUALITY_PATTERN: 720p|1080p|2160p|4K|UHD).
+# Unknown/unparseable labels are simply omitted from the NFO.
+_NFO_QUALITY_HEIGHTS: dict[str, int] = {
+    "720p": 720, "1080p": 1080, "2160p": 2160, "4k": 2160, "uhd": 2160,
+}
+
 
 def write_nfo(file_path: Path, metadata: dict) -> None:
     """
@@ -3041,6 +3065,21 @@ def write_nfo(file_path: Path, metadata: dict) -> None:
     # Jellyfin/Plex/Kodi display the chosen still. Empty → no poster refs.
     poster_path  = (metadata.get("poster_path") or "").strip()
     year         = release_date[:4] if release_date else ""
+    # NFO enrichment (F5) — data AMM already had in memory at write time:
+    # probed/API duration → <runtime> (whole minutes), parsed network → second
+    # <studio> (Jellyfin merges multiple studio elements), detector quality/
+    # video_format → <fileinfo><streamdetails><video>. All optional: files
+    # without them omit the elements entirely (never a zero/empty tag).
+    network      = (metadata.get("network") or "").strip()
+    runtime_min  = 0
+    try:
+        runtime_min = int(float(metadata.get("duration_seconds") or 0) // 60)
+    except (TypeError, ValueError):
+        pass
+    # Codec token normalised to player conventions: lowercase, dots stripped
+    # ("H.264" → "h264"; "x265" stays "x265").
+    codec        = (metadata.get("video_format") or "").strip().lower().replace(".", "")
+    height       = _NFO_QUALITY_HEIGHTS.get((metadata.get("quality") or "").strip().lower())
 
     root = ET.Element("movie")
     ET.SubElement(root, "title").text         = title
@@ -3053,6 +3092,12 @@ def write_nfo(file_path: Path, metadata: dict) -> None:
         ET.SubElement(root, "premiered").text   = release_date
     if site:
         ET.SubElement(root, "studio").text     = site
+    # Network as a second <studio> — case-insensitive compare so "VIXEN" vs
+    # "Vixen" never produces a duplicate entry.
+    if network and network.lower() != site.lower():
+        ET.SubElement(root, "studio").text     = network
+    if runtime_min > 0:
+        ET.SubElement(root, "runtime").text    = str(runtime_min)
     if description:
         ET.SubElement(root, "plot").text       = description
         ET.SubElement(root, "outline").text    = description
@@ -3078,6 +3123,17 @@ def write_nfo(file_path: Path, metadata: dict) -> None:
     for performer in performers:
         actor_el = ET.SubElement(root, "actor")
         ET.SubElement(actor_el, "name").text   = performer
+
+    # Stream details (F5) — what Jellyfin/Kodi use for resolution/codec badges
+    # and filtering. Only written when at least one field is known.
+    if codec or height:
+        fileinfo = ET.SubElement(root, "fileinfo")
+        stream   = ET.SubElement(fileinfo, "streamdetails")
+        video    = ET.SubElement(stream, "video")
+        if codec:
+            ET.SubElement(video, "codec").text  = codec
+        if height:
+            ET.SubElement(video, "height").text = str(height)
 
     tree = ET.ElementTree(root)
     ET.indent(tree, space="  ")
@@ -3138,7 +3194,7 @@ async def embed_metadata(file_path: Path, metadata: dict) -> tuple[bool, str]:
         site        → album tag
         release_date→ date tag
         tags        → comment tag (comma-separated)
-        description → description / comment fallback
+        description → description + synopsis tags
     """
     ext = file_path.suffix.lower()
 
@@ -3378,7 +3434,9 @@ async def embed_metadata_mp4(file_path: Path, metadata: dict) -> tuple[bool, str
     Avoids the FFmpeg stream-remux quirks (data/subtitle stream rejections) and
     keeps the media untouched. Field mapping mirrors the FFmpeg/mkv writers:
         title → --title, performers → --artist, site → --album,
-        release_date → --year, tags → --comment.
+        release_date → --year, tags → --comment,
+        description → --description (--longdesc carries the full text when it
+        exceeds AtomicParsley's 255-char description limit).
 
     Returns (True, "") on success (including the no-op case), or (False, err);
     the caller falls back to the FFmpeg remux on failure.
@@ -3388,12 +3446,15 @@ async def embed_metadata_mp4(file_path: Path, metadata: dict) -> tuple[bool, str
         return False, "AtomicParsley not available"
 
     cmd = [binary, str(file_path)]
+    desc = (metadata.get("description") or "").strip()
     mapping = [
         ("--title",   (metadata.get("title") or "").strip()),
         ("--artist",  ", ".join(metadata.get("performers", []) or [])),
         ("--album",   (metadata.get("site") or "")),
         ("--year",    (metadata.get("release_date") or "")),
         ("--comment", ", ".join(metadata.get("tags", []) or [])),
+        ("--description", desc[:255]),
+        ("--longdesc",    desc if len(desc) > 255 else ""),
     ]
     for flag, value in mapping:
         if value:
