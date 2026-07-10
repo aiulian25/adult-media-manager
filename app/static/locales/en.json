@@ -245,5 +245,15 @@
   "actionbar.ready": "Ready — scan a folder, then Match to look up metadata.",
   "settings.theme_legacy": "Legacy (default)",
   "settings.theme_dark": "Dark",
-  "settings.theme_light": "Light"
+  "settings.theme_light": "Light",
+  "settings.releases": "Release notes",
+  "settings.update_available": "Update available: v{version}",
+  "settings.update_available_docker": "Update available: v{version} — run: docker compose pull && docker compose up -d",
+  "settings.update_installed": "v{version} is installed on disk — restart to finish the update",
+  "settings.update_download": "Download update",
+  "settings.update_downloading": "Downloading…",
+  "settings.update_downloaded": "Download complete",
+  "settings.update_downloaded_msg": "Saved to {path}",
+  "settings.update_download_failed": "Download failed",
+  "settings.update_restart": "Restart to finish update"
 }

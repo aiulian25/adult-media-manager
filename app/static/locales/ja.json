@@ -245,5 +245,15 @@
   "actionbar.ready": "準備完了 — フォルダをスキャンし、「照合」でメタデータを取得します。",
   "settings.theme_legacy": "レガシー（デフォルト）",
   "settings.theme_dark": "ダーク",
-  "settings.theme_light": "ライト"
+  "settings.theme_light": "ライト",
+  "settings.releases": "リリースノート",
+  "settings.update_available": "アップデートがあります: v{version}",
+  "settings.update_available_docker": "アップデートがあります: v{version} — 実行: docker compose pull && docker compose up -d",
+  "settings.update_installed": "v{version} がインストール済みです — 再起動して更新を完了してください",
+  "settings.update_download": "アップデートをダウンロード",
+  "settings.update_downloading": "ダウンロード中…",
+  "settings.update_downloaded": "ダウンロード完了",
+  "settings.update_downloaded_msg": "{path} に保存しました",
+  "settings.update_download_failed": "ダウンロード失敗",
+  "settings.update_restart": "再起動して更新を完了"
 }

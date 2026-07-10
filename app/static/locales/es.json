@@ -245,5 +245,15 @@
   "actionbar.ready": "Listo — escanea una carpeta y pulsa Emparejar para buscar metadatos.",
   "settings.theme_legacy": "Clásico (predeterminado)",
   "settings.theme_dark": "Oscuro",
-  "settings.theme_light": "Claro"
+  "settings.theme_light": "Claro",
+  "settings.releases": "Notas de la versión",
+  "settings.update_available": "Actualización disponible: v{version}",
+  "settings.update_available_docker": "Actualización disponible: v{version} — ejecuta: docker compose pull && docker compose up -d",
+  "settings.update_installed": "v{version} está instalada en disco — reinicia para finalizar la actualización",
+  "settings.update_download": "Descargar actualización",
+  "settings.update_downloading": "Descargando…",
+  "settings.update_downloaded": "Descarga completada",
+  "settings.update_downloaded_msg": "Guardado en {path}",
+  "settings.update_download_failed": "Error en la descarga",
+  "settings.update_restart": "Reiniciar para finalizar la actualización"
 }

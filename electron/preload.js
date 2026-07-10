@@ -30,6 +30,13 @@ contextBridge.exposeInMainWorld("electronAPI", {
         }
     },
 
+    // Update notifier: running vs on-disk installed version ({running, onDisk};
+    // they diverge after a deb/rpm upgrade replaces the install underneath us),
+    // and a clean relaunch to finish such an update. No arguments cross the
+    // bridge in either direction beyond the version strings.
+    getVersions: () => ipcRenderer.invoke("app:versions"),
+    relaunchApp: () => ipcRenderer.invoke("app:relaunch"),
+
     // Opens the native OS picker (GTK/KDE/XDG portal). `mode` is "folder"
     // (directories) or "files" — Linux GTK can't combine the two in one dialog,
     // so the caller chooses. Both modes allow multi-select and show hidden files.

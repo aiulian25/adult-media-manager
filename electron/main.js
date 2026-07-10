@@ -116,6 +116,20 @@ function findAtomicParsley() {
     return null;
 }
 
+// ── Package format detection (update notifier) ───────────────────────────────
+// Tells the backend which release asset fits this install (AMM_PKG env). This
+// is deliberately the ONLY per-target knowledge in the update flow — the
+// backend and UI stay identical across AppImage/deb/rpm/Docker.
+function detectPackageFormat() {
+    if (process.env.APPIMAGE ||
+        process.resourcesPath.includes("/.mount_") ||
+        process.resourcesPath.includes("/tmp/appimage_extracted")) return "appimage";
+    if (!app.isPackaged) return "";                       // dev run — no asset
+    if (fs.existsSync("/etc/debian_version")) return "deb";
+    if (fs.existsSync("/var/lib/rpm") || fs.existsSync("/usr/bin/rpm")) return "rpm";
+    return "";
+}
+
 function findCwd() {
     // Packaged: app source is under resources/app
     const packaged = path.join(process.resourcesPath, "app");
@@ -178,6 +192,9 @@ function startPython() {
         // package.json's version, so the backend's /docs + /api/health match the
         // app (no stale literal in main.py). See app.main._resolve_app_version.
         AMM_VERSION:      app.getVersion(),
+        // Which release asset fits this install (appimage|deb|rpm) — lets the
+        // backend's /api/version offer the right download. Empty in dev mode.
+        AMM_PKG:          detectPackageFormat(),
         // Uvicorn / Python diagnostics
         PYTHONUNBUFFERED: "1",
         // Python must not try to write .pyc files to read-only package dirs
@@ -382,6 +399,30 @@ ipcMain.handle("dialog:open", async (_e, mode) => {
         ],
     });
     return canceled ? [] : filePaths;
+});
+
+// ── Update notifier IPC (restart-to-finish) ───────────────────────────────────
+// "app:versions" compares the RUNNING version (package.json as loaded at start,
+// via app.getVersion()) with the ON-DISK one (package.json re-read fresh from
+// the install path — asar is disabled, so this is a real file). After a deb/rpm
+// upgrade replaces /opt/... underneath a running app the two diverge, and the
+// UI offers a relaunch. AppImage mounts are immutable, so they never diverge
+// there — the downloaded AppImage self-installs on first launch instead.
+ipcMain.handle("app:versions", () => {
+    let onDisk = null;
+    try {
+        const pkg = JSON.parse(
+            fs.readFileSync(path.join(app.getAppPath(), "package.json"), "utf8"));
+        onDisk = pkg.version || null;
+    } catch {}
+    return { running: app.getVersion(), onDisk };
+});
+
+// Takes no arguments from the renderer — it can only trigger a clean relaunch.
+ipcMain.handle("app:relaunch", () => {
+    killPython();          // app.exit() skips before-quit, so stop the backend here
+    app.relaunch();
+    app.exit(0);
 });
 
 // ── Single-instance lock ──────────────────────────────────────────────────────

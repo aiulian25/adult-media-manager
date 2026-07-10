@@ -740,6 +740,9 @@ async function openSettingsModal() {
     if (themeSel) themeSel.value = localStorage.getItem('amm_theme')  || 'default';
     if (embedSel) embedSel.value = localStorage.getItem('amm_embed_mode') || 'smart';
 
+    // Version / update footer fills in asynchronously — never blocks the modal.
+    _refreshVersionFooter(isNative);
+
     // Fetch current status from the server
     try {
         const resp = await fetch('/api/settings');
@@ -753,6 +756,78 @@ async function openSettingsModal() {
         }
     } catch (_) {
         // Non-fatal — badges stay in default state
+    }
+}
+
+// ── Version / update footer (F17) ────────────────────────────────────────────
+// One shared flow for all targets; the per-target difference is DATA the server
+// sends (native flag, matching asset) — not divergent code paths here.
+async function _refreshVersionFooter(isNative) {
+    const textEl    = document.getElementById('settings-version-text');
+    const statusEl  = document.getElementById('settings-update-status');
+    const dlBtn     = document.getElementById('settings-update-download');
+    const restartBtn= document.getElementById('settings-update-restart');
+    const relLink   = document.getElementById('settings-releases-link');
+    if (!textEl || !statusEl || !dlBtn || !restartBtn) return;
+
+    // Reset to the quiet state on every open (a previous open may have shown more)
+    statusEl.classList.add('svb-hidden');
+    dlBtn.classList.add('svb-hidden');
+    restartBtn.classList.add('svb-hidden');
+
+    try {
+        const resp = await fetch('/api/version');
+        if (!resp.ok) return;
+        const v = await resp.json();
+        textEl.textContent = `AMM v${v.version}`;
+        if (relLink && v.releases_url) relLink.href = v.releases_url;
+
+        // Restart-to-finish: a deb/rpm upgrade replaced the install on disk
+        // underneath the running app. Takes precedence over the download offer —
+        // the update is already here, it just needs a relaunch.
+        if (isNative && typeof window.electronAPI.getVersions === 'function') {
+            try {
+                const vers = await window.electronAPI.getVersions();
+                if (vers && vers.onDisk && vers.running && vers.onDisk !== vers.running) {
+                    statusEl.textContent = t('settings.update_installed', { version: vers.onDisk });
+                    statusEl.classList.remove('svb-hidden');
+                    restartBtn.classList.remove('svb-hidden');
+                    return;
+                }
+            } catch (_) { /* bridge unavailable — fall through to notice-only */ }
+        }
+
+        if (v.update) {
+            statusEl.textContent = isNative
+                ? t('settings.update_available', { version: v.update.latest })
+                : t('settings.update_available_docker', { version: v.update.latest });
+            statusEl.classList.remove('svb-hidden');
+            if (isNative && v.update.asset) dlBtn.classList.remove('svb-hidden');
+        }
+    } catch (_) {
+        // Offline / kill-switched — footer just shows nothing extra
+    }
+}
+
+async function _downloadUpdate() {
+    const dlBtn = document.getElementById('settings-update-download');
+    dlBtn.disabled = true;
+    dlBtn.textContent = t('settings.update_downloading');
+    try {
+        const resp = await fetch('/api/version/download', { method: 'POST' });
+        const data = await resp.json().catch(() => ({}));
+        if (!resp.ok) throw new Error(data.detail || resp.statusText);
+        const extra = data.install_hint ? ` — ${data.install_hint}` : '';
+        showToast(
+            t('settings.update_downloaded'),
+            t('settings.update_downloaded_msg', { path: data.saved_to }) + extra,
+            'success', 10000
+        );
+    } catch (err) {
+        showToast(t('settings.update_download_failed'), err.message, 'error', 8000);
+    } finally {
+        dlBtn.disabled = false;
+        dlBtn.textContent = t('settings.update_download');
     }
 }
 
@@ -837,6 +912,17 @@ document.addEventListener('DOMContentLoaded', () => {
         document.getElementById('settings-modal').classList.add('hidden');
     });
     document.getElementById('settings-save').addEventListener('click', saveSettings);
+
+    // Update notifier buttons (F17). Download is server-driven (no client input);
+    // restart goes through the preload bridge and only exists in the native build.
+    document.getElementById('settings-update-download')
+        ?.addEventListener('click', _downloadUpdate);
+    document.getElementById('settings-update-restart')
+        ?.addEventListener('click', () => {
+            if (window.electronAPI && typeof window.electronAPI.relaunchApp === 'function') {
+                window.electronAPI.relaunchApp();
+            }
+        });
 
     // Show/hide toggle for each key input. We swap the eye ↔ eye-off icon so the
     // toggle gives clear feedback: key fields open EMPTY (never pre-filled, for

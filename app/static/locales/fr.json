@@ -245,5 +245,15 @@
   "actionbar.ready": "Prêt — scannez un dossier, puis Associer pour les métadonnées.",
   "settings.theme_legacy": "Classique (défaut)",
   "settings.theme_dark": "Sombre",
-  "settings.theme_light": "Clair"
+  "settings.theme_light": "Clair",
+  "settings.releases": "Notes de version",
+  "settings.update_available": "Mise à jour disponible : v{version}",
+  "settings.update_available_docker": "Mise à jour disponible : v{version} — exécutez : docker compose pull && docker compose up -d",
+  "settings.update_installed": "v{version} est installée sur le disque — redémarrez pour terminer la mise à jour",
+  "settings.update_download": "Télécharger la mise à jour",
+  "settings.update_downloading": "Téléchargement…",
+  "settings.update_downloaded": "Téléchargement terminé",
+  "settings.update_downloaded_msg": "Enregistré dans {path}",
+  "settings.update_download_failed": "Échec du téléchargement",
+  "settings.update_restart": "Redémarrer pour terminer la mise à jour"
 }

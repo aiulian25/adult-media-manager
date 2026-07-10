@@ -245,5 +245,15 @@
   "actionbar.ready": "Pronto — digitalize uma pasta e use Corresponder para buscar metadados.",
   "settings.theme_legacy": "Clássico (padrão)",
   "settings.theme_dark": "Escuro",
-  "settings.theme_light": "Claro"
+  "settings.theme_light": "Claro",
+  "settings.releases": "Notas de versão",
+  "settings.update_available": "Atualização disponível: v{version}",
+  "settings.update_available_docker": "Atualização disponível: v{version} — execute: docker compose pull && docker compose up -d",
+  "settings.update_installed": "v{version} está instalada no disco — reinicie para concluir a atualização",
+  "settings.update_download": "Baixar atualização",
+  "settings.update_downloading": "Baixando…",
+  "settings.update_downloaded": "Download concluído",
+  "settings.update_downloaded_msg": "Salvo em {path}",
+  "settings.update_download_failed": "Falha no download",
+  "settings.update_restart": "Reiniciar para concluir a atualização"
 }

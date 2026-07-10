@@ -152,10 +152,10 @@ No Docker required. Ships a self-contained Python 3.12 runtime — no system Pyt
 
 ### AppImage (recommended — no root required)
 
-1. Download `Adult.Media.Manager-1.4.1.AppImage`
+1. Download `Adult.Media.Manager-1.5.0.AppImage`
 2. Make it executable:
    ```bash
-   chmod +x Adult.Media.Manager-1.4.1.AppImage
+   chmod +x Adult.Media.Manager-1.5.0.AppImage
    ```
 3. Double-click it (or run it from the terminal)
 
@@ -169,7 +169,7 @@ From that point, launch it from your application menu. The original downloaded f
 ### .deb Package (Debian / Ubuntu / Mint)
 
 ```bash
-sudo apt install ./adult-media-manager_1.4.1_amd64.deb
+sudo apt install ./adult-media-manager_1.5.0_amd64.deb
 ```
 
 Launch **Adult Media Manager** from your application menu, or:
@@ -183,7 +183,7 @@ Launch **Adult Media Manager** from your application menu, or:
 Requires [RPM Fusion](https://rpmfusion.org/) enabled for the `ffmpeg` / `mkvtoolnix` media tools:
 
 ```bash
-sudo dnf install ./adult-media-manager-1.4.1.x86_64.rpm
+sudo dnf install ./adult-media-manager-1.5.0.x86_64.rpm
 ```
 
 Remove with `sudo dnf remove adult-media-manager`.
@@ -341,6 +341,7 @@ Click **History** to see every action AMM has performed. Each move/copy/hardlink
 | `AMM_EXTRA_ROOTS` | *(blank)* | Extra colon-separated paths to add to the scan/browse allowlist (e.g. `/mnt/a:/mnt/b`) |
 | `AMM_MKVPROPEDIT` / `AMM_ATOMICPARSLEY` | *(auto)* | Override paths to the in-place tagging binaries used by **Smart** mode (auto-resolved on PATH / bundled in packages) |
 | `AMM_ALLOW_MULTIWORKER` | `0` | Acknowledge a multi-worker deployment (AMM is single-worker by design; see DEPLOYMENT.md) |
+| `AMM_UPDATE_CHECK` | `1` | Ask GitHub (at most once per 24 h) whether a newer release exists and show it in Settings. Set `0` for zero-egress deployments — no update request is ever made |
 
 ---
 

@@ -245,5 +245,15 @@
   "actionbar.ready": "Bereit — Ordner scannen, dann Zuordnen für Metadaten.",
   "settings.theme_legacy": "Klassisch (Standard)",
   "settings.theme_dark": "Dunkel",
-  "settings.theme_light": "Hell"
+  "settings.theme_light": "Hell",
+  "settings.releases": "Versionshinweise",
+  "settings.update_available": "Update verfügbar: v{version}",
+  "settings.update_available_docker": "Update verfügbar: v{version} — ausführen: docker compose pull && docker compose up -d",
+  "settings.update_installed": "v{version} ist installiert — zum Abschließen des Updates neu starten",
+  "settings.update_download": "Update herunterladen",
+  "settings.update_downloading": "Wird heruntergeladen…",
+  "settings.update_downloaded": "Download abgeschlossen",
+  "settings.update_downloaded_msg": "Gespeichert unter {path}",
+  "settings.update_download_failed": "Download fehlgeschlagen",
+  "settings.update_restart": "Neu starten, um das Update abzuschließen"
 }

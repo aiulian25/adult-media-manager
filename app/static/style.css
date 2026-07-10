@@ -2026,3 +2026,39 @@ input.input-error {
 @media (max-width: 720px) {
     .scanbar-actions { margin-left: 0; width: 100%; justify-content: flex-end; }
 }
+
+/* ── Settings: version / update bar (F17) ─────────────────────────────── */
+.settings-version-bar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-top: 20px;
+    padding-top: 14px;
+    border-top: 1px solid var(--border-soft);
+    font-size: 0.83rem;
+    color: var(--text-muted);
+}
+.settings-version-text {
+    font-weight: 600;
+    color: var(--text-secondary);
+    white-space: nowrap;
+}
+.settings-update-status {
+    flex: 1 1 auto;
+    min-width: 140px;
+    line-height: 1.4;
+}
+.settings-version-actions {
+    display: flex;
+    gap: 8px;
+    margin-left: auto;
+    align-items: center;
+}
+.settings-version-actions .btn {
+    padding: 6px 12px;
+    font-size: 0.78rem;
+    text-decoration: none;
+    white-space: nowrap;
+}
+.settings-version-bar .svb-hidden { display: none !important; }
