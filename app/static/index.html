@@ -100,6 +100,15 @@
                     <button type="button" class="tvar-chip" data-var="quality">quality</button>
                     <button type="button" class="tvar-chip" data-var="duration">duration</button>
                 </div>
+                <div class="chips-cluster performer-limit-cluster" title="How many names {performers} renders before &quot;et al&quot;">
+                    <span class="chips-key" data-i18n="toolbar.performer_limit">Max performers</span>
+                    <select id="performer-limit" class="glass-input performer-limit-select">
+                        <option value="1">1</option>
+                        <option value="2">2</option>
+                        <option value="3" selected>3</option>
+                        <option value="0" data-i18n="toolbar.performer_limit_all">All</option>
+                    </select>
+                </div>
                 <!-- Preset buttons are rendered from /api/templates (the server's
                      TEMPLATES dict) by _renderPresetButtons — one source of truth,
                      no hardcoded copies (F13). Hidden until the endpoint answers. -->

@@ -271,5 +271,7 @@
   "match.lookup_error_auth": "Lookup failed: API key rejected — result unknown, check Settings",
   "match.lookup_error_rate_limit": "Lookup failed: rate limited — result unknown, retry later",
   "match.lookup_error_network": "Lookup failed: network error — result unknown, retry",
-  "match.lookup_error_internal": "Lookup failed: internal error — result unknown"
+  "match.lookup_error_internal": "Lookup failed: internal error — result unknown",
+  "toolbar.performer_limit": "Max performers",
+  "toolbar.performer_limit_all": "All"
 }

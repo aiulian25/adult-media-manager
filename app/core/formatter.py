@@ -90,9 +90,20 @@ def apply_template(template: str, bindings: dict[str, Any]) -> str:
     elif bindings.get("year"):
         year = str(bindings.get("year"))
     
-    # Performers
+    # Performers. {performer} is always the first name; {performers} renders at
+    # most `performer_limit` names then "et al" (F9) so group scenes can't blow
+    # past the filesystem's 255-byte component cap. Default 3; 0/negative = all.
     performer = performers_list[0] if performers_list else ""
-    performers_str = ", ".join(performers_list) if performers_list else ""
+    try:
+        _plimit = int(bindings.get("performer_limit"))
+    except (TypeError, ValueError):
+        _plimit = 3
+    if _plimit <= 0:
+        _plimit = None  # "All" — today's unbounded join
+    if performers_list and _plimit and len(performers_list) > _plimit:
+        performers_str = ", ".join(str(p) for p in performers_list[:_plimit]) + " et al"
+    else:
+        performers_str = ", ".join(performers_list) if performers_list else ""
 
     # Duration → "NNmin" (whole minutes, floored). Read from raw seconds under
     # either "duration_seconds" (what a scanned file_data carries) or "duration"
@@ -152,6 +163,30 @@ def apply_template(template: str, bindings: dict[str, Any]) -> str:
     result = result.strip(' -/')
     
     return result
+
+
+# ext4/btrfs/xfs and the usual NAS protocols cap each path COMPONENT at 255
+# bytes (NAME_MAX) — not characters, bytes. Enforced at generation time (F9) so
+# an over-long template result is deterministically shortened instead of
+# erroring the whole row at rename time with a raw OSError.
+_MAX_COMPONENT_BYTES = 255
+
+
+def _truncate_component(name: str, reserve: int = 0) -> str:
+    """UTF-8-truncate one path component to 255 bytes minus ``reserve``.
+
+    The byte cut uses ``errors="ignore"`` so a multi-byte character straddling
+    the boundary is dropped whole (never mojibake). Trailing ` ._-` separators
+    left dangling by the cut are stripped — unless that would empty the
+    component, in which case the raw cut is kept.
+    """
+    budget = _MAX_COMPONENT_BYTES - max(0, reserve)
+    raw = name.encode("utf-8")
+    if len(raw) <= budget:
+        return name
+    cut = raw[:budget].decode("utf-8", errors="ignore")
+    stripped = cut.rstrip(" ._-")
+    return stripped if stripped else cut
 
 
 def sanitize_filename(name: str) -> str:
@@ -214,6 +249,13 @@ def build_new_path(
         import uuid as _uuid
         parts = [f"unmatched_{_uuid.uuid4().hex[:8]}"]
 
+    # Byte-budget every component (F9). The final one reserves room for the
+    # extension plus 8 bytes for a collision suffix (" (NN)", F1) so appending
+    # either can never push it back over NAME_MAX.
+    reserve_last = len(extension.encode("utf-8")) + 8
+    parts = ([_truncate_component(p) for p in parts[:-1]]
+             + [_truncate_component(parts[-1], reserve=reserve_last)])
+
     parts[-1] = parts[-1] + extension
 
     # Build path
@@ -253,14 +295,20 @@ def _strip_performer_prefix(title: str, performers: list) -> str:
     return title
 
 
-def extract_template_vars(scene_data: dict, file_data: dict) -> dict[str, Any]:
+def extract_template_vars(
+    scene_data: dict,
+    file_data: dict,
+    performer_limit: Optional[int] = None,
+) -> dict[str, Any]:
     """
     Extract template variables from scene and file data.
-    
+
     Args:
         scene_data: Metadata from TPDB
         file_data: Detected file metadata
-        
+        performer_limit: Max names {performers} renders before "et al" (F9);
+            None → apply_template's default (3), 0 → all
+
     Returns:
         Dictionary of template variables
     """
@@ -291,4 +339,7 @@ def extract_template_vars(scene_data: dict, file_data: dict) -> dict[str, Any]:
         # renders {duration} from this as "NNmin". Falls back to the API scene's
         # duration when the file wasn't probed at scan time.
         "duration": file_data.get("duration_seconds") or scene_data.get("duration"),
+        # {performers} cap (F9) — rides in the bindings so apply_template and
+        # every preview/rename path see the same value.
+        "performer_limit": performer_limit,
     }

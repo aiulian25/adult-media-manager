@@ -219,17 +219,26 @@ function _unknownTemplateVars(tpl) {
     return [...new Set(found)].filter(name => !_validTemplateVars.has(name));
 }
 
+/** Current {performers} cap from the toolbar select (F9). 0 = "All". */
+function _performerLimit() {
+    const el = document.getElementById('performer-limit');
+    const n = el ? parseInt(el.value, 10) : 3;
+    return Number.isFinite(n) ? n : 3;
+}
+
 /** Pick a representative operation for the preview, or null when no data yet. */
 function _samplePreviewOp() {
     // Prefer a real matched result (has scene_data → most accurate preview).
     const matched = matchedResults.find(r => r && r.match && r.original && r.original.path);
     if (matched) {
-        return { old_path: matched.original.path, scene_data: matched.match, file_data: matched.original };
+        return { old_path: matched.original.path, scene_data: matched.match,
+                 file_data: matched.original, performer_limit: _performerLimit() };
     }
     // Otherwise a scanned file (detector metadata only).
     const scanned = scannedFiles.find(f => f && f.path);
     if (scanned) {
-        return { old_path: scanned.path, scene_data: {}, file_data: scanned };
+        return { old_path: scanned.path, scene_data: {}, file_data: scanned,
+                 performer_limit: _performerLimit() };
     }
     return null;
 }
@@ -439,6 +448,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Live template preview: update as the user types / toggles flat mode.
     template.addEventListener('input', _scheduleTemplatePreview);
     flatRename.addEventListener('change', updateTemplatePreview);
+    // {performers} cap (F9) — re-preview so the "et al" result is visible.
+    document.getElementById('performer-limit')
+        ?.addEventListener('change', updateTemplatePreview);
     updateTemplatePreview();                   // initial state (shows hint until a scan)
     // Load the valid-variable list, then re-run so unknown-var warnings apply.
     loadTemplateVars().then(() => updateTemplatePreview());

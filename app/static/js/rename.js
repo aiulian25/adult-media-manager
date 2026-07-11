@@ -15,7 +15,8 @@ async function renameFiles() {
             scene_data: r.match,
             file_data: r.original,
             template: template.value,
-            flat: flatRename.checked
+            flat: flatRename.checked,
+            performer_limit: _performerLimit()
         }));
     
     if (operations.length === 0) {

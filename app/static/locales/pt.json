@@ -271,5 +271,7 @@
   "match.lookup_error_auth": "Falha na busca: chave de API rejeitada — resultado desconhecido, verifique as Configurações",
   "match.lookup_error_rate_limit": "Falha na busca: limite de requisições — resultado desconhecido, tente mais tarde",
   "match.lookup_error_network": "Falha na busca: erro de rede — resultado desconhecido, tente novamente",
-  "match.lookup_error_internal": "Falha na busca: erro interno — resultado desconhecido"
+  "match.lookup_error_internal": "Falha na busca: erro interno — resultado desconhecido",
+  "toolbar.performer_limit": "Máx. de artistas",
+  "toolbar.performer_limit_all": "Todos"
 }

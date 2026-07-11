@@ -271,5 +271,7 @@
   "match.lookup_error_auth": "Búsqueda fallida: clave API rechazada — resultado desconocido, revisa Ajustes",
   "match.lookup_error_rate_limit": "Búsqueda fallida: límite de peticiones — resultado desconocido, reintenta más tarde",
   "match.lookup_error_network": "Búsqueda fallida: error de red — resultado desconocido, reintenta",
-  "match.lookup_error_internal": "Búsqueda fallida: error interno — resultado desconocido"
+  "match.lookup_error_internal": "Búsqueda fallida: error interno — resultado desconocido",
+  "toolbar.performer_limit": "Máx. intérpretes",
+  "toolbar.performer_limit_all": "Todos"
 }

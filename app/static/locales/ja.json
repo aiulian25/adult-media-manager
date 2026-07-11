@@ -271,5 +271,7 @@
   "match.lookup_error_auth": "照合失敗: APIキーが拒否されました — 結果不明、設定を確認してください",
   "match.lookup_error_rate_limit": "照合失敗: レート制限 — 結果不明、後で再試行してください",
   "match.lookup_error_network": "照合失敗: ネットワークエラー — 結果不明、再試行してください",
-  "match.lookup_error_internal": "照合失敗: 内部エラー — 結果不明"
+  "match.lookup_error_internal": "照合失敗: 内部エラー — 結果不明",
+  "toolbar.performer_limit": "出演者の上限",
+  "toolbar.performer_limit_all": "すべて"
 }

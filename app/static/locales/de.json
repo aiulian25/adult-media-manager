@@ -271,5 +271,7 @@
   "match.lookup_error_auth": "Abfrage fehlgeschlagen: API-Schlüssel abgelehnt — Ergebnis unbekannt, Einstellungen prüfen",
   "match.lookup_error_rate_limit": "Abfrage fehlgeschlagen: Rate-Limit — Ergebnis unbekannt, später erneut versuchen",
   "match.lookup_error_network": "Abfrage fehlgeschlagen: Netzwerkfehler — Ergebnis unbekannt, erneut versuchen",
-  "match.lookup_error_internal": "Abfrage fehlgeschlagen: interner Fehler — Ergebnis unbekannt"
+  "match.lookup_error_internal": "Abfrage fehlgeschlagen: interner Fehler — Ergebnis unbekannt",
+  "toolbar.performer_limit": "Max. Darsteller",
+  "toolbar.performer_limit_all": "Alle"
 }

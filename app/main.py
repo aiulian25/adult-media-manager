@@ -1702,7 +1702,8 @@ async def preview_paths(req: PreviewPathsRequest):
         tmpl       = operation.get("template", TEMPLATES["site_date"])
         flat       = operation.get("flat", False)
 
-        bindings = extract_template_vars(scene_data, file_data)
+        bindings = extract_template_vars(
+            scene_data, file_data, operation.get("performer_limit"))
         new_path = build_new_path(old_path, tmpl, bindings)
         if flat:
             new_path = old_path.parent / new_path.name
@@ -1753,7 +1754,8 @@ async def rename_files(req: RenameRequest, background_tasks: BackgroundTasks):
         tmpl       = operation.get("template", TEMPLATES["site_date"])
         flat       = operation.get("flat", False)
 
-        bindings = extract_template_vars(scene_data, file_data)
+        bindings = extract_template_vars(
+            scene_data, file_data, operation.get("performer_limit"))
         new_path = build_new_path(old_path, tmpl, bindings)
         if flat:
             new_path = old_path.parent / new_path.name

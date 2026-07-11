@@ -2062,3 +2062,11 @@ input.input-error {
     white-space: nowrap;
 }
 .settings-version-bar .svb-hidden { display: none !important; }
+
+/* ── {performers} cap selector (F9) ───────────────────────────────────── */
+.performer-limit-cluster { display: flex; align-items: center; gap: 8px; }
+.performer-limit-select {
+    width: auto;
+    padding: 4px 26px 4px 10px;
+    font-size: 0.82rem;
+}

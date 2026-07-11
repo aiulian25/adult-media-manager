@@ -271,5 +271,7 @@
   "match.lookup_error_auth": "Recherche échouée : clé API refusée — résultat inconnu, vérifiez les Réglages",
   "match.lookup_error_rate_limit": "Recherche échouée : limite de requêtes — résultat inconnu, réessayez plus tard",
   "match.lookup_error_network": "Recherche échouée : erreur réseau — résultat inconnu, réessayez",
-  "match.lookup_error_internal": "Recherche échouée : erreur interne — résultat inconnu"
+  "match.lookup_error_internal": "Recherche échouée : erreur interne — résultat inconnu",
+  "toolbar.performer_limit": "Interprètes max",
+  "toolbar.performer_limit_all": "Tous"
 }
