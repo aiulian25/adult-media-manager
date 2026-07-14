@@ -215,7 +215,10 @@ async function _sendChunk(chunk, actionType, embedMode = 'embed') {
     const res = await fetch('/api/rename', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({ operations: chunk, action: actionType, embed_mode: embedMode })
+        body: JSON.stringify({
+            operations: chunk, action: actionType, embed_mode: embedMode,
+            on_conflict: document.getElementById('conflict-policy')?.value || 'suffix'
+        })
     });
     if (!res.ok) {
         const err = await res.json().catch(() => ({}));
@@ -506,20 +509,27 @@ function displayRenameResults(results) {
         <div class="glass-panel" style="padding: 20px;">
             <h3 style="margin-bottom: 15px;">Rename Results</h3>
             <div class="file-list">
-                ${results.map(result => `
-                    <div class="file-item glass-panel" style="border: 1px solid ${result.success ? 'rgba(0, 255, 136, 0.3)' : 'rgba(255, 71, 87, 0.3)'}; padding: 12px;">
+                ${results.map(result => {
+                    // Collision-policy skip (F1): neutral row, never red.
+                    const skipped = !!result.skipped;
+                    const border = skipped ? 'var(--border-soft)'
+                        : (result.success ? 'rgba(0, 255, 136, 0.3)' : 'rgba(255, 71, 87, 0.3)');
+                    const icon = skipped ? '⏭' : (result.success ? '✅' : '❌');
+                    return `
+                    <div class="file-item glass-panel" style="border: 1px solid ${border}; padding: 12px;">
                         <div class="file-info">
                             <div style="font-size: 12px; color: var(--text-muted); margin-bottom: 4px;">
-                                ${result.success ? '✅' : '❌'} ${escapeHtml(result.action.toUpperCase())}
+                                ${icon} ${escapeHtml(result.action.toUpperCase())}
                             </div>
                             <div class="file-name" style="color: var(--text-muted);">From: ${escapeHtml(result.old_path)}</div>
-                            ${result.new_path ? `<div class="file-name">To: ${escapeHtml(result.new_path)}</div>` : ''}
+                            ${result.new_path && !skipped ? `<div class="file-name">To: ${escapeHtml(result.new_path)}</div>` : ''}
+                            ${skipped ? `<div style="color: var(--text-muted); font-size: 12px; margin-top: 4px;">${escapeHtml(t('rename.skipped_exists'))}</div>` : ''}
                             ${result.companions_moved ? `<div style="color: var(--text-secondary); font-size: 11px; margin-top: 4px;">${escapeHtml(t('rename.companions_moved', { n: result.companions_moved }))}</div>` : ''}
                             ${result.error ? `<div style="color: var(--error); font-size: 12px; margin-top: 4px;">${escapeHtml(result.error)}</div>` : ''}
                             ${result.embed_warning ? `<div style="color: var(--warning, #f0a500); font-size: 11px; margin-top: 4px;">⚠️ ${escapeHtml(result.embed_warning)}</div>` : ''}
                         </div>
                     </div>
-                `).join('')}
+                `;}).join('')}
             </div>
         </div>
     `;

@@ -31,12 +31,16 @@ from app.core.detector import (
     detect, MediaType, is_video_file, is_subtitle_file,
     VIDEO_EXTENSIONS, SUBTITLE_EXTENSIONS,
 )
-from app.core.matcher import score_match, find_best_match
+from app.core.matcher import (
+    score_match, find_best_match, normalize as _perf_normalize,
+    _performer_pair_score, PARTIAL_NAME_SCORE as _PARTIAL_NAME_SCORE,
+)
 from app.core.formatter import (
     apply_template, build_new_path, TEMPLATES, TEMPLATE_VARS, extract_template_vars,
 )
 from app.core.renamer import (
-    execute_rename, execute_rename_with_companions, RenameAction, RenameResult,
+    execute_rename, execute_rename_with_companions, resolve_collision,
+    RenameAction, RenameResult,
 )
 from app.core.history import RenameHistory, HistoryEntry
 from app.core.catalog import Catalog
@@ -47,6 +51,7 @@ from app.core.embedder import (
 from app.api.tpdb import TPDBClient
 from app.api.stashdb import (
     StashDBClient, compute_oshash, compute_phash_ffmpeg, compute_phash_ffmpeg_sync,
+    PHASH_MATCH_TIMEOUT,
 )
 
 
@@ -589,6 +594,16 @@ class RenameRequest(BaseModel):
     operations: list[dict]
     action: str = "test"
     embed_mode: str = "embed"
+    # Collision policy (F1): what to do when a target path already exists (on
+    # disk, or claimed earlier in this batch). suffix = auto-number " (N)".
+    on_conflict: str = "suffix"
+
+    @field_validator("on_conflict")
+    @classmethod
+    def validate_on_conflict(cls, v: str) -> str:
+        if v not in ("suffix", "skip", "fail"):
+            raise ValueError("on_conflict must be 'suffix', 'skip' or 'fail'")
+        return v
 
     @field_validator("action")
     @classmethod
@@ -614,11 +629,32 @@ class ManualMetadataRequest(BaseModel):
     quality: Optional[str] = None
     thumbnail_index: Optional[int] = None  # Which generated thumbnail to use
     embed_mode: str = "embed"             # embed | smart | nfo_only (embedder.EMBED_MODES)
+    # Synopsis + provider identity (F7) — set by the Fetch buttons; absent for
+    # hand-typed entries, which then keep id="manual" (no <uniqueid> in the NFO).
+    description: Optional[str] = None
+    scene_id: Optional[str] = None
+    source: Optional[str] = None
 
     @field_validator("embed_mode")
     @classmethod
     def validate_embed_mode(cls, v: str) -> str:
         return _validate_embed_mode(v)
+
+    @field_validator("source")
+    @classmethod
+    def validate_source(cls, v: Optional[str]) -> Optional[str]:
+        v = (v or "").strip().lower() or None
+        if v is not None and v not in ("tpdb", "stashdb"):
+            raise ValueError("source must be 'tpdb' or 'stashdb'")
+        return v
+
+    @field_validator("scene_id")
+    @classmethod
+    def validate_scene_id(cls, v: Optional[str]) -> Optional[str]:
+        v = (v or "").strip() or None
+        if v is not None and len(v) > 200:
+            raise ValueError("scene_id too long")
+        return v
 
 
 def _parse_nfo(nfo_path: Path) -> dict | None:
@@ -645,6 +681,10 @@ def _parse_nfo(nfo_path: Path) -> dict | None:
             for t in root.findall("tag")
             if (t.text or "").strip()
         ]
+        # Provider linkage (F7): read the <uniqueid> back so an organised file
+        # keeps its scene id/source across rescans instead of losing them the
+        # moment the only copy lives in the sidecar.
+        uid = root.find("uniqueid")
         return {
             "title":        _text("title"),
             "site":         _text("studio"),
@@ -652,6 +692,8 @@ def _parse_nfo(nfo_path: Path) -> dict | None:
             "release_date": _text("premiered") or _text("releasedate"),
             "tags":         tags,
             "description":  _text("plot"),
+            "scene_id":     (uid.text or "").strip() if uid is not None else "",
+            "source":       (uid.get("type") or "").strip() if uid is not None else "",
         }
     except Exception:
         return None
@@ -1073,6 +1115,126 @@ async def catalog_duplicates():
     return {"groups": catalog.find_duplicates()}
 
 
+class ResolveDuplicatesRequest(BaseModel):
+    """Request body for /api/catalog/resolve-duplicates (F16)."""
+    keep: str
+    remove: list[str]
+    mode: str  # "delete" | "hardlink"
+
+    @field_validator("mode")
+    @classmethod
+    def validate_mode(cls, v: str) -> str:
+        if v not in ("delete", "hardlink"):
+            raise ValueError("mode must be 'delete' or 'hardlink'")
+        return v
+
+    @field_validator("remove")
+    @classmethod
+    def validate_remove(cls, v: list[str]) -> list[str]:
+        if not v:
+            raise ValueError("remove must not be empty")
+        if len(v) > 100:
+            raise ValueError("too many files in one request")
+        if len(set(v)) != len(v):
+            raise ValueError("remove contains duplicates")
+        return v
+
+
+@app.post("/api/catalog/resolve-duplicates")
+async def resolve_duplicates(req: ResolveDuplicatesRequest):
+    """Resolve a duplicate group: keep one copy, delete or hardlink the rest (F16).
+
+    AMM's first file-DELETING endpoint, so verification is a separate phase
+    before any mutation, and the client's grouping is never trusted:
+      • every path must pass the allowed-roots check;
+      • `keep` is compared to each `remove` by resolved path (a string check
+        wouldn't stop symlink/`..` aliases from deleting the kept copy);
+      • every `remove`'s oshash is recomputed NOW and must equal `keep`'s —
+        any mismatch 409s with per-file detail and nothing is touched;
+      • hardlink mode additionally requires same-filesystem (st_dev), and the
+        swap is atomic (link to tmp → os.replace) so no path ever disappears.
+    Each affected file gets a `dedupe_<mode>` history entry (non-revertible by
+    construction — the action is outside REVERTIBLE_ACTIONS; delete is honest
+    about being final). Deletes are dropped from the catalog.
+    """
+    keep_path = Path(req.keep)
+    remove_paths = [Path(p) for p in req.remove]
+
+    # ── Phase 1: validate + re-verify (no filesystem mutation here) ──────────
+    for p in [keep_path, *remove_paths]:
+        if not _is_allowed_path(p):
+            raise HTTPException(status_code=403,
+                                detail=f"Path not in an allowed media directory: {p}")
+    if not keep_path.is_file():
+        raise HTTPException(status_code=404, detail=f"Keep file not found: {keep_path}")
+    keep_resolved = keep_path.resolve()
+    for p in remove_paths:
+        if p.resolve() == keep_resolved:
+            raise HTTPException(status_code=400,
+                                detail="A file to remove is the same file as the one to keep")
+
+    keep_oshash = await asyncio.to_thread(compute_oshash, keep_path)
+    if not keep_oshash:
+        raise HTTPException(status_code=409,
+                            detail={"code": "hash_failed", "path": str(keep_path)})
+    keep_stat = keep_path.stat()
+
+    problems: list[dict] = []
+    for p in remove_paths:
+        if not p.is_file():
+            problems.append({"path": str(p), "code": "not_found"})
+            continue
+        oshash = await asyncio.to_thread(compute_oshash, p)
+        if oshash != keep_oshash:
+            problems.append({"path": str(p), "code": "hash_mismatch"})
+            continue
+        if req.mode == "hardlink" and p.stat().st_dev != keep_stat.st_dev:
+            problems.append({"path": str(p), "code": "not_same_fs"})
+    if problems:
+        raise HTTPException(status_code=409, detail={
+            "code": problems[0]["code"], "files": problems,
+        })
+
+    # ── Phase 2: execute (per-file best effort, everything logged) ──────────
+    results: list[dict] = []
+    history_batch: list[tuple] = []
+    freed = 0
+    for p in remove_paths:
+        try:
+            size = p.stat().st_size
+            if req.mode == "delete":
+                p.unlink()
+                try:
+                    catalog.forget(str(p))
+                except Exception as e:
+                    print(f"WARNING: catalog forget after dedupe failed: {e}")
+                freed += size
+            else:
+                st = p.stat()
+                if st.st_dev == keep_stat.st_dev and st.st_ino == keep_stat.st_ino:
+                    results.append({"path": str(p), "ok": True, "code": "already_linked"})
+                    continue
+                tmp = p.with_suffix(p.suffix + ".amm_ln")
+                os.link(keep_path, tmp)
+                os.replace(tmp, p)
+                freed += size
+            results.append({"path": str(p), "ok": True, "code": "ok"})
+            history_batch.append((p, keep_path, f"dedupe_{req.mode}", True))
+        except Exception as e:
+            results.append({"path": str(p), "ok": False, "code": "error"})
+            history_batch.append((p, keep_path, f"dedupe_{req.mode}", False, str(e)))
+            print(f"WARNING: dedupe {req.mode} failed for {p}: {e}")
+
+    if history_batch:
+        history.add_entries(history_batch)
+
+    return {
+        "success": all(r["ok"] for r in results),
+        "results": results,
+        "freed_bytes": freed,
+    }
+
+
 # ─── Match Endpoint ────────────────────────────────────────────────────
 
 def _stashdb_scene_to_dict(s) -> dict:
@@ -1297,7 +1459,10 @@ async def _match_one_stashdb(file_data: dict, sem: asyncio.Semaphore) -> dict:
             oshash = await asyncio.to_thread(compute_oshash, file_path)
             # pHash computation is CPU-heavy; run it but cap at 20 s
             try:
-                phash = await asyncio.wait_for(compute_phash_ffmpeg(file_path), timeout=20)
+                # Budget depends on the algorithm (F14): the stash-compatible
+                # sprite needs 25 sequential ffmpeg seeks (slow on NAS mounts).
+                phash = await asyncio.wait_for(
+                    compute_phash_ffmpeg(file_path), timeout=PHASH_MATCH_TIMEOUT)
             except asyncio.TimeoutError:
                 phash = None
 
@@ -1306,7 +1471,7 @@ async def _match_one_stashdb(file_data: dict, sem: asyncio.Semaphore) -> dict:
                 if fp_results:
                     best = fp_results[0]
                     scene_dict = _stashdb_scene_to_dict(best)
-                    ms = score_match(file_data, scene_dict)
+                    ms = score_match(file_data, scene_dict, alias_resolver=_alias_lookup)
                     alts = _dedup_alternatives(
                         [_stashdb_scene_to_dict(s) for s in fp_results[1:5]],
                         scene_dict,
@@ -1367,7 +1532,8 @@ async def _match_one_stashdb(file_data: dict, sem: asyncio.Semaphore) -> dict:
         # find_best_match() now includes the title-only fallback internally
         # (review item D2), so sparse/title-only files are handled here for both
         # StashDB and TPDB — no endpoint-specific fallback copy needed.
-        best_result = find_best_match(scoring_data, results_dicts)
+        best_result = find_best_match(scoring_data, results_dicts,
+                                      alias_resolver=_alias_lookup)
         if best_result:
             best_match, ms = best_result
             # Register the matched studio for the site autocomplete (parity with
@@ -1404,7 +1570,7 @@ async def _match_one_tpdb(file_data: dict, sem: asyncio.Semaphore, auto_match: b
                 # + source ride along automatically and can't drift from the shape
                 # the search path / lookup endpoint produce.
                 scene_dict = _tpdb_scene_to_dict(auto)
-                ms = score_match(file_data, scene_dict)
+                ms = score_match(file_data, scene_dict, alias_resolver=_alias_lookup)
                 return {
                     "original": file_data,
                     "match": scene_dict,
@@ -1426,7 +1592,8 @@ async def _match_one_tpdb(file_data: dict, sem: asyncio.Semaphore, auto_match: b
 
         if search_results:
             results_dicts = [_tpdb_scene_to_dict(s) for s in search_results[:5]]
-            best_result = find_best_match(file_data, results_dicts)
+            best_result = find_best_match(file_data, results_dicts,
+                                          alias_resolver=_alias_lookup)
             if best_result:
                 best_match, ms = best_result
                 return {
@@ -1544,7 +1711,14 @@ async def create_match_session(req: MatchRequest):
     expired = [k for k, v in _match_sessions.items() if _time.monotonic() > v["expires"]]
     for k in expired:
         _match_sessions.pop(k, None)
-    return {"session_id": session_id}
+    # Honest oversubmission (F11): the stream truncates at _SSE_MAX_FILES as a
+    # DoS guard — echo both counts so a client that sent more can SEE it (the
+    # app's own client chunks at the same size and never trips this).
+    return {
+        "session_id": session_id,
+        "accepted": min(len(req.files), _SSE_MAX_FILES),
+        "submitted": len(req.files),
+    }
 
 
 @app.get("/api/match-stream")
@@ -1747,6 +1921,8 @@ async def rename_files(req: RenameRequest, background_tasks: BackgroundTasks):
     phase1 = []          # list of (result, new_path, meta, cat) tuples
     history_batch = []   # (old, new, action, success) — written in ONE save below
     confirm_updates = {} # oshash -> confirmed cache entry, flushed once below (D3)
+    alias_learn_jobs = []  # (file_performers, api_performers) per confirm (F12)
+    reserved: set[str] = set()  # targets claimed by THIS batch (collision policy, F1)
     for operation in req.operations:
         old_path   = Path(operation["old_path"])
         scene_data = operation.get("scene_data", {})
@@ -1759,6 +1935,26 @@ async def rename_files(req: RenameRequest, background_tasks: BackgroundTasks):
         new_path = build_new_path(old_path, tmpl, bindings)
         if flat:
             new_path = old_path.parent / new_path.name
+
+        # Collision policy (F1): resolve against the disk AND the targets this
+        # batch already claimed, BEFORE touching the filesystem. Applies in
+        # test mode too, so the preview shows the exact suffixed names.
+        resolved_target, skip_code = resolve_collision(
+            old_path, new_path, req.on_conflict, reserved)
+        if resolved_target is None:
+            if skip_code == "target_exists":
+                result = RenameResult(
+                    success=False, old_path=old_path, new_path=new_path,
+                    action=action, error=None, skipped="target_exists")
+            else:  # no_free_suffix — a real error, every (2)..(99) slot taken
+                result = RenameResult(
+                    success=False, old_path=old_path, new_path=new_path,
+                    action=action,
+                    error=f"No free auto-number slot for: {new_path}")
+            phase1.append((result, new_path, {}, None))
+            continue
+        new_path = resolved_target
+        reserved.add(str(new_path))
 
         # Move the video AND its same-stem companions (subtitles / NFO / artwork)
         # with the same action, so a rename never orphans a `.srt`/`-poster.jpg`
@@ -1795,7 +1991,10 @@ async def rename_files(req: RenameRequest, background_tasks: BackgroundTasks):
         # process died mid-embed. See _run_embed_phase / _embed_one.
         cat = None
         if result.success and action != RenameAction.TEST:
-            history_batch.append((old_path, new_path, action.value, True))
+            # One group id per operation (F10): the video and every companion
+            # it dragged along revert together, in one click.
+            gid = uuid.uuid4().hex[:12]
+            history_batch.append((old_path, new_path, action.value, True, None, gid))
             # Renaming a file is the user accepting its match → confirm it in the
             # cache (only when a real scene was attached). oshash is content-
             # stable, so the confirmation still hits after the move/rename.
@@ -1803,12 +2002,24 @@ async def rename_files(req: RenameRequest, background_tasks: BackgroundTasks):
             if oshash and scene_data.get("title"):
                 confirm_updates[oshash] = _make_cache_entry(
                     scene_data, "confirmed", 100.0, confirmed=True)
+                # A confirmed match is ground truth — queue it for alias
+                # learning (F12): filename performers that fuzzy-miss every
+                # scene performer may be TPDB-known aliases worth remembering.
+                alias_learn_jobs.append((
+                    file_data.get("performers") or [],
+                    scene_data.get("performers") or [],
+                ))
             cat = {
                 "oshash":     oshash,
                 "scene_id":   scene_data.get("id"),
                 "source":     file_data.get("datasource"),
                 "confidence": (file_data.get("confidence") or None),
                 "confirmed":  bool(scene_data.get("title")),
+                # Rename action — Phase 2 uses it to decide whether the OLD
+                # cache key may be dropped after the embed re-hashes the file
+                # (F6): "move" leaves no file with the old bytes; copy/hardlink
+                # sources still carry them.
+                "action":     action.value,
             }
             # The filesystem move already happened, so drop the stale source row
             # now (its content lives at new_path). Marking new_path "organized"
@@ -1825,7 +2036,7 @@ async def rename_files(req: RenameRequest, background_tasks: BackgroundTasks):
             for comp in result.companions:
                 if comp.success and comp.new_path:
                     history_batch.append(
-                        (comp.old_path, comp.new_path, action.value, True))
+                        (comp.old_path, comp.new_path, action.value, True, None, gid))
                     try:
                         if action == RenameAction.MOVE and str(comp.new_path) != str(comp.old_path):
                             catalog.forget(str(comp.old_path))
@@ -1840,6 +2051,9 @@ async def rename_files(req: RenameRequest, background_tasks: BackgroundTasks):
         history.add_entries(history_batch)
     if confirm_updates:
         _match_cache_flush(confirm_updates)
+    if alias_learn_jobs:
+        # Fire-and-forget: capped TPDB lookups, silently off without a key (F12).
+        background_tasks.add_task(_learn_aliases, alias_learn_jobs)
 
     # Serialize Phase 1 results (embed_warning is null — Phase 2 not run yet)
     phase1_results = [
@@ -1849,6 +2063,9 @@ async def rename_files(req: RenameRequest, background_tasks: BackgroundTasks):
             "new_path":      str(result.new_path) if result.new_path else None,
             "action":        result.action.value,
             "error":         result.error,
+            # Collision-policy skip code (F1): "target_exists" renders as a
+            # neutral ⏭ row, never as a red error.
+            "skipped":       result.skipped,
             "embed_warning": None,
             # Number of companion sidecars (subtitles/NFO/artwork) moved with this
             # file (F2) — the UI shows "+N companion file(s)" on the row.
@@ -1935,6 +2152,33 @@ async def _download_poster(url: str, dest: Path) -> bool:
         return False
 
 
+async def _refresh_fingerprint_after_embed(
+    path: Path, old_oshash: Optional[str], *, delete_old: bool
+) -> Optional[str]:
+    """Recompute a file's oshash after a container write changed its bytes (F6).
+
+    Every container strategy mutates the file (FFmpeg os.replace, AtomicParsley
+    --overWrite, mkvpropedit header edit), so the match-cache entry that was
+    confirmed under the PRE-embed hash would orphan itself on the next scan.
+    Re-keys that entry to the new hash and refreshes the catalog row's
+    oshash/size in place. ``delete_old`` drops the old key when no file can
+    still carry the old bytes (rename action "move"); copy/hardlink sources and
+    manual in-place saves keep it. Best-effort: returns the new hash or None.
+    """
+    try:
+        new_oshash = await asyncio.to_thread(compute_oshash, path)
+    except Exception:
+        new_oshash = None
+    if not new_oshash:
+        return None
+    _match_cache_rekey(old_oshash, new_oshash, delete_old=delete_old)
+    try:
+        catalog.update_fingerprint(str(path), new_oshash, path.stat().st_size)
+    except Exception as e:
+        print(f"WARNING: catalog fingerprint refresh failed: {e}")
+    return new_oshash
+
+
 async def _run_embed_phase(job_id: str, tasks: list, embed_mode: str = "embed") -> None:
     """
     Background task: write metadata for each successfully renamed file.
@@ -1960,6 +2204,7 @@ async def _run_embed_phase(job_id: str, tasks: list, embed_mode: str = "embed") 
 
     async def _embed_one(result, new_path, meta, cat):
         warning = None
+        new_oshash = None
         # Container write for embed/smart/embed_only (skipped for nfo_only). The
         # concurrency cap matters for the FFmpeg remux; nfo_only skips it entirely.
         if not nfo_only:
@@ -1967,6 +2212,15 @@ async def _run_embed_phase(job_id: str, tasks: list, embed_mode: str = "embed") 
                 ok, err = await _embed_for_mode(result.new_path, meta, embed_mode)
                 if not ok:
                     warning = f"Metadata embedding warning: {err}"
+                else:
+                    # F6: the write changed the file's bytes — re-key the match
+                    # cache + catalog to the post-embed hash so the confirmation
+                    # made in Phase 1 survives the very embed that follows it.
+                    new_oshash = await _refresh_fingerprint_after_embed(
+                        result.new_path,
+                        cat.get("oshash") if cat else None,
+                        delete_old=bool(cat and cat.get("action") == "move"),
+                    )
         nfo_written = False
         if not embed_only:  # write the sidecar for nfo_only/smart/embed
             # Poster (F3): only meaningful alongside the NFO that references it.
@@ -1988,7 +2242,9 @@ async def _run_embed_phase(job_id: str, tasks: list, embed_mode: str = "embed") 
             try:
                 catalog.mark_organized(
                     str(result.new_path),
-                    oshash=cat.get("oshash"),
+                    # Post-embed hash when the container was rewritten (F6);
+                    # the pre-embed one otherwise (nfo_only — bytes untouched).
+                    oshash=new_oshash or cat.get("oshash"),
                     scene_id=cat.get("scene_id"),
                     source=cat.get("source"),
                     confidence=cat.get("confidence"),
@@ -2006,7 +2262,8 @@ async def _run_embed_phase(job_id: str, tasks: list, embed_mode: str = "embed") 
 
 
 async def _run_manual_embed_job(
-    job_id: str, file_path: Path, metadata: dict, embed_mode: str
+    job_id: str, file_path: Path, metadata: dict, embed_mode: str,
+    old_oshash: Optional[str] = None,
 ) -> None:
     """
     Background container-embed for a single manual metadata save.
@@ -2030,6 +2287,13 @@ async def _run_manual_embed_job(
             ok, err = await _embed_for_mode(file_path, metadata, embed_mode)
             if not ok:
                 warning = f"Metadata embedding warning: {err}"
+            else:
+                # F6: the embed changed the file's bytes — re-key the confirm
+                # the request handler stored under the pre-embed hash. Old key
+                # kept: an in-place edit has no action context, and an unknown
+                # hardlink/copy elsewhere may still carry the old bytes.
+                await _refresh_fingerprint_after_embed(
+                    file_path, old_oshash, delete_old=False)
     except Exception as e:  # never let a background crash leave the job stuck
         warning = f"Metadata embedding warning: {e}"
 
@@ -2253,6 +2517,16 @@ async def get_history(limit: int = Query(50, ge=1, le=500)):
     Get rename history.
     """
     entries = history.get_recent(limit)
+    # Group bookkeeping (F10): per group, how many members and which entry is
+    # the primary (the video — first appended). Computed over the FULL history
+    # so a group straddling the `limit` window still counts correctly.
+    group_counts: dict[str, int] = {}
+    group_primary: dict[str, str] = {}
+    for e in history.entries:
+        gid = e.group_id
+        if gid and e.success and e.action in ("move", "copy", "hardlink", "symlink"):
+            group_counts[gid] = group_counts.get(gid, 0) + 1
+            group_primary.setdefault(gid, e.id)
     return {
         "entries": [
             {
@@ -2267,6 +2541,11 @@ async def get_history(limit: int = Query(50, ge=1, le=500)):
                 # filesystem state is checked at revert time, so we don't stat
                 # every path here (avoids 50 NAS stat calls per history open).
                 "revertible": history.is_revertible(e),
+                # Grouped rename info (F10): the UI folds companion rows into a
+                # "+N companions" chip on the primary (video) row.
+                "group_id": e.group_id,
+                "group_primary": bool(e.group_id) and group_primary.get(e.group_id) == e.id,
+                "companions": max(0, group_counts.get(e.group_id, 1) - 1) if e.group_id else 0,
             }
             for e in entries
         ]
@@ -2279,15 +2558,23 @@ async def undo_rename():
     Undo the last rename operation (most recent revertible *move*).
     Paths are confined to the allowed roots before any filesystem change.
     """
-    entry = history.undo_last(is_allowed=_is_allowed_path)
+    entry, group_results = history.undo_last(is_allowed=_is_allowed_path)
     if entry:
-        return {
+        resp = {
             "success": True,
             "undone": {
                 "old_path": entry.old_path,
                 "new_path": entry.new_path,
-            }
+            },
         }
+        # Grouped rename (F10): report every member's outcome so the client can
+        # say "3 files restored" instead of pretending it was one.
+        if group_results is not None:
+            resp["group"] = [
+                {"new_path": p, "ok": ok, "code": code}
+                for p, ok, code in group_results
+            ]
+        return resp
     else:
         return {
             "success": False,
@@ -2319,6 +2606,23 @@ async def revert_history_entry(req: RevertRequest):
     entry = history.get_entry(req.id)
     if entry is None:
         raise HTTPException(status_code=404, detail="History entry not found")
+
+    # Grouped rename (F10): reverting any member restores the WHOLE set —
+    # video first, then companions — with per-file outcome codes.
+    if entry.group_id:
+        results = history.revert_group(entry.group_id, is_allowed=_is_allowed_path)
+        any_ok = any(ok for _, ok, _ in results)
+        # Representative code for the toast: ok when anything moved back,
+        # otherwise the (common) blocking code, e.g. already_reverted.
+        codes = [code for _, ok, code in results if not ok]
+        code = "ok" if any_ok else (codes[0] if codes else "error")
+        return {
+            "success": any_ok,
+            "code": code,
+            "group": [
+                {"new_path": p, "ok": ok, "code": c} for p, ok, c in results
+            ],
+        }
 
     ok, code = history.revert_entry(entry, is_allowed=_is_allowed_path)
     resp: dict = {"success": ok, "code": code}
@@ -2873,6 +3177,145 @@ def _match_cache_confirm(oshash: str, scene: dict, source: str, confidence=100.0
         return True
 
     _match_cache_store.mutate(_apply)
+
+
+def _match_cache_rekey(old_oshash: Optional[str], new_oshash: str, *,
+                       delete_old: bool) -> None:
+    """Duplicate a cache entry under a new content hash after an embed rewrote
+    the file's bytes (F6), so fingerprint-keyed trust survives embedding.
+
+    ``delete_old`` drops the old key when nothing can still carry the old bytes
+    (rename action "move"); copy/hardlink sources and manual in-place saves
+    keep it — a stale-but-unreachable entry is harmless, a wrongly deleted
+    confirmation is not. No-op when the hashes match (e.g. an mkvpropedit edit
+    that stayed outside the oshash head/tail windows) or the old key is absent.
+    """
+    if not old_oshash or not new_oshash or old_oshash == new_oshash:
+        return
+
+    def _apply(cache: dict) -> bool:
+        entry = cache.get(old_oshash)
+        if not entry:
+            return False
+        cache[new_oshash] = {**entry, "updated_at": _time.time()}
+        if delete_old:
+            del cache[old_oshash]
+        _bound_match_cache(cache)
+        return True
+
+    _match_cache_store.mutate(_apply)
+
+
+# ── Learned performer aliases (F12) ──────────────────────────────────────────
+# {normalized alias -> canonical API name}, learned from user-confirmed renames
+# whose filename credited a performer under a name TPDB knows only as an alias.
+# Same _JsonStore pattern as the other DATA_DIR stores; injected into the pure
+# matcher as a resolver callable, so scoring stays unit-testable and None-safe.
+_PERFORMER_ALIASES_FILE = DATA_DIR / "performer_aliases.json"
+_performer_aliases_store = _JsonStore(_PERFORMER_ALIASES_FILE, dict)
+
+# Per-run cap on TPDB performer lookups while learning — a 300-file confirmed
+# batch must not fan out into hundreds of API calls.
+_ALIAS_LEARN_MAX_LOOKUPS = 5
+
+
+def _alias_lookup(name: str) -> Optional[str]:
+    """Resolve a (filename) performer name to its learned canonical name."""
+    if not name:
+        return None
+    return _performer_aliases_store.get_key(_perf_normalize(str(name)))
+
+
+def _alias_learn(alias: str, canonical: str) -> None:
+    """Persist one alias→canonical mapping (no-op for empty/identity pairs)."""
+    key = _perf_normalize(str(alias or ""))
+    canonical = str(canonical or "").strip()
+    if not key or not canonical or key == _perf_normalize(canonical):
+        return
+
+    def _apply(cache: dict) -> bool:
+        if cache.get(key) == canonical:
+            return False
+        cache[key] = canonical
+        return True
+
+    _performer_aliases_store.mutate(_apply)
+
+
+async def _learn_aliases(pairs: list) -> None:
+    """Background task: learn alias→canonical mappings from confirmed matches.
+
+    For each (filename_performers, api_performers) pair of a user-confirmed
+    rename, take the filename names that scored <0.5 against EVERY API name and
+    ask TPDB once whether that name is a known alias of one of the scene's
+    performers — a strict bidirectional check (searched name in result aliases
+    AND result canonical among the scene's performers) so junk can't be
+    learned. Capped, best-effort, and silently disabled without a TPDB key.
+    """
+    if tpdb is None or not pairs:
+        return
+    lookups = 0
+    try:
+        for file_performers, api_performers in pairs:
+            if lookups >= _ALIAS_LEARN_MAX_LOOKUPS:
+                break
+            if not file_performers or not api_performers:
+                continue
+            api_norm = {_perf_normalize(str(a)) for a in api_performers}
+            for f_perf in file_performers:
+                if lookups >= _ALIAS_LEARN_MAX_LOOKUPS:
+                    break
+                f_norm = _perf_normalize(str(f_perf))
+                if not f_norm or _alias_lookup(f_perf):
+                    continue  # empty or already learned
+                best = max((_performer_pair_score(f_norm, a) for a in api_norm),
+                           default=0.0)
+                # Skip only CONFIDENT fuzzy matches. An exact-0.5 partial hit
+                # (single shared name token, PARTIAL_NAME_SCORE) is precisely
+                # the ambiguity a learned alias resolves, so it stays eligible.
+                if best > _PARTIAL_NAME_SCORE:
+                    continue
+                lookups += 1
+                results = await tpdb.search_performer(str(f_perf))
+                for perf in results or []:
+                    name_norm = _perf_normalize(perf.name or "")
+                    alias_hit = any(_perf_normalize(al) == f_norm
+                                    for al in (perf.aliases or []))
+                    if alias_hit and name_norm in api_norm:
+                        _alias_learn(str(f_perf), perf.name)
+                        print(f"INFO: learned performer alias: {f_perf!r} -> {perf.name!r}")
+                        break
+    except Exception as e:  # learning must never break a rename
+        print(f"WARNING: alias learning failed: {e}")
+
+
+class ConfirmMatchRequest(BaseModel):
+    """Request body for /api/confirm-match (F3 — user picked an alternative)."""
+    oshash: str
+    scene: dict
+
+    @field_validator("oshash")
+    @classmethod
+    def validate_oshash(cls, v: str) -> str:
+        v = (v or "").strip().lower()
+        if not re.fullmatch(r"[0-9a-f]{16}", v):
+            raise ValueError("oshash must be 16 hex characters")
+        return v
+
+
+@app.post("/api/confirm-match")
+async def confirm_match(req: ConfirmMatchRequest):
+    """Persist a user-picked scene as the confirmed match for a content hash (F3).
+
+    Same trust level and store as the manual-save confirm: the entry is keyed by
+    the file's oshash, flagged user_confirmed (never evicted, trusted by the
+    next scan/match), and carries the scene's own provider source.
+    """
+    if not str(req.scene.get("title") or "").strip():
+        raise HTTPException(status_code=400, detail="Scene must have a title")
+    source = str(req.scene.get("source") or "manual").strip() or "manual"
+    _match_cache_confirm(req.oshash, req.scene, source)
+    return {"success": True}
 
 
 class AddKnownSiteRequest(BaseModel):
@@ -3582,6 +4025,13 @@ async def save_manual_metadata(req: ManualMetadataRequest, background_tasks: Bac
         # save; it rides along in the confirmed-match cache scene below and feeds
         # the {quality} naming variable at a later rename (see formatter fallback).
         "quality":      req.quality or "",
+        # Synopsis + provider identity (F7): write_nfo emits <plot> and — when a
+        # real provider id is present — <uniqueid type="tpdb|stashdb">; the
+        # container embed carries the description too (F4). Hand-typed saves
+        # keep id "manual", which write_nfo deliberately skips.
+        "description":  req.description or "",
+        "id":           req.scene_id or "manual",
+        "source":       req.source or "manual",
     }
 
     # "embed_only" writes container tags but NO sidecar (.nfo / -poster.jpg),
@@ -3621,6 +4071,15 @@ async def save_manual_metadata(req: ManualMetadataRequest, background_tasks: Bac
         except Exception as nfo_err:
             raise HTTPException(status_code=500, detail=f"Failed to write metadata sidecar: {nfo_err}")
 
+    # Pre-embed content hash (F6): used for the user-confirm below AND passed to
+    # the background embed job so it can re-key the cache entry once the
+    # container write changes the file's bytes. Background tasks run after the
+    # response, so the confirm always lands under this hash first.
+    try:
+        pre_oshash = compute_oshash(file_path)
+    except Exception:
+        pre_oshash = None
+
     # ── Heavy path: in-container embed dispatched to the background ──────────
     # "nfo_only" relies on the sidecar alone; every other mode writes container
     # tags off the request path so the UI returns instantly.
@@ -3629,7 +4088,8 @@ async def save_manual_metadata(req: ManualMetadataRequest, background_tasks: Bac
         embed_job_id = uuid.uuid4().hex
         _job_create(embed_job_id, 1, kind="manual_embed")
         background_tasks.add_task(
-            _run_manual_embed_job, embed_job_id, file_path, metadata, req.embed_mode
+            _run_manual_embed_job, embed_job_id, file_path, metadata,
+            req.embed_mode, pre_oshash,
         )
 
     # A manual save is the strongest "this is the right scene" signal — record it
@@ -3637,12 +4097,17 @@ async def save_manual_metadata(req: ManualMetadataRequest, background_tasks: Bac
     # the oshash is recomputed from the (existing, already path-validated) file.
     try:
         confirmed_scene = {
-            "id": "manual",
+            # Provider identity survives the round trip (F7): a fetched scene
+            # keeps its real id/source, so a LATER template rename of this file
+            # writes the correct <uniqueid> too (rename meta reads scene.source).
+            "id": metadata["id"],
+            "source": metadata["source"],
             "title": metadata["title"],
             "site": metadata["site"],
             "performers": metadata["performers"],
             "release_date": metadata["release_date"],
             "tags": metadata["tags"],
+            "description": metadata["description"],
             # Persist the user's quality so a later rename can use {quality} even
             # when the filename carries no resolution (formatter falls back to the
             # scene's quality). Absent for API matches, which have no quality.
@@ -3650,15 +4115,16 @@ async def save_manual_metadata(req: ManualMetadataRequest, background_tasks: Bac
             "manual_entry": True,
             "thumbnail_url": thumbnail_url,
         }
-        oshash = compute_oshash(file_path)
-        _match_cache_confirm(oshash, confirmed_scene, "manual")
+        # Hash computed once above (F6) — the same value the background embed
+        # job receives, so its rekey provably targets this entry.
+        _match_cache_confirm(pre_oshash, confirmed_scene, metadata["source"])
         # Catalog (R1): "organised" is the NFO-on-disk signal, so only mark it when
         # a sidecar was written. The match-cache confirm above (oshash-keyed) is
         # kept for every mode — it's match memory, independent of the NFO.
         if write_sidecar:
             catalog.mark_organized(
-                str(file_path), oshash=oshash, scene_id="manual",
-                source="manual", confidence=100.0, confirmed=True,
+                str(file_path), oshash=pre_oshash, scene_id=metadata["id"],
+                source=metadata["source"], confidence=100.0, confirmed=True,
             )
     except Exception:
         pass

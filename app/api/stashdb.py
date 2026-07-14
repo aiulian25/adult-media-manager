@@ -115,6 +115,21 @@ def compute_oshash(file_path: Path) -> Optional[str]:
 
 # ─── pHash via ffmpeg ──────────────────────────────────────────────────────────
 
+# Which pHash algorithm to compute (F14):
+#   "sprite" (default) — stash-compatible videophash: a 5×5 sprite of 25 frames
+#       across the runtime, hashed like goimagehash.PerceptionHash. Matches the
+#       PHASH fingerprints StashDB actually stores (submitted by stash users),
+#       so re-encodes hit the fingerprint index. Serialized as lowercase hex —
+#       the exact stash-box wire format (stash utils.PhashToString).
+#   "frame" — the legacy single-frame hash (decimal string), byte-for-byte
+#       today's behavior, for catalogs that must stay self-consistent.
+# A deployment-layer knob (like AMM_SCAN_PHASH); identical on every target.
+_PHASH_ALGO: str = os.getenv("AMM_PHASH_ALGO", "sprite").strip().lower()
+
+# Match-path budget for one pHash computation: the sprite needs 25 sequential
+# ffmpeg seeks (slow on NAS mounts); the legacy single frame needs one.
+PHASH_MATCH_TIMEOUT: int = 90 if _PHASH_ALGO == "sprite" else 20
+
 # The ffmpeg frame filter that defines the pHash *input pixels*. Both the async
 # extractor (match path) and the sync one (scan path) MUST use this identical
 # filter: it fully determines the 32×32 greyscale bytes fed to
@@ -185,16 +200,271 @@ def _phash_from_gray_frame(raw: bytes) -> Optional[str]:
     for bit in bits:
         hash_int = (hash_int << 1) | bit
 
-    return str(hash_int)  # StashDB stores pHash as a decimal integer string
+    # Legacy (frame-mode) format: decimal string. Kept byte-for-byte for
+    # AMM_PHASH_ALGO=frame; the stash-compatible sprite hash (F14) uses the
+    # hex wire format StashDB actually expects.
+    return str(hash_int)
+
+
+# ─── Stash-compatible videophash (sprite pHash, F14) ──────────────────────────
+# A constant-for-constant port of stash's pkg/hash/videophash pipeline — the
+# code that produced every PHASH fingerprint stored on StashDB:
+#   1. 25 screenshots at t = 0.05·dur + i·(0.9·dur/25), scaled `scale=160:-2`
+#      (fast seek: -ss before -i), 5×5 montage pasted row-major.
+#   2. goimagehash.PerceptionHash over the montage: nfnt/resize Bilinear to
+#      64×64 (two-pass transposed filtering with int16-quantized triangle
+#      weights and integer division — ported exactly), gray = .299R+.587G+.114B,
+#      UNSCALED DCT-II (rows then columns), top-left 8×8 incl. DC, upper median
+#      (sorted index 32 of 64), bit set when coeff > median, MSB first.
+#   3. Hex serialization (stash utils.PhashToString: FormatUint(u64, 16)).
+# Pure Python + ffmpeg — no numpy/PIL, identical on every build target.
+
+_SPRITE_COLUMNS = 5
+_SPRITE_ROWS = 5
+_SPRITE_CHUNKS = _SPRITE_COLUMNS * _SPRITE_ROWS
+_SPRITE_SCREENSHOT_WIDTH = 160
+
+
+def _videophash_timestamps(duration: float) -> list[float]:
+    """Stash's sprite sample times: 5% margins, 25 steps across the middle 90%."""
+    offset = 0.05 * duration
+    step = (0.9 * duration) / _SPRITE_CHUNKS
+    return [offset + i * step for i in range(_SPRITE_CHUNKS)]
+
+
+def _sprite_frame_cmd(file_path: Path, seek: float) -> list[str]:
+    """One sprite screenshot: fast seek, width 160, aspect kept (even height).
+
+    Raw rgb24 out — pixel-identical to stash's BMP round trip (both come from
+    the same swscale `scale=160:-2` output; BMP is lossless).
+    """
+    return [
+        "ffmpeg", "-ss", str(seek), "-i", str(file_path),
+        "-vframes", "1",
+        "-vf", f"scale={_SPRITE_SCREENSHOT_WIDTH}:-2",
+        "-f", "rawvideo", "-pix_fmt", "rgb24",
+        "pipe:1",
+    ]
+
+
+def _nfnt_bilinear_weights(out_size: int, in_size: int):
+    """nfnt/resize createWeights8 for the Bilinear (triangle, taps=2) kernel.
+
+    Returns (coeffs, starts, filter_length) with the library's exact int16
+    quantization (kernel·256 truncated) so borderline pixels round identically.
+    """
+    import math
+    scale = in_size / out_size
+    filter_length = 2 * max(int(math.ceil(scale)), 1)
+    filter_factor = min(1.0 / scale, 1.0)
+    coeffs: list[list[int]] = []
+    starts: list[int] = []
+    for y in range(out_size):
+        interp = scale * (y + 0.5) - 0.5
+        start = int(interp) - filter_length // 2 + 1
+        frac = interp - start
+        row = []
+        for i in range(filter_length):
+            x = abs((frac - i) * filter_factor)
+            k = (1.0 - x) if x <= 1.0 else 0.0
+            row.append(int(k * 256))
+        coeffs.append(row)
+        starts.append(start)
+    return coeffs, starts, filter_length
+
+
+def _videophash_from_tiles(frames: list[bytes], tile_w: int, tile_h: int) -> Optional[str]:
+    """Assemble the 5×5 montage, resize to 64×64, gray, DCT, median-hash (hex)."""
+    if len(frames) != _SPRITE_CHUNKS or tile_w <= 0 or tile_h <= 0:
+        return None
+    need = tile_w * tile_h * 3
+    if any(len(f) < need for f in frames):
+        return None
+
+    # Montage rows (row-major paste: x = w·(i%5), y = h·(i//5)), 800×(5·tile_h).
+    in_w = tile_w * _SPRITE_COLUMNS
+    in_h = tile_h * _SPRITE_ROWS
+    rows: list[bytes] = []
+    for j in range(in_h):
+        tr, y = divmod(j, tile_h)
+        rows.append(b"".join(
+            frames[tr * _SPRITE_COLUMNS + c][y * tile_w * 3:(y + 1) * tile_w * 3]
+            for c in range(_SPRITE_COLUMNS)
+        ))
+
+    # Pass 1 (horizontal, output transposed): temp[x_out][row] = filtered RGB.
+    coeffs, starts, flen = _nfnt_bilinear_weights(64, in_w)
+    max_x = in_w - 1
+    temp = [[(0, 0, 0)] * in_h for _ in range(64)]
+    for r in range(in_h):
+        row = rows[r]
+        for xo in range(64):
+            cs = coeffs[xo]
+            st = starts[xo]
+            a0 = a1 = a2 = s = 0
+            for i in range(flen):
+                c = cs[i]
+                if c:
+                    xi = st + i
+                    if xi < 0:
+                        xi = 0
+                    elif xi > max_x:
+                        xi = max_x
+                    o = xi * 3
+                    a0 += c * row[o]
+                    a1 += c * row[o + 1]
+                    a2 += c * row[o + 2]
+                    s += c
+            temp[xo][r] = (a0 // s, a1 // s, a2 // s)
+
+    # Pass 2 (vertical): gray64[y][x] straight from the filtered RGB.
+    coeffs, starts, flen = _nfnt_bilinear_weights(64, in_h)
+    max_y = in_h - 1
+    gray = [[0.0] * 64 for _ in range(64)]
+    for x in range(64):
+        col = temp[x]
+        for yo in range(64):
+            cs = coeffs[yo]
+            st = starts[yo]
+            a0 = a1 = a2 = s = 0
+            for i in range(flen):
+                c = cs[i]
+                if c:
+                    yi = st + i
+                    if yi < 0:
+                        yi = 0
+                    elif yi > max_y:
+                        yi = max_y
+                    px = col[yi]
+                    a0 += c * px[0]
+                    a1 += c * px[1]
+                    a2 += c * px[2]
+                    s += c
+            gray[yo][x] = (0.299 * (a0 // s) + 0.587 * (a1 // s)
+                           + 0.114 * (a2 // s))
+
+    # Unscaled DCT-II (goimagehash DCT2DFast64 semantics): rows along x, then
+    # columns along y; keep the top-left 8×8 block INCLUDING the DC term, laid
+    # out flattens[8·yfreq + xfreq].
+    import math
+    cos_t = [[math.cos(math.pi * (2 * n + 1) * k / 128.0) for n in range(64)]
+             for k in range(8)]
+    row_freq = [[0.0] * 8 for _ in range(64)]
+    for y in range(64):
+        g = gray[y]
+        for k in range(8):
+            ck = cos_t[k]
+            row_freq[y][k] = sum(g[n] * ck[n] for n in range(64))
+    flattens = [0.0] * 64
+    for i in range(8):          # width frequency
+        for j in range(8):      # height frequency
+            cj = cos_t[j]
+            flattens[8 * j + i] = sum(row_freq[y][i] * cj[y] for y in range(64))
+
+    # Upper median of all 64 (quickselect at index len/2), strict > sets bits.
+    median = sorted(flattens)[32]
+    h = 0
+    for idx, p in enumerate(flattens):
+        if p > median:
+            h |= 1 << (63 - idx)
+    return format(h, "x")   # stash-box wire format: lowercase hex, no padding
+
+
+def compute_videophash_sync(file_path: Path) -> Optional[str]:
+    """Stash-compatible sprite pHash (sync, scan path). None on any failure."""
+    try:
+        probe = subprocess.run(
+            ["ffprobe", "-v", "quiet", "-print_format", "json",
+             "-show_entries", "format=duration", str(file_path)],
+            capture_output=True, timeout=15,
+        )
+        if probe.returncode != 0:
+            return None
+        duration = float(json.loads(probe.stdout or b"{}")
+                         .get("format", {}).get("duration", 0))
+        if duration <= 0:
+            return None
+
+        frames: list[bytes] = []
+        tile_w = _SPRITE_SCREENSHOT_WIDTH
+        tile_h = 0
+        for seek in _videophash_timestamps(duration):
+            ff = subprocess.run(_sprite_frame_cmd(file_path, seek),
+                                capture_output=True, timeout=30)
+            raw = ff.stdout
+            if ff.returncode != 0 or len(raw) < tile_w * 2 * 3:
+                return None
+            if tile_h == 0:
+                tile_h = len(raw) // (tile_w * 3)
+            frames.append(raw)
+        return _videophash_from_tiles(frames, tile_w, tile_h)
+    except Exception:
+        return None
+
+
+async def compute_videophash(file_path: Path) -> Optional[str]:
+    """Stash-compatible sprite pHash (async, match path). None on any failure."""
+    try:
+        probe = await asyncio.create_subprocess_exec(
+            "ffprobe", "-v", "quiet", "-print_format", "json",
+            "-show_entries", "format=duration", str(file_path),
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
+        )
+        probe_out, _ = await asyncio.wait_for(probe.communicate(), timeout=15)
+        if probe.returncode != 0:
+            return None
+        duration = float(json.loads(probe_out or b"{}")
+                         .get("format", {}).get("duration", 0))
+        if duration <= 0:
+            return None
+
+        frames: list[bytes] = []
+        tile_w = _SPRITE_SCREENSHOT_WIDTH
+        tile_h = 0
+        for seek in _videophash_timestamps(duration):
+            ff = await asyncio.create_subprocess_exec(
+                *_sprite_frame_cmd(file_path, seek),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            raw, _ = await asyncio.wait_for(ff.communicate(), timeout=30)
+            if ff.returncode != 0 or len(raw) < tile_w * 2 * 3:
+                return None
+            if tile_h == 0:
+                tile_h = len(raw) // (tile_w * 3)
+            frames.append(raw)
+        # The montage/DCT math is pure CPU — keep it off the event loop.
+        return await asyncio.to_thread(_videophash_from_tiles, frames, tile_w, tile_h)
+    except Exception:
+        return None
 
 
 async def compute_phash_ffmpeg(file_path: Path) -> Optional[str]:
+    """pHash dispatcher (F14): sprite (stash-compatible, default) or legacy frame.
+
+    Kept under the historical name so both call sites (scan/match) stay
+    untouched; ``AMM_PHASH_ALGO=frame`` restores the old behavior byte-for-byte.
+    """
+    if _PHASH_ALGO == "frame":
+        return await _compute_frame_phash(file_path)
+    return await compute_videophash(file_path)
+
+
+def compute_phash_ffmpeg_sync(file_path: Path) -> Optional[str]:
+    """Sync pHash dispatcher (F14) — see :func:`compute_phash_ffmpeg`."""
+    if _PHASH_ALGO == "frame":
+        return _compute_frame_phash_sync(file_path)
+    return compute_videophash_sync(file_path)
+
+
+async def _compute_frame_phash(file_path: Path) -> Optional[str]:
     """
     Compute a perceptual hash (pHash) of a video by extracting a frame
     at ~20% through the video and applying a standard DCT-based pHash.
 
-    Returns the hash as a decimal integer string (StashDB's expected format),
-    or None on error.  Requires ffmpeg in PATH.
+    Legacy algorithm (AMM_PHASH_ALGO=frame): single frame, decimal string —
+    kept byte-for-byte so pre-F14 catalogs stay self-consistent.
+    Returns the hash string, or None on error.  Requires ffmpeg in PATH.
     """
     try:
         # ── Step 1: get duration from ffprobe ────────────────────────────
@@ -245,9 +515,9 @@ async def compute_phash_ffmpeg(file_path: Path) -> Optional[str]:
         return None
 
 
-def compute_phash_ffmpeg_sync(file_path: Path) -> Optional[str]:
+def _compute_frame_phash_sync(file_path: Path) -> Optional[str]:
     """
-    Synchronous sibling of :func:`compute_phash_ffmpeg` for the scan path.
+    Synchronous sibling of :func:`_compute_frame_phash` for the scan path.
 
     Scan builds file entries in a worker thread (``asyncio.to_thread`` in
     scan_stream) that cannot await the async version, so this mirrors it with

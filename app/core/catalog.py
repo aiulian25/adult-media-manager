@@ -27,6 +27,7 @@ is best-effort: a catalogue failure must never break a scan or a rename, so
 errors are swallowed (and logged) and a safe default is returned.
 """
 
+import os
 import sqlite3
 import threading
 import time
@@ -290,6 +291,30 @@ class Catalog:
         except Exception as e:
             print(f"WARNING: catalog set_organized failed: {e}")
 
+    def update_fingerprint(self, path: str, oshash: Optional[str],
+                           size: Optional[int] = None) -> None:
+        """Refresh ONLY the content-fingerprint columns for an existing row.
+
+        Used after a metadata embed rewrites a file's bytes (F6): oshash and
+        size change but duration, normalized name, extracted date and the match
+        columns do not — so unlike ``upsert_scanned`` (whose upsert overwrites
+        those with NULLs when absent) this can never degrade the row. The pHash
+        is untouched: tags don't alter decoded video. No-op when the path has
+        no row yet — the next scan creates it with correct values anyway.
+        """
+        if not self._conn or not path or not oshash:
+            return
+        try:
+            with self._lock:
+                self._conn.execute(
+                    "UPDATE files SET oshash=?, size=COALESCE(?, size), updated_at=? "
+                    "WHERE path=?",
+                    (oshash, size, time.time(), path),
+                )
+                self._conn.commit()
+        except Exception as e:
+            print(f"WARNING: catalog update_fingerprint failed: {e}")
+
     def forget(self, path: str) -> None:
         """Drop the row for ``path`` (e.g. the source side of a move)."""
         if not self._conn or not path:
@@ -363,11 +388,31 @@ class Catalog:
                        ORDER BY n DESC"""
                 )
                 for r in cur.fetchall():
+                    paths = (r["paths"] or "").split("\n")
+                    # Hardlink-resolved groups (F16): copies replaced with links
+                    # to the kept file all share one inode — no space to reclaim,
+                    # so the group is no longer a duplicate. Filtering here (not
+                    # at resolve time) makes the fix survive rescans, which
+                    # re-upsert the rows without knowing about inodes. stat
+                    # errors count as distinct so a flaky mount can't hide dups.
+                    inodes = set()
+                    distinct = 0
+                    for p in paths:
+                        try:
+                            st = os.stat(p)
+                            key = (st.st_dev, st.st_ino)
+                        except OSError:
+                            key = ("?", p)
+                        if key not in inodes:
+                            inodes.add(key)
+                            distinct += 1
+                    if distinct < 2:
+                        continue
                     groups.append({
                         "kind": "oshash",
                         "oshash": r["oshash"],
                         "count": r["n"],
-                        "paths": (r["paths"] or "").split("\n"),
+                        "paths": paths,
                         "sizes": _split_sizes(r["sizes"]),
                     })
 
@@ -395,12 +440,22 @@ class Catalog:
         if len(rows) < 2 or len(rows) > _PHASH_GROUP_MAX_ROWS:
             return []
 
-        # Parse the decimal-string pHashes to ints once (skip unparseable).
+        # Parse the stored pHash strings to ints once (skip unparseable).
+        # Legacy frame hashes are decimal; stash-compatible sprite hashes (F14)
+        # are lowercase hex. Try decimal first, hex second — a sprite hash with
+        # no a-f digits (≈0.05% of values) mis-parses as decimal, which at worst
+        # weakens one near-dup comparison; cross-algorithm comparisons are
+        # meaningless anyway and rescans refresh old values per file.
         # Each item: (path, oshash, phash_int, size).
         items: list[tuple[str, object, int, int]] = []
         for r in rows:
             try:
-                items.append((r["path"], r["oshash"], int(r["phash"]),
+                ph = str(r["phash"])
+                try:
+                    ph_int = int(ph)
+                except ValueError:
+                    ph_int = int(ph, 16)
+                items.append((r["path"], r["oshash"], ph_int,
                               int(r["size"] or 0)))
             except (ValueError, TypeError):
                 continue

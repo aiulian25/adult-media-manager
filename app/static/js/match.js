@@ -70,6 +70,10 @@ function _finishMatch(stopped) {
     }
 }
 
+// Client-side chunk size (F11). Mirrors the server's _SSE_MAX_FILES DoS cap
+// (main.py) — keep the two in sync. `let` (not const) so tests can shrink it.
+let MATCH_CHUNK_SIZE = 500;
+
 async function matchFiles() {
     // Only match files the user has checked (default: all)
     const filesToMatch = selectedScannedIndices.size > 0
@@ -81,95 +85,128 @@ async function matchFiles() {
     const total = filesToMatch.length;
     showStatus(t('status.matching_start', { total }));
     progressFill.style.width = '0%';
-    btnMatch.disabled = true;   // Stage 1 (session setup); re-enabled as Cancel at Stage 2
     btnRename.disabled = true;
     _matchStopped = false;
 
-    // Build ordered results array; slots filled as SSE result events arrive.
-    // Lifted to module scope so cancelMatch() can publish the partial results.
+    // Ordered result slots across ALL chunks; each chunk writes at its base
+    // offset. Lifted to module scope so cancelMatch() can publish partials.
     const ordered = new Array(total).fill(null);
     _matchOrdered = ordered;
-    let doneCount  = 0;
 
     const datasource = document.getElementById('datasource').value;
+    // "Re-match" forces a fresh API query, ignoring the persistent cache (D3).
+    const refresh = !!document.getElementById('ignore-cache')?.checked;
 
-    // Stage 1: POST the file list to register a server-side session.
-    // This avoids URL query-string size limits that would break large batches.
-    let sessionId;
-    try {
-        // "Re-match" forces a fresh API query, ignoring the persistent cache (D3).
-        const refresh = !!document.getElementById('ignore-cache')?.checked;
-        const sessResp = await fetch('/api/match-session', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ files: filesToMatch, datasource, auto_match: true, refresh }),
+    // Sequential sessions of ≤500 files (F11): the server caps each session as
+    // a DoS guard, so the client paces itself instead of silently losing file
+    // 501+. Cancel stops the current stream AND the remaining chunks.
+    const chunks = Math.ceil(total / MATCH_CHUNK_SIZE);
+    _setMatchRunning(true);
+    let matchedTotal = 0;
+    let failed = false;
+
+    for (let c = 0; c < chunks && !_matchStopped && !failed; c++) {
+        const base = c * MATCH_CHUNK_SIZE;
+        const chunkFiles = filesToMatch.slice(base, base + MATCH_CHUNK_SIZE);
+        const out = await _streamOneMatchSession(chunkFiles, base, ordered, {
+            datasource, refresh, total, chunks, chunk: c + 1,
         });
-        if (!sessResp.ok) {
-            const err = await sessResp.json().catch(() => ({}));
-            showStatus(t('error.match_failed', { message: err.detail || sessResp.statusText }), 'error');
-            btnMatch.disabled = false;
-            return;
-        }
-        sessionId = (await sessResp.json()).session_id;
-    } catch (err) {
-        showStatus(t('error.match_failed', { message: err.message }), 'error');
-        btnMatch.disabled = false;
-        return;
+        if (out.error) failed = true;
+        else matchedTotal += out.matched;
     }
 
-    // Stage 2: open the SSE stream using only the opaque session token. From here
-    // the Match button is a Cancel button (onMatchClick → cancelMatch).
-    _setMatchRunning(true);
-    await new Promise((resolve) => {
-        _matchResolve = resolve;
+    if (_matchStopped) return;      // cancelMatch → _finishMatch published partials
+    matchedResults = ordered.filter(Boolean);
+    if (failed) {
+        // Keep what completed instead of discarding finished chunks.
+        displayMatches();
+        _setMatchRunning(false);
+        btnRename.disabled = matchedResults.filter(m => m.match).length === 0;
+        return;
+    }
+    progressFill.style.width = '100%';
+    showStatus(t('status.matched', { matched: matchedTotal, total }), 'success');
+    displayMatches();
+    _setMatchRunning(false);
+    btnRename.disabled = matchedResults.filter(m => m.match).length === 0;
+    setTimeout(() => {
+        statusBar.classList.add('hidden');
+        progressFill.style.width = '0%';
+    }, 2000);
+}
+
+// Run ONE match session (≤500 files) and stream its results into `ordered`
+// starting at `baseIndex`. Resolves {matched} on done, {matched: 0} on cancel,
+// {error: true} on failure (error already shown). Factored out of matchFiles
+// so the chunk loop (F11) reuses the exact session + SSE flow.
+function _streamOneMatchSession(files, baseIndex, ordered, ctx) {
+    return new Promise(async (resolve) => {
+        // Stage 1: POST the file list to register a server-side session.
+        // This avoids URL query-string size limits that would break large batches.
+        let sessionId;
+        try {
+            const sessResp = await fetch('/api/match-session', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ files, datasource: ctx.datasource,
+                                       auto_match: true, refresh: ctx.refresh }),
+            });
+            if (!sessResp.ok) {
+                const err = await sessResp.json().catch(() => ({}));
+                showStatus(t('error.match_failed', { message: err.detail || sessResp.statusText }), 'error');
+                resolve({ matched: 0, error: true });
+                return;
+            }
+            sessionId = (await sessResp.json()).session_id;
+        } catch (err) {
+            showStatus(t('error.match_failed', { message: err.message }), 'error');
+            resolve({ matched: 0, error: true });
+            return;
+        }
+
+        // Stage 2: open the SSE stream using only the opaque session token.
+        _matchResolve = () => resolve({ matched: 0 });   // cancelMatch path
         const es = new EventSource(`/api/match-stream?session_id=${encodeURIComponent(sessionId)}`);
         _matchEventSource = es;
 
         es.addEventListener('progress', (e) => {
             const d = JSON.parse(e.data);
-            const pct = Math.round((d.done / d.total) * 100);
+            const done = baseIndex + d.done;
+            const pct = Math.round((done / ctx.total) * 100);
             progressFill.style.width = `${pct}%`;
-            // Show truncated filename so long paths don't overflow the bar
-            const short = d.filename.length > 60
-                ? '…' + d.filename.slice(-57)
-                : d.filename;
-            showStatus(t('status.matching_file', { done: d.done, total: d.total, filename: short }));
+            if (ctx.chunks > 1) {
+                showStatus(t('status.matching_chunk',
+                    { done, total: ctx.total, chunk: ctx.chunk, chunks: ctx.chunks }));
+            } else {
+                // Show truncated filename so long paths don't overflow the bar
+                const short = d.filename.length > 60
+                    ? '…' + d.filename.slice(-57)
+                    : d.filename;
+                showStatus(t('status.matching_file', { done, total: ctx.total, filename: short }));
+            }
         });
 
         es.addEventListener('result', (e) => {
             const d = JSON.parse(e.data);
-            ordered[d.index] = d.match;
-            doneCount++;
+            ordered[baseIndex + d.index] = d.match;
         });
 
         es.addEventListener('done', (e) => {
             es.close();
             _matchEventSource = null;
-            const d = JSON.parse(e.data);
-            matchedResults = ordered.filter(Boolean);
-            progressFill.style.width = '100%';
-            showStatus(
-                t('status.matched', { matched: d.matched, total: d.total }),
-                'success'
-            );
-            displayMatches();
-            _setMatchRunning(false);
-            btnRename.disabled = matchedResults.filter(m => m.match).length === 0;
-            setTimeout(() => {
-                statusBar.classList.add('hidden');
-                progressFill.style.width = '0%';
-            }, 2000);
             _matchResolve = null;
-            resolve();
+            const d = JSON.parse(e.data);
+            resolve({ matched: d.matched });
         });
 
         es.addEventListener('error', (e) => {
             es.close();
             _matchEventSource = null;
+            _matchResolve = null;
             // A user Cancel closes the stream via cancelMatch() (which already
             // finalised); browsers may still fire a generic error on close, so
             // swallow it here instead of flashing a spurious "connection error".
-            if (_matchStopped) { _matchResolve = null; resolve(); return; }
+            if (_matchStopped) { resolve({ matched: 0 }); return; }
             // Otherwise it's a real failure; the server may also emit a structured
             // error event with a detail payload.
             let msg = 'Match failed — connection error';
@@ -178,10 +215,7 @@ async function matchFiles() {
             }
             showStatus(t('error.match_failed', { message: msg }), 'error');
             progressFill.style.width = '0%';
-            _setMatchRunning(false);
-            btnRename.disabled = matchedResults.filter(m => m.match).length === 0;
-            _matchResolve = null;
-            resolve();
+            resolve({ matched: 0, error: true });
         });
     });
 }
@@ -362,11 +396,16 @@ function _buildMatchRow({ result, index }) {
         wrap.hidden = false;
     }
 
-    // Title + optional (Manual) tag
+    // Title + optional (Manual) / (Your pick) tag
     node.querySelector('[data-title]').textContent = m.title || '';
     if (m.manual_entry) {
         const tag = node.querySelector('[data-manual]');
         tag.textContent = ` ${t('match.manual_badge')}`;
+        tag.hidden = false;
+    } else if (result.match_method === 'user_pick') {
+        // Alternative chosen by the user (F3) — mark it like a manual entry.
+        const tag = node.querySelector('[data-manual]');
+        tag.textContent = ` ${t('match.picked_badge')}`;
         tag.hidden = false;
     }
 
@@ -434,7 +473,76 @@ function _buildMatchRow({ result, index }) {
     nfoBtn.addEventListener('click', () => writeNfo(index));
     _wireRemoveButton(node, orig);
 
+    // Alternatives (F3): the server returns up to 5 deduped candidates per
+    // match — surface them behind a toggle so a wrong best-match is one click
+    // to fix instead of a full Manual Edit round trip.
+    const alts = result.alternatives;
+    if (Array.isArray(alts) && alts.length) {
+        const altsToggle = node.querySelector('[data-alts-toggle]');
+        const altsPanel = node.querySelector('[data-alts]');
+        altsToggle.textContent = `▾ ${t('match.alternatives', { n: alts.length })}`;
+        altsToggle.hidden = false;
+        altsToggle.addEventListener('click', () => {
+            if (altsPanel.hidden && !altsPanel.childElementCount) {
+                _fillAlternatives(altsPanel, index);   // lazy build on first open
+            }
+            altsPanel.hidden = !altsPanel.hidden;
+        });
+    }
+
     return node;
+}
+
+// Build the compact alternative sub-rows for match `index` (F3). textContent
+// only — same XSS discipline as the main row builder.
+function _fillAlternatives(panel, index) {
+    const r = matchedResults[index];
+    if (!r || !Array.isArray(r.alternatives)) return;
+    r.alternatives.forEach((alt, altIdx) => {
+        const row = document.createElement('div');
+        row.className = 'match-alt-row';
+        const info = document.createElement('span');
+        info.className = 'match-alt-info';
+        info.textContent = [alt.title, alt.site, alt.release_date]
+            .filter(Boolean).join(' · ');
+        const useBtn = document.createElement('button');
+        useBtn.className = 'glass-btn match-action-btn match-alt-use';
+        useBtn.textContent = t('match.use_this');
+        useBtn.addEventListener('click', () => useAlternative(index, altIdx));
+        row.appendChild(info);
+        row.appendChild(useBtn);
+        panel.appendChild(row);
+    });
+}
+
+// Swap an alternative in as the row's match (F3). The previous best stays
+// pickable (swap, not discard); the row becomes user-confirmed at 100% — a
+// pick is ground truth, not a cascade score — and the choice is persisted
+// fire-and-forget so a later re-scan/match returns it as a confirmed cache hit.
+function useAlternative(index, altIdx) {
+    const r = matchedResults[index];
+    if (!r || !Array.isArray(r.alternatives) || !r.alternatives[altIdx]) return;
+    const alt = r.alternatives[altIdx];
+    const prev = r.match;
+    r.alternatives = r.alternatives.slice();
+    r.alternatives[altIdx] = prev;
+    r.match = alt;
+    r.user_confirmed = true;
+    r.match_method = 'user_pick';
+    r.cached = false;
+    r.confidence = 100;
+    r.coverage = null;
+    r.match_fields = [];
+
+    if (r.original && r.original.oshash) {
+        fetch('/api/confirm-match', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ oshash: r.original.oshash, scene: alt }),
+        }).catch(() => { /* fire-and-forget — the swap already applied locally */ });
+    }
+
+    displayMatches(false);   // preserve selection + filter, re-render the rows
 }
 
 // Wire the per-row "Remove" button. Removing a file hides it from the app for

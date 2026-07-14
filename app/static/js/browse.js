@@ -316,10 +316,18 @@ async function loadHistory() {
         }
 
         const note = `<div class="history-note">${escapeHtml(t('history.revert_note'))}</div>`;
-        const rows = data.entries.map(entry => `
+        const rows = data.entries.map(entry => {
+            // Grouped rename (F10): companion rows fold into the "+N companions"
+            // chip on their primary (video) row — reverting it restores the set.
+            if (entry.group_id && !entry.group_primary) return '';
+            const chip = entry.companions > 0
+                ? `<span class="history-companions-chip">${escapeHtml(t('history.companions_chip', { n: entry.companions }))}</span>`
+                : '';
+            return `
             <div class="history-item">
                 <div class="history-head">
                     <span class="history-action">${escapeHtml(entry.action.toUpperCase())}</span>
+                    ${chip}
                     <span class="history-time">${escapeHtml(entry.timestamp)}</span>
                     ${entry.revertible
                         ? `<button class="glass-btn history-revert-btn" data-id="${escapeHtml(entry.id)}">${escapeHtml(t('history.revert'))}</button>`
@@ -329,7 +337,8 @@ async function loadHistory() {
                 <div class="history-path">${escapeHtml(t('history.to'))} ${escapeHtml(entry.new_path)}</div>
                 ${entry.error ? `<div style="color:var(--error);font-size:11px;margin-top:4px;">${escapeHtml(entry.error)}</div>` : ''}
             </div>
-        `).join('');
+        `;
+        }).join('');
         document.getElementById('history-list').innerHTML = note + rows;
 
     } catch (error) {
@@ -384,7 +393,15 @@ async function revertHistoryEntry(id, btnEl) {
             return;
         }
         if (data.success) {
-            showToast(t('history.revert_title'), t('history.reverted_ok'), 'success');
+            // Grouped revert (F10): report how many of the set came back.
+            if (Array.isArray(data.group) && data.group.length > 1) {
+                const ok = data.group.filter(g => g.ok).length;
+                showToast(t('history.revert_title'),
+                          t('history.group_reverted', { n: ok, total: data.group.length }),
+                          'success');
+            } else {
+                showToast(t('history.revert_title'), t('history.reverted_ok'), 'success');
+            }
         } else {
             showToast(t('history.revert_title'), _revertCodeMsg(data.code), 'info');
         }
@@ -453,7 +470,7 @@ function _renderLibraryDupes() {
         dupesEl.innerHTML = `<div class="library-empty">${escapeHtml(t('library.dupes_none'))}</div>`;
         return;
     }
-    dupesEl.innerHTML = _libraryGroups.map(g => {
+    dupesEl.innerHTML = _libraryGroups.map((g, gi) => {
         const kindLabel = g.kind === 'phash' ? t('library.similar') : t('library.identical');
         const paths = g.paths || [];
         const sizes = g.sizes || [];
@@ -468,14 +485,119 @@ function _renderLibraryDupes() {
                         ${removeBtn}
                     </div>`;
         }).join('');
-        return `<div class="glass-panel library-group">
+        // Resolve (F16) is offered ONLY for byte-identical groups — pHash groups
+        // are different encodes of the same scene, not safe to auto-reclaim
+        // (the server re-verifies content anyway and would refuse them).
+        const resolveBtn = g.kind === 'oshash' && paths.length > 1
+            ? `<button class="glass-btn library-resolve-btn" data-group="${gi}">${escapeHtml(t('library.resolve'))}</button>`
+            : '';
+        return `<div class="glass-panel library-group" data-group="${gi}">
                     <div class="library-group-head">
                         <span class="library-group-kind library-kind-${escapeHtml(g.kind)}">${escapeHtml(kindLabel)}</span>
                         <span class="library-group-count">${escapeHtml(t('library.copies', { n: g.count }))}</span>
+                        ${resolveBtn}
                     </div>
                     ${rows}
+                    <div class="library-resolve-panel" id="resolve-panel-${gi}" hidden></div>
                 </div>`;
     }).join('');
+}
+
+// ── Duplicate resolution (F16) ────────────────────────────────────────────────
+
+/** Open the inline Resolve panel for group `gi`: keep-radios (largest
+ *  pre-selected), mode select, live savings line, and — for delete — a typed
+ *  confirmation word gating the button. */
+function _openResolvePanel(gi) {
+    const g = _libraryGroups[gi];
+    const panel = document.getElementById(`resolve-panel-${gi}`);
+    if (!g || !panel) return;
+    const paths = g.paths || [];
+    const sizes = g.sizes || [];
+    let largest = 0;
+    sizes.forEach((s, i) => { if ((s || 0) > (sizes[largest] || 0)) largest = i; });
+
+    const radios = paths.map((p, i) => `
+        <label class="library-resolve-row">
+            <input type="radio" name="resolve-keep-${gi}" value="${escapeHtml(p)}" ${i === largest ? 'checked' : ''}>
+            <span class="library-dupe-path" title="${escapeHtml(p)}">${escapeHtml(p)}</span>
+            <span class="library-dupe-size">${escapeHtml(formatFileSize(sizes[i]))}</span>
+        </label>`).join('');
+
+    const word = t('library.resolve_confirm_word');
+    panel.innerHTML = `
+        <div class="library-resolve-keep-label">${escapeHtml(t('library.resolve_keep'))}</div>
+        ${radios}
+        <div class="library-resolve-controls">
+            <select class="glass-input resolve-mode" id="resolve-mode-${gi}">
+                <option value="hardlink">${escapeHtml(t('library.resolve_hardlink'))}</option>
+                <option value="delete">${escapeHtml(t('library.resolve_delete'))}</option>
+            </select>
+            <span class="library-resolve-savings" id="resolve-savings-${gi}"></span>
+        </div>
+        <div class="library-resolve-confirm" id="resolve-confirm-wrap-${gi}" hidden>
+            <input type="text" class="glass-input" id="resolve-confirm-${gi}"
+                   placeholder="${escapeHtml(word)}" autocomplete="off" spellcheck="false">
+        </div>
+        <div class="library-resolve-actions">
+            <button class="btn btn-secondary resolve-cancel" data-group="${gi}">${escapeHtml(t('settings.cancel'))}</button>
+            <button class="btn btn-primary resolve-go" id="resolve-go-${gi}" data-group="${gi}">${escapeHtml(t('library.resolve'))}</button>
+        </div>`;
+    panel.hidden = false;
+
+    const update = () => {
+        const keep = panel.querySelector(`input[name="resolve-keep-${gi}"]:checked`)?.value;
+        const keepIdx = paths.indexOf(keep);
+        const savings = sizes.reduce((a, s, i) => a + (i === keepIdx ? 0 : (s || 0)), 0);
+        document.getElementById(`resolve-savings-${gi}`).textContent =
+            t('library.resolve_savings', { size: formatFileSize(savings) });
+        const mode = document.getElementById(`resolve-mode-${gi}`).value;
+        const wrap = document.getElementById(`resolve-confirm-wrap-${gi}`);
+        wrap.hidden = mode !== 'delete';
+        const goBtn = document.getElementById(`resolve-go-${gi}`);
+        const typed = (document.getElementById(`resolve-confirm-${gi}`)?.value || '').trim();
+        goBtn.disabled = mode === 'delete' && typed !== word;
+    };
+    panel.addEventListener('change', update);
+    panel.addEventListener('input', update);
+    update();
+}
+
+async function _resolveGroup(gi) {
+    const g = _libraryGroups[gi];
+    const panel = document.getElementById(`resolve-panel-${gi}`);
+    if (!g || !panel) return;
+    const keep = panel.querySelector(`input[name="resolve-keep-${gi}"]:checked`)?.value;
+    if (!keep) return;
+    const mode = document.getElementById(`resolve-mode-${gi}`).value;
+    const remove = (g.paths || []).filter(p => p !== keep);
+    const goBtn = document.getElementById(`resolve-go-${gi}`);
+    goBtn.disabled = true;
+    try {
+        const resp = await fetch('/api/catalog/resolve-duplicates', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ keep, remove, mode }),
+        });
+        const data = await resp.json().catch(() => ({}));
+        if (!resp.ok) {
+            const detail = data.detail || {};
+            const code = typeof detail === 'object' ? detail.code : null;
+            const msg = code === 'not_same_fs'
+                ? t('library.resolve_not_same_fs')
+                : (typeof detail === 'string' ? detail : (code || resp.statusText));
+            showToast(t('library.resolve'), msg, 'error', 8000);
+            return;
+        }
+        showToast(t('library.resolve'),
+                  t('library.resolve_done', { size: formatFileSize(data.freed_bytes || 0) }),
+                  data.success ? 'success' : 'info', 8000);
+        openLibraryModal();   // re-fetch stats + groups; resolved group disappears
+    } catch (err) {
+        showToast(t('library.resolve'), err.message, 'error', 8000);
+    } finally {
+        goBtn.disabled = false;
+    }
 }
 
 // Delegated Remove handler: drop the chosen copy from the working list (reuses
@@ -485,6 +607,16 @@ function _renderLibraryDupes() {
     const dupes = document.getElementById('library-dupes');
     if (!dupes) return;
     dupes.addEventListener('click', (e) => {
+        const resolveBtn = e.target.closest('.library-resolve-btn');
+        if (resolveBtn) { _openResolvePanel(Number(resolveBtn.dataset.group)); return; }
+        const cancelBtn = e.target.closest('.resolve-cancel');
+        if (cancelBtn) {
+            const panel = document.getElementById(`resolve-panel-${cancelBtn.dataset.group}`);
+            if (panel) { panel.hidden = true; panel.innerHTML = ''; }
+            return;
+        }
+        const goBtn = e.target.closest('.resolve-go');
+        if (goBtn && !goBtn.disabled) { _resolveGroup(Number(goBtn.dataset.group)); return; }
         const btn = e.target.closest('.library-remove');
         if (!btn || !btn.dataset.path) return;
         if (typeof removeMatchedFile === 'function') removeMatchedFile(btn.dataset.path);

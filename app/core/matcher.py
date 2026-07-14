@@ -130,7 +130,11 @@ def _performer_pair_score(f_perf: str, a_perf: str) -> float:
     return similarity if similarity > 0.85 else 0.0
 
 
-def match_performers(file_performers: list[str], api_performers: list[str]) -> float:
+def match_performers(
+    file_performers: list[str],
+    api_performers: list[str],
+    alias_resolver=None,
+) -> float:
     """
     Match performers with token-aware fuzzy matching.
 
@@ -146,6 +150,11 @@ def match_performers(file_performers: list[str], api_performers: list[str]) -> f
     Args:
         file_performers: Performers from filename
         api_performers: Performers from API
+        alias_resolver: optional ``name -> canonical name | None`` callable
+            (F12). A filename performer whose resolved canonical name equals an
+            API performer scores 1.0 for that pair — a learned alias is exact
+            knowledge, not fuzziness. Injected so this module stays pure;
+            None (the default) is byte-for-byte the previous behavior.
 
     Returns:
         Match score 0.0-1.0
@@ -160,7 +169,13 @@ def match_performers(file_performers: list[str], api_performers: list[str]) -> f
     matches = 0.0
     total = max(len(file_norm), len(api_norm))
 
-    for f_perf in file_norm:
+    for raw, f_perf in zip(file_performers, file_norm):
+        # Learned alias (F12): exact hit on the canonical name → full score.
+        if alias_resolver:
+            resolved = alias_resolver(raw)
+            if resolved and normalize(str(resolved)) in api_norm:
+                matches += 1.0
+                continue
         best_score = 0.0
         for a_perf in api_norm:
             best_score = max(best_score, _performer_pair_score(f_perf, a_perf))
@@ -378,7 +393,7 @@ class MatchScore:
     fields: list[str] = field(default_factory=list)
 
 
-def score_match(file_data: dict, api_result: dict) -> MatchScore:
+def score_match(file_data: dict, api_result: dict, alias_resolver=None) -> MatchScore:
     """
     Score a file against an API scene, returning both the absolute (rank) score
     and the renormalized agreement + evidence coverage (review item D7).
@@ -391,6 +406,8 @@ def score_match(file_data: dict, api_result: dict) -> MatchScore:
     Args:
         file_data: Detected file metadata (may include ``duration_seconds``)
         api_result: API scene metadata (may include ``duration`` in seconds)
+        alias_resolver: optional learned-alias lookup forwarded to
+            :func:`match_performers` (F12); None = unchanged behavior
     """
     weighted = 0.0        # Σ score·weight over comparable fields  → absolute base
     present_weight = 0.0  # Σ weight over comparable fields        → coverage
@@ -401,7 +418,8 @@ def score_match(file_data: dict, api_result: dict) -> MatchScore:
     api_performers = api_result.get("performers", [])
     if file_performers and api_performers:
         w = CASCADE_WEIGHTS["performers"]
-        weighted += match_performers(file_performers, api_performers) * w
+        weighted += match_performers(file_performers, api_performers,
+                                     alias_resolver=alias_resolver) * w
         present_weight += w
         fields.append("performers")
 
@@ -471,7 +489,7 @@ def _apply_duration_adjustment(score: float, file_data: dict, api_result: dict) 
 
 
 def find_best_match(
-    file_data: dict, api_results: list[dict]
+    file_data: dict, api_results: list[dict], alias_resolver=None
 ) -> Optional[tuple[dict, MatchScore]]:
     """
     Find best matching result from API results, returning the chosen scene and its
@@ -496,7 +514,7 @@ def find_best_match(
     best: Optional[MatchScore] = None
 
     for result in api_results:
-        ms = score_match(file_data, result)
+        ms = score_match(file_data, result, alias_resolver=alias_resolver)
         if best is None or ms.rank > best.rank:
             best = ms
             best_match = result

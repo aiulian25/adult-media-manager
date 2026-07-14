@@ -28,6 +28,10 @@ class HistoryEntry:
     action: str
     success: bool
     error: Optional[str] = None
+    # Shared id stamped on a video and its companion sidecars renamed by the
+    # same operation (F10), so Revert/Undo restores the whole set together.
+    # Default None keeps pre-upgrade history.json loadable (absent key → None).
+    group_id: Optional[str] = None
 
 
 class RenameHistory:
@@ -97,6 +101,7 @@ class RenameHistory:
         action: str,
         success: bool,
         error: Optional[str] = None,
+        group_id: Optional[str] = None,
     ) -> HistoryEntry:
         now = datetime.now()
         return HistoryEntry(
@@ -107,6 +112,7 @@ class RenameHistory:
             action=action,
             success=success,
             error=error,
+            group_id=group_id,
         )
 
     def add_entry(
@@ -137,7 +143,8 @@ class RenameHistory:
         """
         Append many entries with a SINGLE disk write.
 
-        Each item is a tuple ``(old_path, new_path, action, success[, error])``.
+        Each item is a tuple
+        ``(old_path, new_path, action, success[, error[, group_id]])``.
         Used by the batch rename endpoint so an N-file batch performs one save
         instead of N full-file rewrites (previously O(n²) per batch).
         """
@@ -221,26 +228,65 @@ class RenameHistory:
         self.add_entry(new_path, old_path, "undo", True)
         return True, "ok"
 
-    def undo_last(self, is_allowed=None) -> Optional[HistoryEntry]:
+    def revert_group(self, group_id: str, is_allowed=None) -> list[tuple[str, bool, str]]:
+        """Revert every successful, revertible entry sharing ``group_id`` (F10).
+
+        Members are processed in append order — the video first, then its
+        companions (that is the order rename_files logs them). Each member goes
+        through :meth:`revert_entry`, so per-member action semantics, root
+        confinement and the "undo" audit rows are identical to a single revert.
+
+        Returns ``[(new_path, ok, code), ...]`` — one outcome per member.
+        """
+        if not group_id:
+            return []
+        members = [
+            e for e in list(self.entries)
+            if e.group_id == group_id
+            and e.success and e.action in REVERTIBLE_ACTIONS
+        ]
+        results: list[tuple[str, bool, str]] = []
+        for e in members:
+            ok, code = self.revert_entry(e, is_allowed=is_allowed)
+            results.append((e.new_path, ok, code))
+        return results
+
+    def undo_last(self, is_allowed=None) -> tuple[Optional[HistoryEntry], Optional[list]]:
         """
         Undo the most recent *move* that can still be reverted.
 
         Kept move-only for backward-compatible "Undo Last" semantics; per-entry
-        :meth:`revert_entry` handles copy/hardlink/symlink.  Returns the undone
-        entry, or None if there is nothing to undo.
+        :meth:`revert_entry` handles copy/hardlink/symlink. When the found move
+        belongs to a rename group (F10), the WHOLE group is reverted — video and
+        companion sidecars together (this also covers the case where the newest
+        move row is a companion, not the video).
+
+        Returns ``(entry, group_results)``: the undone entry (or None when
+        nothing could be undone) and the per-file outcome list for grouped
+        renames (None for ungrouped legacy entries).
         """
         for entry in reversed(self.entries):
             if entry.success and entry.action == "move":
+                if entry.group_id:
+                    results = self.revert_group(entry.group_id, is_allowed=is_allowed)
+                    if any(ok for _, ok, _ in results):
+                        return entry, results
+                    codes = {code for _, ok, code in results if not ok}
+                    # Fully-reverted/blocked groups don't stop the search —
+                    # mirror the single-entry semantics below.
+                    if codes and codes <= {"already_reverted", "source_exists"}:
+                        continue
+                    return None, None
                 ok, code = self.revert_entry(entry, is_allowed=is_allowed)
                 if ok:
-                    return entry
+                    return entry, None
                 # A move that's already reverted or blocked by an existing source
                 # shouldn't stop the search — keep looking further back (original
                 # behaviour). forbidden/error are hard stops.
                 if code in ("already_reverted", "source_exists"):
                     continue
-                return None
-        return None
+                return None, None
+        return None, None
     
     def clear(self):
         """Clear all history."""

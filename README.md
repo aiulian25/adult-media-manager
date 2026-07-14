@@ -152,10 +152,10 @@ No Docker required. Ships a self-contained Python 3.12 runtime — no system Pyt
 
 ### AppImage (recommended — no root required)
 
-1. Download `Adult.Media.Manager-1.8.0.AppImage`
+1. Download `Adult.Media.Manager-1.9.0.AppImage`
 2. Make it executable:
    ```bash
-   chmod +x Adult.Media.Manager-1.8.0.AppImage
+   chmod +x Adult.Media.Manager-1.9.0.AppImage
    ```
 3. Double-click it (or run it from the terminal)
 
@@ -169,7 +169,7 @@ From that point, launch it from your application menu. The original downloaded f
 ### .deb Package (Debian / Ubuntu / Mint)
 
 ```bash
-sudo apt install ./adult-media-manager_1.8.0_amd64.deb
+sudo apt install ./adult-media-manager_1.9.0_amd64.deb
 ```
 
 Launch **Adult Media Manager** from your application menu, or:
@@ -183,7 +183,7 @@ Launch **Adult Media Manager** from your application menu, or:
 Requires [RPM Fusion](https://rpmfusion.org/) enabled for the `ffmpeg` / `mkvtoolnix` media tools:
 
 ```bash
-sudo dnf install ./adult-media-manager-1.8.0.x86_64.rpm
+sudo dnf install ./adult-media-manager-1.9.0.x86_64.rpm
 ```
 
 Remove with `sudo dnf remove adult-media-manager`.
@@ -342,6 +342,7 @@ Click **History** to see every action AMM has performed. Each move/copy/hardlink
 | `AMM_MKVPROPEDIT` / `AMM_ATOMICPARSLEY` | *(auto)* | Override paths to the in-place tagging binaries used by **Smart** mode (auto-resolved on PATH / bundled in packages) |
 | `AMM_ALLOW_MULTIWORKER` | `0` | Acknowledge a multi-worker deployment (AMM is single-worker by design; see DEPLOYMENT.md) |
 | `AMM_UPDATE_CHECK` | `1` | Ask GitHub (at most once per 24 h) whether a newer release exists and show it in Settings. Set `0` for zero-egress deployments — no update request is ever made |
+| `AMM_PHASH_ALGO` | `sprite` | pHash algorithm. `sprite` = stash-compatible 5×5 multi-frame hash — matches StashDB's stored PHASH fingerprints so **re-encodes** get Verified fingerprint matches (25 frame extracts per file). `frame` = the old single-frame hash. Previously stored pHashes are algorithm-specific; a re-scan with pHash enabled refreshes them per file |
 
 ---
 

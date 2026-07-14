@@ -42,12 +42,21 @@ function _refreshManualDateError() {
 }
 
 // ═══ Manual Edit Modal ═══
+
+// Provider identity of the last fetched scene (F7). Set by _fetchSceneFromUrl,
+// reset on every modal open, forwarded by saveManualMetadata so the NFO gets a
+// real <uniqueid type="stashdb|tpdb"> and the confirmed cache entry keeps the
+// provider linkage. Stays null for hand-typed entries → id remains "manual".
+let manualSceneId = null;
+let manualSceneSource = null;
 function openManualEditModal(fileData) {
     currentManualFile = fileData;
     manualPerformers = [];
     manualTags = [];
     generatedThumbnails = [];
     selectedThumbnailIndex = null;
+    manualSceneId = null;        // provider identity never leaks between files (F7)
+    manualSceneSource = null;
     
     // Populate form
     document.getElementById('manual-edit-filename').textContent = fileData.filename;
@@ -58,6 +67,8 @@ function openManualEditModal(fileData) {
     manualDate.max = new Date().toISOString().slice(0, 10);   // no future releases
     _refreshManualDateError();                                // validate any pre-filled value
     document.getElementById('manual-quality').value = fileData.quality || '';
+    const descEl = document.getElementById('manual-description');
+    if (descEl) descEl.value = '';
     
     // Clear lists
     document.getElementById('manual-performers-list').innerHTML = '';
@@ -135,6 +146,12 @@ async function _fetchSceneFromUrl(cfg) {
         if (scene.site) document.getElementById('manual-site').value = scene.site;
         const dateInput = document.getElementById('manual-date');
         if (dateInput) { dateInput.value = scene.release_date || ''; _refreshManualDateError(); }
+        // Synopsis + provider identity (F7) — the endpoint already returns
+        // them; keep them so Save writes <plot> and a real <uniqueid>.
+        const descEl = document.getElementById('manual-description');
+        if (descEl) descEl.value = scene.description || '';
+        manualSceneId = scene.id || null;
+        manualSceneSource = scene.source || null;
 
         // Replace performer + tag chips with the fetched values
         manualPerformers = Array.isArray(scene.performers) ? [...scene.performers] : [];
@@ -419,7 +436,12 @@ async function saveManualMetadata() {
         tags: manualTags,
         quality: document.getElementById('manual-quality').value || null,
         thumbnail_index: selectedThumbnailIndex,
-        embed_mode: _getEmbedMode()
+        embed_mode: _getEmbedMode(),
+        // F7: synopsis + provider identity (null for hand-typed entries —
+        // the backend then keeps id="manual" and writes no <uniqueid>).
+        description: document.getElementById('manual-description')?.value.trim() || null,
+        scene_id: manualSceneId,
+        source: manualSceneSource
     };
 
     // Capture display name before closing modal

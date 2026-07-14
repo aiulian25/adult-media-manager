@@ -1943,7 +1943,7 @@ input.input-error {
 .controls-card { padding: 16px; margin-bottom: 12px; }
 .ctl-grid {
     display: grid;
-    grid-template-columns: 160px 150px 200px 1fr;
+    grid-template-columns: 160px 150px 200px 160px 1fr;
     gap: 14px;
     align-items: start;
 }
@@ -2070,3 +2070,78 @@ input.input-error {
     padding: 4px 26px 4px 10px;
     font-size: 0.82rem;
 }
+
+/* ── History: grouped-rename companions chip (F10) ────────────────────── */
+.history-companions-chip {
+    font-size: 0.72rem;
+    padding: 2px 8px;
+    border-radius: 10px;
+    background: var(--raised);
+    border: 1px solid var(--border-soft);
+    color: var(--text-muted);
+    white-space: nowrap;
+}
+
+/* ── Library: duplicate resolution panel (F16) ────────────────────────── */
+.library-resolve-btn { margin-left: auto; font-size: 0.78rem; }
+.library-resolve-panel {
+    margin-top: 10px;
+    padding: 12px;
+    border: 1px solid var(--border-soft);
+    border-radius: 10px;
+    background: var(--raised);
+}
+.library-resolve-keep-label {
+    font-size: 0.8rem;
+    color: var(--text-muted);
+    margin-bottom: 6px;
+}
+.library-resolve-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 0;
+    cursor: pointer;
+}
+.library-resolve-controls {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-top: 10px;
+}
+.library-resolve-controls .resolve-mode { width: auto; padding: 5px 26px 5px 10px; }
+.library-resolve-savings { font-size: 0.82rem; color: var(--text-secondary); }
+.library-resolve-confirm { margin-top: 8px; }
+.library-resolve-confirm input { max-width: 220px; }
+.library-resolve-actions {
+    display: flex;
+    gap: 8px;
+    justify-content: flex-end;
+    margin-top: 10px;
+}
+
+/* ── Match alternatives panel (F3) ────────────────────────────────────── */
+.match-alts {
+    margin-top: 8px;
+    border: 1px solid var(--border-soft);
+    border-radius: 10px;
+    background: var(--raised);
+    padding: 4px 8px;
+}
+.match-alt-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 2px;
+}
+.match-alt-row + .match-alt-row { border-top: 1px solid var(--border-soft); }
+.match-alt-info {
+    flex: 1 1 auto;
+    min-width: 0;
+    font-size: 0.82rem;
+    color: var(--text-secondary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.match-alt-use { flex: 0 0 auto; font-size: 0.75rem; }

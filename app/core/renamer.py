@@ -35,6 +35,10 @@ class RenameResult:
     new_path: Optional[Path]
     action: RenameAction
     error: Optional[str] = None
+    # Set when the collision policy skipped this operation (F1): a machine code
+    # like "target_exists". Distinct from `error` so the UI can render skips
+    # neutrally instead of as failures.
+    skipped: Optional[str] = None
     # Results of any companion (subtitle/NFO/artwork) files moved alongside this
     # video with the same action. Empty for non-video renames or when there are
     # no companions. Populated by execute_rename_with_companions.
@@ -54,6 +58,45 @@ def _copy_file(src: str, dst: str) -> None:
             # copy also failed (NAS rejects chmod) — use copyfile which
             # transfers only raw file data with no metadata operations at all.
             shutil.copyfile(src, dst)
+
+
+def resolve_collision(
+    old_path: Path,
+    new_path: Path,
+    policy: str,
+    reserved: set[str],
+) -> tuple[Optional[Path], Optional[str]]:
+    """Apply the batch collision policy BEFORE executing a rename (F1).
+
+    A collision is ``new_path`` existing on disk OR already claimed by an
+    earlier operation of the same batch (``reserved``). ``old == new`` is never
+    a collision — :func:`execute_rename` treats it as a no-op success (the file
+    is already organized), and suffixing it would pointlessly rename it.
+
+    Returns ``(path_to_use, skip_code)``:
+      • no collision            → ``(new_path, None)``
+      • policy ``"suffix"``     → first free `` (N)`` slot, N=2..99 (F9 reserves
+        the byte budget for exactly this suffix); exhausted → ``(None,
+        "no_free_suffix")``
+      • policy ``"skip"``       → ``(None, "target_exists")``
+      • policy ``"fail"``       → ``(new_path, None)`` — execute_rename then
+        fails with today's exact "Target file already exists" error.
+    """
+    try:
+        if old_path.resolve() == new_path.resolve():
+            return new_path, None
+    except OSError:
+        pass
+    collides = new_path.exists() or str(new_path) in reserved
+    if not collides or policy == "fail":
+        return new_path, None
+    if policy == "skip":
+        return None, "target_exists"
+    for n in range(2, 100):
+        cand = new_path.with_name(f"{new_path.stem} ({n}){new_path.suffix}")
+        if not cand.exists() and str(cand) not in reserved:
+            return cand, None
+    return None, "no_free_suffix"
 
 
 def execute_rename(

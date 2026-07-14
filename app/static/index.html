@@ -82,6 +82,15 @@
                         <option value="nfo_only" data-i18n="toolbar.metadata.sidecar">Sidecar only (.nfo)</option>
                     </select>
                 </div>
+                <div class="toolbar-group">
+                    <label class="toolbar-label" data-i18n="toolbar.conflict">On conflict</label>
+                    <select id="conflict-policy" class="glass-select"
+                            title="What happens when a target filename already exists (on disk, or claimed by another file in this batch). Auto-number: land at the first free ' (2)'…' (99)' name. Skip: leave the file untouched and mark the row skipped. Fail: report an error (previous behavior).">
+                        <option value="suffix" data-i18n="toolbar.conflict.suffix">Auto-number (2)</option>
+                        <option value="skip" data-i18n="toolbar.conflict.skip">Skip existing</option>
+                        <option value="fail" data-i18n="toolbar.conflict.fail">Fail</option>
+                    </select>
+                </div>
                 <div class="toolbar-group template-group">
                     <label class="toolbar-label" data-i18n="toolbar.template">Naming template</label>
                     <input type="text" id="template" class="glass-input mono"
@@ -429,6 +438,13 @@
                     <input type="text" id="manual-title" class="glass-input" placeholder="Enter scene title" required>
                 </div>
 
+                <div style="margin-bottom: 15px;">
+                    <label style="display: block; margin-bottom: 5px; color: var(--text-secondary);" data-i18n="manual.description_label">Description</label>
+                    <textarea id="manual-description" class="glass-input" rows="3" style="resize: vertical;"
+                              data-i18n-attr="placeholder" data-i18n="manual.description_placeholder"
+                              placeholder="Scene synopsis — filled automatically by Fetch, or write your own"></textarea>
+                </div>
+
                 <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 15px;">
                     <div>
                         <label style="display: block; margin-bottom: 5px; color: var(--text-secondary);">Site/Studio</label>
@@ -549,12 +565,14 @@
                 </div>
                 <div class="scene-tags" data-tags hidden></div>
                 <div class="file-name match-original" data-original></div>
+                <div class="match-alts" data-alts hidden></div>
             </div>
             <div class="match-confidence">
                 <span class="conf-badge-slot" data-badge hidden></span>
                 <span class="conf-band" data-band></span>
                 <div class="confidence-bar" data-bar></div>
                 <span class="conf-evidence-slot" data-evidence hidden></span>
+                <button class="glass-btn match-action-btn" data-alts-toggle hidden></button>
                 <button class="glass-btn match-action-btn match-edit-btn" data-edit></button>
                 <button class="glass-btn match-action-btn" data-nfo></button>
                 <button class="glass-btn match-action-btn match-remove-btn" data-remove></button>
