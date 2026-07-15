@@ -2,7 +2,7 @@
 
 const { app, BrowserWindow, nativeImage, shell, dialog, ipcMain } = require("electron");
 const { spawn, execFileSync }                     = require("child_process");
-const { planInstall }                             = require("./update-install");
+const { pickAsset, downloadAsset, verifyFile }    = require("./updater");
 const path  = require("path");
 const fs    = require("fs");
 const os    = require("os");
@@ -117,18 +117,16 @@ function findAtomicParsley() {
     return null;
 }
 
-// ── Package format detection (update notifier) ───────────────────────────────
-// Tells the backend which release asset fits this install (AMM_PKG env). This
-// is deliberately the ONLY per-target knowledge in the update flow — the
-// backend and UI stay identical across AppImage/deb/rpm/Docker.
-function detectPackageFormat() {
-    if (process.env.APPIMAGE ||
-        process.resourcesPath.includes("/.mount_") ||
-        process.resourcesPath.includes("/tmp/appimage_extracted")) return "appimage";
-    if (!app.isPackaged) return "";                       // dev run — no asset
-    if (fs.existsSync("/etc/debian_version")) return "deb";
-    if (fs.existsSync("/var/lib/rpm") || fs.existsSync("/usr/bin/rpm")) return "rpm";
-    return "";
+// ── Package type detection (update notifier) ─────────────────────────────────
+// Which release asset fits this install. Queried from the source of truth:
+// $APPIMAGE (set by the AppImage runtime), else whichever package manager
+// actually registered "adult-media-manager". Unpackaged (dev run, manual
+// extract) falls back to AppImage — the universal no-privilege format.
+function detectPackageType() {
+    if (process.env.APPIMAGE) return "appimage";
+    try { execFileSync("dpkg", ["-s", "adult-media-manager"], { stdio: "ignore" }); return "deb"; } catch {}
+    try { execFileSync("rpm", ["-q", "adult-media-manager"], { stdio: "ignore" }); return "rpm"; } catch {}
+    return "appimage";
 }
 
 function findCwd() {
@@ -193,9 +191,6 @@ function startPython() {
         // package.json's version, so the backend's /docs + /api/health match the
         // app (no stale literal in main.py). See app.main._resolve_app_version.
         AMM_VERSION:      app.getVersion(),
-        // Which release asset fits this install (appimage|deb|rpm) — lets the
-        // backend's /api/version offer the right download. Empty in dev mode.
-        AMM_PKG:          detectPackageFormat(),
         // Uvicorn / Python diagnostics
         PYTHONUNBUFFERED: "1",
         // Python must not try to write .pyc files to read-only package dirs
@@ -402,103 +397,228 @@ ipcMain.handle("dialog:open", async (_e, mode) => {
     return canceled ? [] : filePaths;
 });
 
-// ── Update notifier IPC (restart-to-finish) ───────────────────────────────────
-// "app:versions" compares the RUNNING version (package.json as loaded at start,
-// via app.getVersion()) with the ON-DISK one (package.json re-read fresh from
-// the install path — asar is disabled, so this is a real file). After a deb/rpm
-// upgrade replaces /opt/... underneath a running app the two diverge, and the
-// UI offers a relaunch. AppImage mounts are immutable, so they never diverge
-// there — the downloaded AppImage self-installs on first launch instead.
-// Set when an in-app AppImage upgrade landed on disk: the mounted image can't
-// show an on-disk version change (it is immutable), so this flag is how the UI
-// learns a restart will pick up the new build — and app:relaunch re-execs it.
-let pendingUpdateExec = null;
+// ── Software update: download / install / restart ────────────────────────────
+// One click downloads the release asset for THIS install (type + arch) into
+// ~/Downloads, verified against the GitHub release's size and sha256 digest.
+// A second click installs it: deb/rpm through the system package manager under
+// polkit authorization (the user approves in the OS's own dialog; apt/dnf do
+// the actual install — we never run as root ourselves), AppImage by replacing
+// the running file in place (user-owned, no privileges involved).
+//
+// Trust model: the renderer passes NO arguments to any step. Asset names/URLs/
+// digests come from our own backend (/api/version → GitHub API), updater.js
+// refuses non-GitHub download hosts, and update:install acts only on the file
+// THIS process downloaded and verified (pendingUpdate) — re-hashed immediately
+// before install, so a file swapped in ~/Downloads between the two clicks can
+// never be escalated to the package manager.
 
-ipcMain.handle("app:versions", () => {
-    let onDisk = null;
+// Set only after a fully verified download; the sole thing update:install may act on.
+let pendingUpdate = null;
+let installInFlight = false;
+// Set once an update is installed on disk and a restart would activate it.
+// update:restart (renderer's "Restart" button) consumes it — the renderer
+// never chooses HOW to restart, only WHETHER.
+let pendingRestart = null;   // { mode: "relaunch" | "spawn", target?: string, latest: string }
+
+// polkit's pkexec is how the user authorizes the package-manager step. Present
+// on effectively every desktop distro; when absent we fall back to the
+// "here is the verified file + install command" flow instead of failing later.
+function hasPkexec() {
+    return ["/usr/bin/pkexec", "/usr/local/bin/pkexec", "/bin/pkexec"].some(p => fs.existsSync(p));
+}
+
+ipcMain.handle("update:download", async (evt) => {
     try {
-        const pkg = JSON.parse(
-            fs.readFileSync(path.join(app.getAppPath(), "package.json"), "utf8"));
-        onDisk = pkg.version || null;
-    } catch {}
-    return { running: app.getVersion(), onDisk, pendingUpdate: !!pendingUpdateExec };
-});
+        // Ask our own backend (cached GitHub check) — never the renderer.
+        const info = await new Promise((resolve, reject) => {
+            http.get(`http://127.0.0.1:${PORT}/api/version`, res => {
+                let body = "";
+                res.on("data", d => { body += d; });
+                res.on("end", () => {
+                    try { resolve(JSON.parse(body)); } catch (e) { reject(e); }
+                });
+            }).on("error", reject);
+        });
+        if (!info || !info.update) return { ok: false, error: "No update available." };
 
-// Takes no arguments from the renderer — it can only trigger a clean relaunch.
-ipcMain.handle("app:relaunch", () => {
-    killPython();          // app.exit() skips before-quit, so stop the backend here
-    if (pendingUpdateExec) {
-        // Re-exec the freshly installed AppImage instead of the old mount.
-        // APPIMAGE_EXTRACT_AND_RUN keeps this working on FUSE-less systems.
-        app.relaunch({ execPath: pendingUpdateExec,
-                       env: { ...process.env, APPIMAGE_EXTRACT_AND_RUN: "1" } });
-    } else {
-        app.relaunch();
-    }
-    app.exit(0);
-});
-
-// ── In-app update install (update-notifier extension) ─────────────────────────
-// GUI-only upgrade path: double-clicking a downloaded .deb opens the distro's
-// app store, which sees the package name already installed and offers NOTHING
-// (Ubuntu App Center shows a dead "Installed" button). So the app installs the
-// verified download itself: deb/rpm through pkexec — polkit's native password
-// dialog is the user's consent gate — and AppImage as an unprivileged copy over
-// the self-installed location. planInstall re-validates the renderer-supplied
-// path (must be in ~/Downloads, must match our release-artifact names) and maps
-// each format to a FIXED argv: no shell, nothing renderer-shaped is executed.
-// Deliberately IPC-only — the HTTP API keeps zero privileged endpoints, so this
-// is unreachable from Docker or anything else on the network.
-ipcMain.handle("app:install-update", async (_e, filePath) => {
-    const plan = planInstall(filePath, os.homedir());
-    if (plan.error) return { ok: false, error: plan.error };
-    try {
-        fs.accessSync(plan.path, fs.constants.R_OK);
-    } catch {
-        return { ok: false, error: "Downloaded file not found — download it again" };
-    }
-
-    if (plan.kind === "appimage") {
-        try {
-            fs.mkdirSync(path.dirname(plan.dest), { recursive: true });
-            fs.copyFileSync(plan.path, plan.dest);
-            fs.chmodSync(plan.dest, 0o755);
-            pendingUpdateExec = plan.dest;
-            return { ok: true };
-        } catch (err) {
-            return { ok: false, error: err.message };
+        const pkgType = detectPackageType();
+        const arch = process.arch === "arm64" ? "arm64" : "x64";
+        const asset = pickAsset(info.update.assets || [], pkgType, arch);
+        if (!asset) {
+            return { ok: false, error: `Release v${info.update.latest} has no ${pkgType} package for ${arch}.` };
         }
-    }
 
-    if (!fs.existsSync("/usr/bin/pkexec")) {
-        return { ok: false,
-                 error: "pkexec not available — install from a terminal instead" };
+        // basename(): asset names come from our own GitHub release via the
+        // backend, but a name is still external input — never let it steer
+        // the write path out of ~/Downloads.
+        const dest = path.join(app.getPath("downloads"), path.basename(asset.name));
+        await downloadAsset(asset.url, dest, {
+            expectedSize: asset.size,
+            digest: asset.digest,
+            onProgress: (pct, transferred, total) =>
+                evt.sender.send("update:download-progress", { pct, transferred, total }),
+        });
+
+        // AppImages must be executable; the app's own first-launch staging
+        // (installDesktopEntry) takes over from there.
+        if (pkgType === "appimage") fs.chmodSync(dest, 0o755);
+
+        pendingUpdate = {
+            file: dest,
+            name: asset.name,
+            pkgType,
+            latest: info.update.latest,
+            size: asset.size,
+            digest: asset.digest,
+        };
+
+        // AppImage replace-in-place never needs privileges; deb/rpm need
+        // pkexec for the authorized package-manager step. Without it, reveal
+        // the verified file so the manual flow still works.
+        const canInstall = pkgType === "appimage" || hasPkexec();
+        if (!canInstall) shell.showItemInFolder(dest);
+        return { ok: true, name: asset.name, file: dest, pkgType, latest: info.update.latest, canInstall };
+    } catch (err) {
+        console.error("[main] update download failed:", err.message);
+        return { ok: false, error: err.message };
     }
-    return await new Promise((resolve) => {
-        const child = spawn(plan.argv[0], plan.argv.slice(1),
-                            { stdio: ["ignore", "pipe", "pipe"] });
-        let errBuf = "";
-        child.stderr.on("data", d => { errBuf += d.toString(); });
-        const timer = setTimeout(() => {
-            child.kill("SIGKILL");
-            resolve({ ok: false, error: "Install timed out" });
-        }, 10 * 60 * 1000);
-        child.on("exit", (code) => {
-            clearTimeout(timer);
-            if (code === 0) return resolve({ ok: true });
-            // pkexec: 126 = auth dialog dismissed, 127 = not authorized.
-            if (code === 126 || code === 127) {
-                return resolve({ ok: false, error: "Authorization cancelled" });
-            }
-            const lastLine = errBuf.trim().split("\n").pop();
-            resolve({ ok: false, error: lastLine || `Installer exited with code ${code}` });
-        });
-        child.on("error", (err) => {
-            clearTimeout(timer);
-            resolve({ ok: false, error: err.message });
-        });
-    });
 });
+
+// Second click of the Settings button. Takes no renderer arguments by design
+// (see trust model above).
+ipcMain.handle("update:install", async () => {
+    if (installInFlight) return { ok: false, error: "An install is already in progress." };
+    if (!pendingUpdate) return { ok: false, error: "No verified update download to install. Download the update first." };
+    installInFlight = true;
+    const { file, name, pkgType, latest, size, digest } = pendingUpdate;
+    try {
+        // TOCTOU guard: re-verify against the release digest right before use.
+        await verifyFile(file, { expectedSize: size, digest });
+
+        if (pkgType === "appimage") {
+            // Replace the file this install actually runs from ($APPIMAGE).
+            // Copy-then-rename is atomic, so the menu entry never points at a
+            // half-written image; the new version's first launch re-stages
+            // ~/.local/bin and the desktop entry by itself. Unpackaged
+            // fallback (no $APPIMAGE): just start the downloaded file.
+            const target = process.env.APPIMAGE || file;
+            if (target !== file) {
+                const staged = target + ".new";
+                fs.copyFileSync(file, staged);
+                fs.chmodSync(staged, 0o755);
+                fs.renameSync(staged, target);
+            }
+            pendingUpdate = null;
+            pendingRestart = { mode: "spawn", target, latest };
+            if (mainWindow) {
+                mainWindow.webContents.send("update:restart-pending",
+                    { latest, running: app.getVersion(), mode: "spawn" });
+            }
+            return { ok: true, installed: true, pkgType, latest, restartPending: true };
+        }
+
+        // deb/rpm: the distro's own package manager does the install, under
+        // polkit authorization. pkexec resolves the command on its hardened
+        // PATH; the only argument we add is the re-verified absolute path.
+        const cmd = pkgType === "deb"
+            ? ["apt-get", "install", "-y", file]
+            : fs.existsSync("/usr/bin/dnf")
+            ? ["dnf", "install", "-y", file]
+            : fs.existsSync("/usr/bin/zypper")
+            ? ["zypper", "--non-interactive", "install", "--allow-unsigned-rpm", file]
+            : ["rpm", "-U", file];
+
+        const res = await new Promise((resolve, reject) => {
+            const p = spawn("pkexec", cmd, { stdio: ["ignore", "ignore", "pipe"] });
+            let err = "";
+            p.stderr.on("data", d => { err += d; });
+            p.on("error", reject);
+            // Generous guard so a wedged dpkg/rpm lock can't hang the promise
+            // forever; polkit's own auth dialog timeout is far shorter.
+            const timer = setTimeout(() => {
+                p.kill();
+                reject(new Error("Install timed out after 10 minutes"));
+            }, 10 * 60_000);
+            p.on("exit", code => { clearTimeout(timer); resolve({ code, err: err.trim() }); });
+        });
+
+        // pkexec: 126 = user dismissed the auth dialog, 127 = not authorized.
+        if (res.code === 126 || res.code === 127) {
+            return { ok: false, cancelled: true, name, pkgType,
+                     error: "Authorization was not granted — nothing was installed." };
+        }
+        if (res.code !== 0) {
+            // Hand the user the verified file for a manual install.
+            shell.showItemInFolder(file);
+            const tail = res.err.split("\n").filter(Boolean).pop() || `exit ${res.code}`;
+            return { ok: false, name, file, pkgType, error: `${cmd[0]} failed: ${tail}` };
+        }
+
+        pendingUpdate = null;
+        // The focus/interval watcher would notice within a minute; fire the
+        // familiar "Restart to finish" prompt right away instead.
+        setImmediate(checkInstalledVersionChanged);
+        return { ok: true, installed: true, pkgType, latest };
+    } catch (err) {
+        console.error("[main] update install failed:", err.message);
+        return { ok: false, error: err.message, name, pkgType };
+    } finally {
+        installInFlight = false;
+    }
+});
+
+// Consumes pendingRestart. Takes no renderer arguments: the renderer's
+// "Restart" button only expresses consent — what actually happens
+// (app.relaunch vs spawning the replaced AppImage) was decided when the
+// install landed. app.quit() runs before-quit, which stops the Python backend.
+ipcMain.handle("update:restart", () => {
+    if (!pendingRestart) return { ok: false, error: "No update awaiting a restart." };
+    if (pendingRestart.mode === "spawn") {
+        spawn(pendingRestart.target, [], {
+            detached: true,
+            stdio: "ignore",
+            // extract-and-run works even where FUSE2 is unavailable
+            // (same reason the .desktop entry sets it).
+            env: { ...process.env, APPIMAGE_EXTRACT_AND_RUN: "1" },
+        }).unref();
+    } else {
+        app.relaunch();   // re-executes the /opt binary — now the new build
+    }
+    app.quit();
+    return { ok: true };
+});
+
+// ── Externally-installed upgrade watcher ──────────────────────────────────────
+// A deb/rpm upgrade (in-app or via the package manager directly) replaces the
+// files under resources/app while this process keeps running the old build.
+// Detected by re-reading the installed package.json and comparing to the
+// version this process started with; checked on window focus (the natural
+// moment — the user just came back from the package manager) plus a slow
+// timer. Announced once per session; "Restart later" is respected — the
+// Settings update card keeps a persistent restart affordance.
+let updatePromptShown = false;
+
+function installedVersion() {
+    try {
+        const pkg = JSON.parse(fs.readFileSync(
+            path.join(process.resourcesPath, "app", "package.json"), "utf8"));
+        return pkg.version || null;
+    } catch {
+        // Dev run (no packaged resources) or a half-written file mid-upgrade —
+        // try again on the next check.
+        return null;
+    }
+}
+
+function checkInstalledVersionChanged() {
+    if (updatePromptShown || !mainWindow) return;
+    const disk = installedVersion();
+    if (!disk || disk === app.getVersion()) return;
+    updatePromptShown = true;
+    if (!pendingRestart) pendingRestart = { mode: "relaunch", latest: disk };
+    mainWindow.webContents.send("update:restart-pending",
+        { latest: disk, running: app.getVersion(), mode: "relaunch" });
+}
 
 // ── Single-instance lock ──────────────────────────────────────────────────────
 // Re-clicking the launcher (or `second-instance`) focuses the existing window
@@ -578,6 +698,12 @@ async function startApp() {
     });
 
     mainWindow.on("closed", () => { mainWindow = null; });
+
+    // Externally-installed upgrade watcher: focus is the natural moment (the
+    // user just came back from the package manager); the timer catches
+    // unattended upgrades. Cheap — one small file read per check.
+    mainWindow.on("focus", checkInstalledVersionChanged);
+    setInterval(checkInstalledVersionChanged, 60_000);
 }
 
 function killPython() {

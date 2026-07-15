@@ -30,16 +30,30 @@ contextBridge.exposeInMainWorld("electronAPI", {
         }
     },
 
-    // Update notifier: running vs on-disk installed version ({running, onDisk};
-    // they diverge after a deb/rpm upgrade replaces the install underneath us),
-    // and a clean relaunch to finish such an update. No arguments cross the
-    // bridge in either direction beyond the version strings.
-    getVersions: () => ipcRenderer.invoke("app:versions"),
-    relaunchApp: () => ipcRenderer.invoke("app:relaunch"),
-    // Install a downloaded release file (the path returned by the backend's
-    // download endpoint). The main process re-validates the path and runs the
-    // package manager via pkexec (deb/rpm) or an unprivileged copy (AppImage).
-    installUpdate: (filePath) => ipcRenderer.invoke("app:install-update", filePath),
+    // Software update bridge — the renderer passes NO arguments to any of
+    // these; the main process owns asset selection, verification (sha256
+    // against the GitHub release digest) and what a restart actually does.
+    // One-click update download (Settings). The main process picks the right
+    // package for this install (deb/rpm/AppImage × arch) and verifies it.
+    downloadUpdate: () => ipcRenderer.invoke("update:download"),
+    // Install the update downloadUpdate() verified. deb/rpm go through the
+    // system package manager under polkit authorization; AppImage is replaced
+    // in place with no privileges.
+    installUpdate: () => ipcRenderer.invoke("update:install"),
+    // Download progress events ({pct, transferred, total}).
+    onUpdateProgress: (cb) => {
+        ipcRenderer.removeAllListeners("update:download-progress");
+        ipcRenderer.on("update:download-progress", (_evt, p) => cb(p));
+    },
+    // Fired when an installed update awaits a restart (deb/rpm upgrade seen
+    // on disk, or a replaced AppImage). The renderer shows the themed prompt.
+    onUpdateRestartPending: (cb) => {
+        ipcRenderer.removeAllListeners("update:restart-pending");
+        ipcRenderer.on("update:restart-pending", (_evt, info) => cb(info));
+    },
+    // Perform the restart a pending update requires. Takes no arguments —
+    // the main process decided relaunch-vs-spawn when the install landed.
+    restartApp: () => ipcRenderer.invoke("update:restart"),
 
     // Opens the native OS picker (GTK/KDE/XDG portal). `mode` is "folder"
     // (directories) or "files" — Linux GTK can't combine the two in one dialog,

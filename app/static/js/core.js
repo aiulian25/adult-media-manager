@@ -780,8 +780,8 @@ async function openSettingsModal() {
     if (themeSel) themeSel.value = localStorage.getItem('amm_theme')  || 'default';
     if (embedSel) embedSel.value = localStorage.getItem('amm_embed_mode') || 'smart';
 
-    // Version / update footer fills in asynchronously — never blocks the modal.
-    _refreshVersionFooter(isNative);
+    // Software update card fills in asynchronously — never blocks the modal.
+    refreshUpdateInfo().then(renderUpdateCard);
 
     // Fetch current status from the server
     try {
@@ -799,137 +799,254 @@ async function openSettingsModal() {
     }
 }
 
-// ── Version / update footer (F17) ────────────────────────────────────────────
-// One shared flow for all targets; the per-target difference is DATA the server
-// sends (native flag, matching asset) — not divergent code paths here.
+/* ── Software update: banner, Settings card, restart prompt (F17) ──
+   One state machine feeds three surfaces:
+     - a dismissible banner in the main window (announces a release once,
+       dismiss remembered per-version),
+     - the "Software update" card in Settings (idle → downloading → ready →
+       installing → done, plus manual-fallback and error states),
+     - a themed in-app restart prompt.
+   Trust model: the renderer passes NO arguments to download/install/restart —
+   the Electron main process owns asset selection, sha256 verification and
+   what a restart actually does. */
+let updInfo = null;       // last /api/version payload
+let updPhase = 'idle';    // idle | downloading | ready | manual | installing | done | error
+let updResult = null;     // downloadUpdate() result ({name, pkgType, …})
+let updError = '';
+let updNote = '';         // transient note (e.g. cancelled authorization)
 
-// Path of the release file the backend last downloaded (this session). Consumed
-// by the in-app installer; never sent anywhere except the Electron IPC bridge,
-// which independently re-validates it before touching a package manager.
-let _updateDownloadPath = null;
+function updCanAutoDl() {
+    return !!(window.electronAPI && typeof window.electronAPI.downloadUpdate === 'function');
+}
+function updCanInstall() {
+    return !!(window.electronAPI && typeof window.electronAPI.installUpdate === 'function');
+}
+function _updIsElectron() {
+    return !!(window.electronAPI && window.electronAPI.isElectron);
+}
 
-async function _refreshVersionFooter(isNative) {
-    const textEl    = document.getElementById('settings-version-text');
-    const statusEl  = document.getElementById('settings-update-status');
-    const dlBtn     = document.getElementById('settings-update-download');
-    const installBtn= document.getElementById('settings-update-install');
-    const restartBtn= document.getElementById('settings-update-restart');
-    const relLink   = document.getElementById('settings-releases-link');
-    if (!textEl || !statusEl || !dlBtn || !restartBtn) return;
-
-    // Reset to the quiet state on every open (a previous open may have shown more)
-    statusEl.classList.add('svb-hidden');
-    dlBtn.classList.add('svb-hidden');
-    if (installBtn) installBtn.classList.add('svb-hidden');
-    restartBtn.classList.add('svb-hidden');
-
+async function refreshUpdateInfo() {
     try {
         const resp = await fetch('/api/version');
-        if (!resp.ok) return;
-        const v = await resp.json();
-        textEl.textContent = `AMM v${v.version}`;
-        if (relLink && v.releases_url) relLink.href = v.releases_url;
-
-        // Restart-to-finish: a deb/rpm upgrade replaced the install on disk
-        // underneath the running app (on-disk version diverges), or an in-app
-        // AppImage upgrade landed (pendingUpdate — the mounted image itself
-        // can't change). Takes precedence over the download offer — the update
-        // is already here, it just needs a relaunch.
-        if (isNative && typeof window.electronAPI.getVersions === 'function') {
-            try {
-                const vers = await window.electronAPI.getVersions();
-                const diverged = vers && vers.onDisk && vers.running && vers.onDisk !== vers.running;
-                if (diverged || (vers && vers.pendingUpdate)) {
-                    statusEl.textContent = diverged
-                        ? t('settings.update_installed', { version: vers.onDisk })
-                        : t('settings.update_restart_pending');
-                    statusEl.classList.remove('svb-hidden');
-                    restartBtn.classList.remove('svb-hidden');
-                    return;
-                }
-            } catch (_) { /* bridge unavailable — fall through to notice-only */ }
-        }
-
-        // A download from earlier in this session that hasn't been installed
-        // yet: keep offering the install instead of a re-download.
-        if (isNative && _updateDownloadPath &&
-            typeof window.electronAPI.installUpdate === 'function' && v.update) {
-            statusEl.textContent = t('settings.update_available', { version: v.update.latest });
-            statusEl.classList.remove('svb-hidden');
-            if (installBtn) installBtn.classList.remove('svb-hidden');
-            return;
-        }
-
-        if (v.update) {
-            statusEl.textContent = isNative
-                ? t('settings.update_available', { version: v.update.latest })
-                : t('settings.update_available_docker', { version: v.update.latest });
-            statusEl.classList.remove('svb-hidden');
-            if (isNative && v.update.asset) dlBtn.classList.remove('svb-hidden');
-        }
-    } catch (_) {
-        // Offline / kill-switched — footer just shows nothing extra
-    }
+        if (resp.ok) updInfo = await resp.json();
+    } catch (_) { /* offline — card renders nothing */ }
+    return updInfo;
 }
 
-async function _downloadUpdate() {
-    const dlBtn = document.getElementById('settings-update-download');
-    dlBtn.disabled = true;
-    dlBtn.textContent = t('settings.update_downloading');
-    try {
-        const resp = await fetch('/api/version/download', { method: 'POST' });
-        const data = await resp.json().catch(() => ({}));
-        if (!resp.ok) throw new Error(data.detail || resp.statusText);
-        // When the Electron bridge can install it, hand straight off to the
-        // one-click Install button (the CLI hint stays in the toast as the
-        // fallback for pkexec-less systems). Double-clicking the file instead
-        // dead-ends in the distro store ("Installed", no upgrade offered).
-        const installBtn = document.getElementById('settings-update-install');
-        const canInstall = !!(window.electronAPI &&
-                              typeof window.electronAPI.installUpdate === 'function');
-        if (canInstall && installBtn) {
-            _updateDownloadPath = data.saved_to;
-            dlBtn.classList.add('svb-hidden');
-            installBtn.classList.remove('svb-hidden');
-        }
-        const extra = data.install_hint ? ` — ${data.install_hint}` : '';
-        showToast(
-            t('settings.update_downloaded'),
-            t('settings.update_downloaded_msg', { path: data.saved_to }) + extra,
-            'success', 10000
-        );
-    } catch (err) {
-        showToast(t('settings.update_download_failed'), err.message, 'error', 8000);
-    } finally {
-        dlBtn.disabled = false;
-        dlBtn.textContent = t('settings.update_download');
+function renderUpdateCard() {
+    const slot = document.getElementById('update-card-slot');
+    if (!slot) return;                    // Settings not open — state persists for next open
+    const v = updInfo;
+    if (!v || !v.version) { slot.innerHTML = ''; return; }
+    const upd = v.update;
+    const relUrl = (upd && upd.url) || v.releases_url || 'https://github.com/aiulian25/adult-media-manager/releases';
+
+    // Up to date — the quiet default.
+    if (!upd || !upd.latest) {
+        slot.innerHTML = `
+            <div class="update-card update-row">
+                <span class="update-chip ok">✓ ${escapeHtml(t('update.up_to_date'))}</span>
+                <span style="font-weight:650">AMM v${escapeHtml(v.version)}</span>
+                <span class="up-tiny" style="flex:1">${escapeHtml(t('update.checks_daily'))}</span>
+                <a class="up-tiny" href="${escapeHtml(relUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(t('update.releases_link'))}</a>
+            </div>`;
+        return;
     }
+
+    const latest = escapeHtml(upd.latest);
+    const whatsNew = `<a href="${escapeHtml(relUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(t('update.whats_new'))}</a>`;
+
+    // Docker / plain browser: same card, pull command instead of buttons.
+    if (!updCanAutoDl()) {
+        slot.innerHTML = `
+            <div class="update-card highlight">
+                <h4><span class="update-chip new">${escapeHtml(t('update.chip_new'))}</span> ${escapeHtml(t('update.available_title', { version: upd.latest }))}</h4>
+                <div class="up-muted">${escapeHtml(t('update.youre_on', { version: v.version }))} · ${whatsNew}</div>
+                ${_updIsElectron() ? '' : `<div class="up-tiny" style="margin-top:6px">${escapeHtml(t('update.docker_hint'))} <code>docker compose pull &amp;&amp; docker compose up -d</code></div>`}
+            </div>`;
+        return;
+    }
+
+    let html = '';
+    if (updPhase === 'downloading') {
+        html = `
+            <div class="update-card highlight">
+                <h4>${escapeHtml(t('update.downloading_title', { version: upd.latest }))}</h4>
+                <div class="update-bar"><i id="upd-bar-fill"></i></div>
+                <div class="update-row">
+                    <span class="up-muted" id="upd-bytes" style="flex:1;margin-top:0">${escapeHtml(t('update.starting'))}</span>
+                    <span class="up-muted" id="upd-pct" style="margin-top:0">0%</span>
+                </div>
+            </div>`;
+    } else if (updPhase === 'ready') {
+        const appimage = updResult && updResult.pkgType === 'appimage';
+        html = `
+            <div class="update-card highlight">
+                <div class="update-row">
+                    <div style="flex:1;min-width:0">
+                        <h4><span style="color:var(--success)">✓</span> ${escapeHtml(t('update.verified_title'))}</h4>
+                        <div class="up-muted">${escapeHtml(t('update.verified_sub'))} · <span class="mono">${escapeHtml(updResult && updResult.name || '')}</span></div>
+                        <div class="up-tiny">${escapeHtml(appimage ? t('update.appimage_note') : t('update.pkexec_note'))}</div>
+                        ${updNote ? `<div class="up-tiny" style="color:var(--warning)">${escapeHtml(updNote)}</div>` : ''}
+                    </div>
+                    <button class="btn btn-primary" id="btn-upd-install" style="flex-shrink:0">${escapeHtml(t('update.install_btn'))}</button>
+                </div>
+            </div>`;
+    } else if (updPhase === 'installing') {
+        html = `
+            <div class="update-card highlight">
+                <h4>${escapeHtml(t('update.installing_title', { version: upd.latest }))}</h4>
+                <div class="update-bar indet"><i></i></div>
+                <div class="up-muted">${escapeHtml(t('update.installing_sub'))}</div>
+            </div>`;
+    } else if (updPhase === 'done') {
+        html = `
+            <div class="update-card highlight">
+                <div class="update-row">
+                    <div style="flex:1">
+                        <h4><span style="color:var(--success)">✓</span> ${escapeHtml(t('update.done_title', { version: upd.latest }))}</h4>
+                        <div class="up-muted">${escapeHtml(t('update.done_sub'))}</div>
+                    </div>
+                    <button class="btn btn-primary" id="btn-upd-restart" style="flex-shrink:0">${escapeHtml(t('update.restart_btn'))}</button>
+                </div>
+            </div>`;
+    } else if (updPhase === 'manual') {
+        const r = updResult || {};
+        const hint = r.pkgType === 'deb' ? `sudo apt install ./Downloads/${r.name || ''}`
+                   : r.pkgType === 'rpm' ? `sudo dnf install ./Downloads/${r.name || ''}`
+                   : t('update.manual_appimage');
+        html = `
+            <div class="update-card">
+                <h4><span style="color:var(--success)">✓</span> ${escapeHtml(t('update.verified_title'))}</h4>
+                <div class="up-muted">${escapeHtml(t('update.manual_saved', { name: r.name || '' }))}</div>
+                <div class="up-tiny">${escapeHtml(t('update.manual_install_with'))} <code>${escapeHtml(hint)}</code></div>
+            </div>`;
+    } else if (updPhase === 'error') {
+        html = `
+            <div class="update-card error">
+                <div class="update-row">
+                    <div style="flex:1;min-width:0">
+                        <h4><span style="color:var(--error)">✕</span> ${escapeHtml(t('update.error_title'))}</h4>
+                        <div class="up-muted">${escapeHtml(updError || 'unknown error')}</div>
+                        ${updResult && updResult.name ? `<div class="up-tiny">${escapeHtml(t('update.error_file_kept', { name: updResult.name }))}</div>` : ''}
+                    </div>
+                    <button class="glass-btn" id="btn-upd-retry" style="flex-shrink:0">${escapeHtml(t('update.retry_btn'))}</button>
+                </div>
+            </div>`;
+    } else {
+        // idle — update available.
+        html = `
+            <div class="update-card highlight">
+                <div class="update-row">
+                    <div style="flex:1;min-width:0">
+                        <h4><span class="update-chip new">${escapeHtml(t('update.chip_new'))}</span> ${escapeHtml(t('update.available_title', { version: upd.latest }))}</h4>
+                        <div class="up-muted">${escapeHtml(t('update.youre_on', { version: v.version }))} · ${whatsNew} · ${escapeHtml(t('update.verified_from_github'))}</div>
+                    </div>
+                    <button class="btn btn-primary" id="btn-upd-download" style="flex-shrink:0">${escapeHtml(t('update.download_btn'))}</button>
+                </div>
+            </div>`;
+    }
+    slot.innerHTML = html;
+    document.getElementById('btn-upd-download')?.addEventListener('click', updDownload);
+    document.getElementById('btn-upd-retry')?.addEventListener('click', updDownload);
+    document.getElementById('btn-upd-install')?.addEventListener('click', updInstall);
+    document.getElementById('btn-upd-restart')?.addEventListener('click', () => {
+        window.electronAPI.restartApp && window.electronAPI.restartApp();
+    });
 }
 
-async function _installUpdate() {
-    const installBtn = document.getElementById('settings-update-install');
-    if (!_updateDownloadPath || !window.electronAPI ||
-        typeof window.electronAPI.installUpdate !== 'function') return;
-    installBtn.disabled = true;
-    installBtn.textContent = t('settings.update_installing');
-    try {
-        // deb/rpm: polkit's native password dialog appears here — that prompt
-        // IS the confirmation step. AppImage installs without privilege.
-        const res = await window.electronAPI.installUpdate(_updateDownloadPath);
-        if (!res || !res.ok) throw new Error((res && res.error) || 'Install failed');
-        _updateDownloadPath = null;
-        installBtn.classList.add('svb-hidden');
-        showToast(t('settings.update_installed_ok'),
-                  t('settings.update_installed_ok_msg'), 'success', 8000);
-        // Re-check versions: deb/rpm now diverge on disk, AppImage reports
-        // pendingUpdate — either way the Restart button appears.
-        _refreshVersionFooter(true);
-    } catch (err) {
-        showToast(t('settings.update_install_failed'), err.message, 'error', 8000);
-    } finally {
-        installBtn.disabled = false;
-        installBtn.textContent = t('settings.update_install');
+async function updDownload() {
+    updPhase = 'downloading'; updError = ''; updNote = '';
+    renderUpdateCard();
+    window.electronAPI.onUpdateProgress(p => {
+        const pct = typeof p === 'number' ? p : (p && p.pct) || 0;
+        const fill = document.getElementById('upd-bar-fill');
+        if (fill) fill.style.width = pct + '%';
+        const lab = document.getElementById('upd-pct');
+        if (lab) lab.textContent = pct + '%';
+        const bytes = document.getElementById('upd-bytes');
+        if (bytes && p && typeof p === 'object' && p.total) {
+            bytes.textContent = `${formatFileSize(p.transferred)} / ${formatFileSize(p.total)} · github.com`;
+        }
+    });
+    const r = await window.electronAPI.downloadUpdate();
+    updResult = r;
+    if (r && r.ok && r.canInstall && updCanInstall()) updPhase = 'ready';
+    else if (r && r.ok) updPhase = 'manual';       // no pkexec — verified file revealed
+    else { updPhase = 'error'; updError = t('update.download_failed') + ': ' + ((r && r.error) || 'unknown error'); }
+    renderUpdateCard();
+}
+
+async function updInstall() {
+    updPhase = 'installing'; updNote = '';
+    renderUpdateCard();
+    const r = await window.electronAPI.installUpdate();
+    if (r && r.ok) {
+        updPhase = 'done';      // main also fires the restart prompt
+    } else if (r && r.cancelled) {
+        updPhase = 'ready';
+        updNote = t('update.auth_cancelled');
+    } else {
+        updPhase = 'error';
+        updError = t('update.install_failed') + ': ' + ((r && r.error) || 'unknown error');
     }
+    renderUpdateCard();
+}
+
+/* Update banner: one quiet row under the top bar, shown once per release.
+   Dismiss is remembered per-version — never nags again until the NEXT one. */
+async function checkUpdateOnStartup() {
+    try {
+        const v = await refreshUpdateInfo();
+        if (!v || !v.version) return;
+        const latest = v.update && v.update.latest;
+        if (!latest) return;
+        if (localStorage.getItem('amm_dismissed_update') === latest) return;
+        document.getElementById('update-banner-title').textContent =
+            t('update.available_title', { version: latest });
+        document.getElementById('update-banner-sub').textContent = updCanAutoDl()
+            ? t('update.banner_sub_native')
+            : (_updIsElectron() ? t('update.banner_sub_manual') : t('update.banner_sub_docker'));
+        document.getElementById('update-banner').classList.remove('hidden');
+    } catch (_) { /* offline — no banner */ }
+}
+
+/* In-app restart prompt — shown when the main process reports an installed
+   update awaiting a restart (deb/rpm upgrade seen on disk, or a replaced
+   AppImage). Asked once; "Restart later" is respected — the Settings card
+   keeps the persistent affordance. */
+function showRestartModal(info) {
+    let overlay = document.getElementById('restart-overlay');
+    if (!overlay) {
+        overlay = document.createElement('div');
+        overlay.id = 'restart-overlay';
+        overlay.className = 'modal hidden';
+        document.body.appendChild(overlay);
+    }
+    const spawnMode = info && info.mode === 'spawn';
+    const latest = escapeHtml((info && info.latest) || '');
+    overlay.innerHTML = `
+        <div class="modal-content glass-panel restart-box">
+            <div class="restart-head">
+                <div class="restart-title">${escapeHtml(spawnMode ? t('update.restart_ready_title') : t('update.restart_installed_title'))}</div>
+                <div class="restart-sub">AMM v${latest}</div>
+            </div>
+            <div class="restart-body">${escapeHtml(spawnMode
+                ? t('update.restart_body_spawn', { version: (info && info.latest) || '' })
+                : t('update.restart_body_relaunch', { version: (info && info.latest) || '', running: (info && info.running) || '' }))}</div>
+            <div class="restart-fine">${escapeHtml(t('update.restart_fine'))}</div>
+            <div class="restart-actions">
+                <button class="btn btn-secondary" id="restart-later">${escapeHtml(t('update.restart_later'))}</button>
+                <button class="btn btn-primary" id="restart-now">${escapeHtml(t('update.restart_btn'))}</button>
+            </div>
+        </div>`;
+    overlay.classList.remove('hidden');
+    document.getElementById('restart-later').addEventListener('click', () => overlay.classList.add('hidden'));
+    document.getElementById('restart-now').addEventListener('click', () => {
+        document.getElementById('restart-now').disabled = true;
+        window.electronAPI.restartApp && window.electronAPI.restartApp();
+    });
+    overlay.addEventListener('click', e => { if (e.target === overlay) overlay.classList.add('hidden'); });
 }
 
 async function saveSettings() {
@@ -1016,16 +1133,22 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Update notifier buttons (F17). Download is server-driven (no client input);
     // restart goes through the preload bridge and only exists in the native build.
-    document.getElementById('settings-update-download')
-        ?.addEventListener('click', _downloadUpdate);
-    document.getElementById('settings-update-install')
-        ?.addEventListener('click', _installUpdate);
-    document.getElementById('settings-update-restart')
-        ?.addEventListener('click', () => {
-            if (window.electronAPI && typeof window.electronAPI.relaunchApp === 'function') {
-                window.electronAPI.relaunchApp();
-            }
-        });
+    // Software update surfaces (F17): banner + restart prompt wiring.
+    document.getElementById('update-banner-view')?.addEventListener('click', () => {
+        document.getElementById('update-banner').classList.add('hidden');
+        openSettingsModal();
+        setTimeout(() => document.getElementById('update-card-slot')
+            ?.scrollIntoView({ block: 'nearest' }), 150);
+    });
+    document.getElementById('update-banner-dismiss')?.addEventListener('click', () => {
+        const latest = updInfo && updInfo.update && updInfo.update.latest;
+        if (latest) localStorage.setItem('amm_dismissed_update', latest);
+        document.getElementById('update-banner').classList.add('hidden');
+    });
+    if (window.electronAPI && typeof window.electronAPI.onUpdateRestartPending === 'function') {
+        window.electronAPI.onUpdateRestartPending(showRestartModal);
+    }
+    checkUpdateOnStartup();
 
     // Show/hide toggle for each key input. We swap the eye ↔ eye-off icon so the
     // toggle gives clear feedback: key fields open EMPTY (never pre-filled, for

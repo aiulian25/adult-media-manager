@@ -53,6 +53,17 @@
             </div>
         </header>
 
+        <!-- ── Update banner: announces a new release once; dismiss is
+             remembered per-version (never nags until the NEXT release). ── -->
+        <div id="update-banner" class="update-banner hidden">
+            <span class="update-banner-text">
+                <b id="update-banner-title"></b>
+                <span class="update-banner-sub" id="update-banner-sub"></span>
+            </span>
+            <button id="update-banner-view" class="btn btn-primary update-banner-btn" data-i18n="update.banner_view">View update</button>
+            <button id="update-banner-dismiss" class="banner-dismiss" title="Dismiss for this version">&times;</button>
+        </div>
+
         <!-- ═══ Controls ═══ -->
         <section class="glass-panel controls-card">
             <div class="ctl-grid">
@@ -282,17 +293,12 @@
                     <p id="settings-stashdb-source" class="settings-source-note"></p>
                 </div>
 
-                <!-- ── Version / updates (F17) ──────────────────────────── -->
-                <div class="settings-version-bar" id="settings-version-bar">
-                    <span id="settings-version-text" class="settings-version-text">AMM</span>
-                    <span id="settings-update-status" class="settings-update-status svb-hidden"></span>
-                    <span class="settings-version-actions">
-                        <button type="button" id="settings-update-download" class="btn btn-secondary svb-hidden" data-i18n="settings.update_download">Download update</button>
-                        <button type="button" id="settings-update-install" class="btn btn-primary svb-hidden" data-i18n="settings.update_install">Install update</button>
-                        <button type="button" id="settings-update-restart" class="btn btn-primary svb-hidden" data-i18n="settings.update_restart">Restart to finish update</button>
-                        <a id="settings-releases-link" class="btn btn-secondary" href="https://github.com/aiulian25/adult-media-manager/releases" target="_blank" rel="noopener" data-i18n="settings.releases">Release notes</a>
-                    </span>
-                </div>
+                <!-- ── Software update (F17, CineSort-style card) ─────────
+                     Rendered entirely by renderUpdateCard() in core.js: one
+                     state machine drives this card, the top banner and the
+                     restart prompt. -->
+                <h4 class="settings-section-title" data-i18n="settings.section_update">Software update</h4>
+                <div id="update-card-slot"></div>
             </div>
             <div class="modal-footer">
                 <button id="settings-cancel" class="btn btn-secondary" data-i18n="settings.cancel">Cancel</button>

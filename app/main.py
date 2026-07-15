@@ -13,7 +13,6 @@ import subprocess
 import tempfile
 import base64
 import shutil
-import platform
 from pathlib import Path
 from typing import Optional
 
@@ -315,29 +314,18 @@ def _is_allowed_path(p: Path) -> bool:
 
 # ── Update notifier (F17) ────────────────────────────────────────────────────
 # One shared implementation for every target. The ONLY per-target inputs are:
-#   • AMM_PKG (appimage|deb|rpm) — set by the Electron launcher (packaging layer)
-#     so the backend can pick the matching release asset; unset in Docker/dev.
-#   • AMM_NATIVE — gates the download endpoint: a LAN-exposed Docker port must
-#     never be able to write release binaries into the container.
+# The backend only PUBLISHES release facts (latest version + asset list with
+# sha256 digests from the GitHub API); downloading and installing live in the
+# Electron main process, so the HTTP API carries no write endpoint for updates
+# (a LAN-exposed Docker port can never be induced to fetch binaries).
 # AMM_UPDATE_CHECK=0 disables ALL outbound update traffic (zero-egress option).
 _AMM_UPDATE_CHECK: bool = os.getenv("AMM_UPDATE_CHECK", "1") != "0"
-_AMM_PKG: str = os.getenv("AMM_PKG", "").strip().lower()
 _GITHUB_REPO = "aiulian25/adult-media-manager"
 _RELEASES_URL = f"https://github.com/{_GITHUB_REPO}/releases"
 _UPDATE_TTL_OK = 24 * 3600      # successful check → re-ask GitHub once a day
 _UPDATE_TTL_FAIL = 3600         # failed check → retry hourly, don't hammer
 _update_cache: dict = {"checked_at": 0.0, "release": None, "ok": False}
 _update_lock = asyncio.Lock()
-_download_lock = asyncio.Lock()
-
-# Suffix per package format; desktop release assets are x64-only, so any other
-# machine arch gets the update *notice* but no downloadable asset.
-_PKG_SUFFIX = {"appimage": ".appimage", "deb": ".deb", "rpm": ".rpm"}
-_PKG_INSTALL_HINT = {
-    "appimage": "Run the new AppImage — it installs itself on first launch.",
-    "deb": "Install with: sudo apt install ./{name}",
-    "rpm": "Install with: sudo dnf install ./{name}",
-}
 
 
 def _version_tuple(v: str) -> tuple:
@@ -347,31 +335,6 @@ def _version_tuple(v: str) -> tuple:
         m = re.match(r"\d+", piece)
         parts.append(int(m.group()) if m else 0)
     return tuple(parts)
-
-
-def _pick_release_asset(assets: list) -> Optional[dict]:
-    """Choose the release asset matching this install's package format + arch."""
-    suffix = _PKG_SUFFIX.get(_AMM_PKG)
-    if not suffix:
-        return None
-    if platform.machine().lower() not in ("x86_64", "amd64"):
-        return None  # desktop builds ship x64-only
-    matches = [
-        a for a in assets
-        if str(a.get("name", "")).lower().endswith(suffix)
-        and str(a.get("browser_download_url", "")).startswith("https://")
-    ]
-    # Prefer an arch-tagged name should multi-arch assets ever appear.
-    tagged = [m for m in matches
-              if any(t in str(m.get("name", "")).lower() for t in ("x86_64", "amd64", "x64"))]
-    pick = (tagged or matches)[0] if matches else None
-    if not pick:
-        return None
-    return {
-        "name": str(pick["name"]),
-        "size": int(pick.get("size") or 0),
-        "url": str(pick["browser_download_url"]),
-    }
 
 
 async def _fetch_latest_release() -> Optional[dict]:
@@ -407,10 +370,23 @@ async def _get_update_info() -> Optional[dict]:
     latest = str(release.get("tag_name", "")).lstrip("vV")
     if not latest or _version_tuple(latest) <= _version_tuple(APP_VERSION):
         return None
+    # Full asset list so the desktop shell picks the right package (type+arch)
+    # itself; size + sha256 digest let its downloader verify integrity
+    # end-to-end (during download AND re-checked right before install).
     return {
         "latest": latest,
         "url": str(release.get("html_url") or _RELEASES_URL),
-        "asset": _pick_release_asset(release.get("assets") or []),
+        "assets": [
+            {
+                "name": str(a["name"]),
+                "url": str(a["browser_download_url"]),
+                "size": int(a.get("size") or 0),
+                "digest": a.get("digest"),
+            }
+            for a in (release.get("assets") or [])
+            if a.get("name")
+            and str(a.get("browser_download_url", "")).startswith("https://")
+        ],
     }
 
 
@@ -4178,79 +4154,16 @@ async def get_version():
     """Running version plus (cached) newer-release info from GitHub.
 
     ``update`` is null when: up to date, check disabled (AMM_UPDATE_CHECK=0),
-    or GitHub unreachable — failures are always silent.
+    or GitHub unreachable — failures are always silent. Read-only: downloading
+    and installing updates live in the desktop shell (electron/updater.js),
+    never behind an HTTP endpoint.
     """
     return {
         "version": APP_VERSION,
         "native": _AMM_NATIVE,
-        "package": _AMM_PKG or None,
         "update_check": _AMM_UPDATE_CHECK,
         "releases_url": _RELEASES_URL,
         "update": await _get_update_info(),
-    }
-
-
-@app.post("/api/version/download")
-async def download_update():
-    """Download the newer release asset for this install into ~/Downloads.
-
-    Takes NO client input: the URL/name/size come exclusively from the server's
-    own pinned-repo GitHub check (_get_update_info). Native-only — a network-
-    exposed Docker deployment must never be induced to write binaries to disk
-    (Docker updates via `docker compose pull`). Nothing is installed or
-    executed; deb/rpm still go through apt/dnf, AppImage is run by the user.
-    """
-    if not _AMM_NATIVE:
-        raise HTTPException(
-            status_code=403,
-            detail="Not available in this deployment — update with: docker compose pull && docker compose up -d",
-        )
-    update = await _get_update_info()
-    if not update:
-        raise HTTPException(status_code=404, detail="No update available")
-    asset = update.get("asset")
-    if not asset:
-        raise HTTPException(
-            status_code=404,
-            detail=f"No package for this platform/architecture — download manually: {update['url']}",
-        )
-    if _download_lock.locked():
-        raise HTTPException(status_code=409, detail="A download is already in progress")
-
-    async with _download_lock:
-        name = Path(asset["name"]).name  # defence-in-depth: basename only
-        if name in ("", ".", "..") or name.startswith("."):
-            raise HTTPException(status_code=502, detail="Unexpected asset name from GitHub")
-        dest_dir = Path(os.getenv("AMM_HOME", str(Path.home()))) / "Downloads"
-        dest = dest_dir / name
-        tmp = dest_dir / (name + ".part")
-        written = 0
-        try:
-            dest_dir.mkdir(parents=True, exist_ok=True)
-            async with httpx.AsyncClient(
-                timeout=httpx.Timeout(30.0, connect=10.0), follow_redirects=True
-            ) as client:
-                async with client.stream("GET", asset["url"]) as resp:
-                    resp.raise_for_status()
-                    with open(tmp, "wb") as fh:
-                        async for chunk in resp.aiter_bytes(1 << 20):
-                            fh.write(chunk)
-                            written += len(chunk)
-            # Verify against the size GitHub's API reported for the asset —
-            # a truncated download must never be left looking installable.
-            if asset["size"] and written != asset["size"]:
-                raise ValueError(f"incomplete download ({written} of {asset['size']} bytes)")
-            os.replace(tmp, dest)
-        except Exception as exc:
-            tmp.unlink(missing_ok=True)
-            raise HTTPException(status_code=502, detail=f"Download failed: {exc}")
-
-    hint = _PKG_INSTALL_HINT.get(_AMM_PKG, "")
-    return {
-        "name": name,
-        "saved_to": str(dest),
-        "bytes": written,
-        "install_hint": hint.format(name=name),
     }
 
 
