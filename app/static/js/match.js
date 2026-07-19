@@ -413,7 +413,7 @@ function _buildMatchRow({ result, index }) {
     node.querySelector('[data-site]').textContent = m.site || '';
     if (m.performers && m.performers.length) {
         const el = node.querySelector('[data-performers]');
-        el.textContent = m.performers.join(', ');
+        _renderPerformerStrip(el, node.querySelector('[data-order-note]'), result, index);
         el.hidden = false;
     }
     if (m.release_date) {
@@ -493,18 +493,25 @@ function _buildMatchRow({ result, index }) {
     return node;
 }
 
-// Build the compact alternative sub-rows for match `index` (F3). textContent
-// only — same XSS discipline as the main row builder.
+// Build the numbered alternative sub-rows for match `index` (F3). textContent
+// only — same XSS discipline as the main row builder. Each row: number badge,
+// two-line info (title / performers · site · date), "Use #N" button. The
+// numbers stay meaningful across swaps because useAlternative() puts the
+// replaced match back into the SAME slot.
 function _fillAlternatives(panel, index) {
     const r = matchedResults[index];
     if (!r || !Array.isArray(r.alternatives)) return;
     r.alternatives.forEach((alt, altIdx) => {
         const row = document.createElement('div');
         row.className = 'match-alt-row';
+        const num = document.createElement('span');
+        num.className = 'match-alt-num';
+        num.textContent = String(altIdx + 1);
         const info = document.createElement('span');
         info.className = 'match-alt-info';
-        const title = document.createElement('b');
-        title.textContent = alt.title || '';
+        const title = document.createElement('span');
+        title.className = 'match-alt-title';
+        title.textContent = alt.title || '—';
         info.appendChild(title);
         // Performers cap at 3 so one gang scene can't turn the row into a wall.
         const perfs = Array.isArray(alt.performers) ? alt.performers : [];
@@ -512,14 +519,19 @@ function _fillAlternatives(panel, index) {
             + (perfs.length > 3 ? ` +${perfs.length - 3}` : '');
         const meta = document.createElement('span');
         meta.className = 'match-alt-meta';
-        const metaText = [alt.site, perfText, alt.release_date]
-            .filter(Boolean).join(' · ');
-        meta.textContent = (title.textContent && metaText ? ' — ' : '') + metaText;
-        info.appendChild(meta);
+        if (perfText) {
+            const perfEl = document.createElement('b');
+            perfEl.textContent = perfText;
+            meta.appendChild(perfEl);
+        }
+        const rest = [alt.site, alt.release_date].filter(Boolean).join(' · ');
+        if (rest) meta.appendChild(document.createTextNode((perfText ? ' · ' : '') + rest));
+        if (meta.childNodes.length) info.appendChild(meta);
         const useBtn = document.createElement('button');
         useBtn.className = 'glass-btn match-alt-use';
-        useBtn.textContent = t('match.use_this');
+        useBtn.textContent = t('match.use_n', { n: altIdx + 1 });
         useBtn.addEventListener('click', () => useAlternative(index, altIdx));
+        row.appendChild(num);
         row.appendChild(info);
         row.appendChild(useBtn);
         panel.appendChild(row);
@@ -554,6 +566,168 @@ function useAlternative(index, altIdx) {
     }
 
     displayMatches(false);   // preserve selection + filter, re-render the rows
+}
+
+// ── Performer ordering: ladies first + per-file ◀ ▶ fallback ──────────────────
+// The server sorts female performers to the front at match time (setting
+// `performer_order`, default female_first). These helpers add the per-file
+// escape hatch: chips with arrows on every matched card, a 1st badge on the
+// name {performer} resolves to, an auto/manual pill, and a live rename
+// preview via /api/preview-paths. A manual order only mutates result.match —
+// Rename and the confirm cache persist it exactly like any other user edit.
+
+// Mirror of the server's _FEMALE_GENDERS (main.py) — keep the two in sync.
+const _FEMALE_GENDERS = ['female', 'transgender_female', 'trans female', 'trans_female'];
+
+function _genderGlyph(g) {
+    g = (g || '').toLowerCase();
+    if (_FEMALE_GENDERS.includes(g)) return { sym: '♀', cls: 'f' };
+    if (g === 'male' || g === 'transgender_male' || g === 'trans_male') return { sym: '♂', cls: 'm' };
+    return { sym: '•', cls: 'u' };
+}
+
+// Build the chip strip inside [data-performers] (textContent only — same XSS
+// discipline as the rest of the row) and the order-note line beneath it.
+function _renderPerformerStrip(el, noteEl, result, index) {
+    const m = result.match;
+    const perfs = m.performers;
+    el.textContent = '';
+    el.classList.toggle('perf-strip', perfs.length >= 2);
+    if (perfs.length < 2) {          // nothing to reorder — plain text as before
+        el.textContent = perfs.join(', ');
+        if (noteEl) noteEl.hidden = true;
+        return;
+    }
+    // Snapshot the server-given order once so "Reset to automatic" is exact
+    // regardless of how many manual moves happened since.
+    if (!result._orig_performers) {
+        result._orig_performers = perfs.slice();
+        result._orig_genders = Array.isArray(m.performer_genders)
+            ? m.performer_genders.slice() : null;
+    }
+    const genders = Array.isArray(m.performer_genders) ? m.performer_genders : [];
+    perfs.forEach((name, i) => {
+        const chip = document.createElement('span');
+        chip.className = 'perf-chip' + (i === 0 ? ' is-first' : '');
+        if (result._flash_performer === name) chip.classList.add('just-moved');
+        const g = _genderGlyph(genders[i]);
+        const gEl = document.createElement('span');
+        gEl.className = 'perf-g ' + g.cls;
+        gEl.textContent = g.sym;
+        chip.appendChild(gEl);
+        chip.appendChild(document.createTextNode(name));
+        if (i === 0) {
+            const fb = document.createElement('span');
+            fb.className = 'perf-first-badge';
+            fb.textContent = t('match.order_first');
+            fb.title = t('match.order_first_hint');
+            chip.appendChild(fb);
+        }
+        [[-1, '◀', t('match.move_left', { name })],
+         [+1, '▶', t('match.move_right', { name })]].forEach(([d, sym, label]) => {
+            const b = document.createElement('button');
+            b.type = 'button';
+            b.className = 'perf-arrow';
+            b.textContent = sym;
+            b.title = label;
+            b.setAttribute('aria-label', label);
+            if (i + d < 0 || i + d >= perfs.length) b.disabled = true;
+            b.addEventListener('click', (e) => { e.stopPropagation(); _movePerformer(index, i, d); });
+            chip.appendChild(b);
+        });
+        el.appendChild(chip);
+    });
+    // The moved chip flashes once after the re-render, then settles.
+    if (result._flash_performer) {
+        result._flash_performer = null;
+        setTimeout(() => {
+            el.querySelectorAll('.perf-chip.just-moved')
+                .forEach(c => c.classList.remove('just-moved'));
+        }, 450);
+    }
+    _renderOrderNote(noteEl, result, index);
+}
+
+function _renderOrderNote(noteEl, result, index) {
+    if (!noteEl) return;
+    const manual = result.performer_order_manual === true;
+    const autoSort = (localStorage.getItem('amm_performer_order') || 'female_first') === 'female_first';
+    if (!manual && !autoSort) { noteEl.hidden = true; return; }
+    noteEl.textContent = '';
+    const pill = document.createElement('span');
+    pill.className = 'perf-order-pill ' + (manual ? 'is-manual' : 'is-auto');
+    pill.textContent = manual ? t('match.order_manual') : t('match.order_auto');
+    noteEl.appendChild(pill);
+    if (manual) {
+        const reset = document.createElement('button');
+        reset.type = 'button';
+        reset.className = 'perf-order-reset';
+        reset.textContent = t('match.order_reset');
+        reset.addEventListener('click', (e) => { e.stopPropagation(); _resetPerformerOrder(index); });
+        noteEl.appendChild(reset);
+        const pv = document.createElement('span');
+        pv.className = 'perf-order-preview';
+        pv.dataset.orderPreview = '';
+        noteEl.appendChild(pv);
+    }
+    noteEl.hidden = false;
+}
+
+function _movePerformer(index, i, d) {
+    const r = matchedResults[index];
+    const m = r && r.match;
+    if (!m || !Array.isArray(m.performers)) return;
+    const j = i + d;
+    if (j < 0 || j >= m.performers.length) return;
+    m.performers = m.performers.slice();
+    [m.performers[i], m.performers[j]] = [m.performers[j], m.performers[i]];
+    if (Array.isArray(m.performer_genders)) {
+        m.performer_genders = m.performer_genders.slice();
+        [m.performer_genders[i], m.performer_genders[j]] =
+            [m.performer_genders[j], m.performer_genders[i]];
+    }
+    r.performer_order_manual = true;
+    r._flash_performer = m.performers[j];   // the moved name, now at position j
+    displayMatches(false);
+    _updateOrderPreview(index);
+}
+
+function _resetPerformerOrder(index) {
+    const r = matchedResults[index];
+    const m = r && r.match;
+    if (!m || !Array.isArray(r._orig_performers)) return;
+    m.performers = r._orig_performers.slice();
+    if (r._orig_genders) m.performer_genders = r._orig_genders.slice();
+    r.performer_order_manual = false;
+    displayMatches(false);
+}
+
+// Live "will rename to" line for a manually reordered file — the SAME server
+// formatter the rename will use (/api/preview-paths), so it can't drift.
+function _updateOrderPreview(index) {
+    const r = matchedResults[index];
+    if (!r || !r.match || !r.original || !r.original.path) return;
+    fetch('/api/preview-paths', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ operations: [{
+            old_path: r.original.path,
+            scene_data: r.match,
+            file_data: r.original,
+            template: template.value,
+            flat: flatRename.checked,
+            performer_limit: _performerLimit(),
+        }] }),
+    })
+        .then(resp => resp.ok ? resp.json() : null)
+        .then(data => {
+            const p = data && data.previews && data.previews[0];
+            if (!p || p.degenerate) return;
+            const cb = document.querySelector(`.match-cb[data-index="${index}"]`);
+            const slot = cb && cb.closest('.match-item')?.querySelector('[data-order-preview]');
+            if (slot) slot.textContent = t('match.order_preview', { path: p.new_path });
+        })
+        .catch(() => { /* preview is best-effort — the reorder itself already applied */ });
 }
 
 // Wire the per-row "Remove" button. Removing a file hides it from the app for

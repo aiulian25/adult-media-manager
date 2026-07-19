@@ -2131,24 +2131,115 @@ input.input-error {
 .match-alt-row {
     display: flex;
     align-items: center;
-    gap: 10px;
-    padding: 6px 2px;
+    gap: 12px;
+    padding: 8px 4px;
 }
 .match-alt-row + .match-alt-row { border-top: 1px solid var(--border-soft); }
-.match-alt-info {
-    flex: 1 1 auto;
-    min-width: 0;
-    font-size: 0.82rem;
-    color: var(--text-secondary);
+.match-alt-num {
+    flex: 0 0 auto;
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    background: var(--accent-soft);
+    color: var(--accent-light);
+    font-size: 0.78rem;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.match-alt-info { flex: 1 1 auto; min-width: 0; }
+.match-alt-title,
+.match-alt-meta {
+    display: block;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
 }
+.match-alt-title { font-weight: 640; font-size: 0.86rem; color: var(--text-primary); }
+.match-alt-meta  { font-size: 0.78rem; color: var(--text-muted); }
+.match-alt-meta b { font-weight: 600; color: var(--text-secondary); }
 /* Explicitly NOT match-action-btn: that class is width:100% for the vertical
    action stack and would crush the info span to zero width in this flex row. */
-.match-alt-use { flex: 0 0 auto; font-size: 0.75rem; padding: 4px 12px; }
-.match-alt-info b { font-weight: 640; color: var(--text-primary); }
-.match-alt-meta { color: var(--text-muted); }
+.match-alt-use { flex: 0 0 auto; font-size: 0.75rem; padding: 4px 12px; white-space: nowrap; }
+
+/* ── Performer order: ♀-first chips + per-file ◀ ▶ reorder ────────────── */
+.perf-strip { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.perf-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    background: var(--chip);
+    border: 1px solid var(--chip-border);
+    border-radius: 99px;
+    padding: 2px 4px 2px 9px;
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+    transition: border-color .15s, background .15s;
+}
+.perf-chip.is-first { border-color: var(--accent); }
+.perf-chip.just-moved { border-color: var(--accent); background: var(--accent-soft); }
+.perf-g { font-size: 0.78rem; }
+.perf-g.f { color: #d4589e; }
+.perf-g.m { color: var(--accent-light); }
+.perf-g.u { color: var(--faint); }
+.perf-first-badge {
+    font-size: 0.6rem;
+    font-weight: 800;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+    color: #d4589e;
+    background: rgba(212, 88, 158, 0.16);
+    border-radius: 99px;
+    padding: 1px 6px;
+}
+.perf-arrow {
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    border: 1px solid var(--border);
+    background: var(--raised);
+    color: var(--text-secondary);
+    font-size: 0.62rem;
+    line-height: 1;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    transition: border-color .12s, color .12s;
+}
+.perf-arrow:hover:not([disabled]) { border-color: var(--accent); color: var(--text-primary); }
+.perf-arrow[disabled] { opacity: .3; cursor: default; }
+.perf-order-note {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin: 4px 0 2px;
+    font-size: 0.76rem;
+    color: var(--text-muted);
+}
+.perf-order-pill { font-size: 0.66rem; font-weight: 700; border-radius: 99px; padding: 1px 8px; }
+.perf-order-pill.is-auto   { color: var(--success); background: var(--good-soft); }
+.perf-order-pill.is-manual { color: var(--warning); background: var(--warn-soft); }
+.perf-order-reset {
+    background: none;
+    border: none;
+    padding: 0;
+    font: inherit;
+    font-size: 0.76rem;
+    color: var(--accent-light);
+    text-decoration: underline;
+    cursor: pointer;
+}
+.perf-order-preview {
+    font-family: var(--mono);
+    font-size: 0.72rem;
+    overflow-wrap: anywhere;
+    color: var(--text-secondary);
+}
 
 /* ── Software update: banner + card + restart prompt (F17 v2) ─────────── */
 .update-banner {

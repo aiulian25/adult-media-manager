@@ -795,9 +795,11 @@ async function openSettingsModal() {
     const langSel  = document.getElementById('settings-lang');
     const themeSel = document.getElementById('settings-theme');
     const embedSel = document.getElementById('settings-embed-mode');
+    const orderSel = document.getElementById('settings-performer-order');
     if (langSel)  langSel.value  = localStorage.getItem('amm_locale') || 'en';
     if (themeSel) themeSel.value = localStorage.getItem('amm_theme')  || 'default';
     if (embedSel) embedSel.value = localStorage.getItem('amm_embed_mode') || 'embed';
+    if (orderSel) orderSel.value = localStorage.getItem('amm_performer_order') || 'female_first';
 
     // Software update card fills in asynchronously — never blocks the modal.
     refreshUpdateInfo().then(renderUpdateCard);
@@ -812,6 +814,7 @@ async function openSettingsModal() {
             if (langSel  && data.locale) langSel.value  = data.locale;
             if (themeSel && data.theme)  themeSel.value = data.theme;
             if (embedSel && data.embed_mode) embedSel.value = data.embed_mode;
+            if (orderSel && data.performer_order) orderSel.value = data.performer_order;
             const fpCb = document.getElementById('settings-contribute-fp');
             if (fpCb) fpCb.checked = data.contribute_fingerprints === true;
         }
@@ -1108,6 +1111,7 @@ async function saveSettings() {
     const localeVal  = document.getElementById('settings-lang')?.value   || 'en';
     const themeVal   = document.getElementById('settings-theme')?.value  || 'default';
     const embedVal   = document.getElementById('settings-embed-mode')?.value || 'embed';
+    const orderVal   = document.getElementById('settings-performer-order')?.value || 'female_first';
 
     try {
         const resp = await fetch('/api/settings', {
@@ -1119,6 +1123,7 @@ async function saveSettings() {
                 locale:          localeVal,
                 theme:           themeVal,
                 embed_mode:      embedVal,
+                performer_order: orderVal,
                 // F5: explicit true/false — the server treats null as "keep".
                 contribute_fingerprints:
                     document.getElementById('settings-contribute-fp')?.checked === true,
@@ -1150,6 +1155,10 @@ async function saveSettings() {
 
         // Default metadata write mode → cache + apply to the toolbar picker.
         _applyEmbedMode(data.embed_mode || embedVal);
+
+        // Performer order is applied server-side at match time — cache only so
+        // the Settings select paints correctly before the next server fetch.
+        localStorage.setItem('amm_performer_order', data.performer_order || orderVal);
 
         const newLocale = data.locale || localeVal;
         if (newLocale !== (localStorage.getItem('amm_locale') || 'en')) {

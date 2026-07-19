@@ -36,6 +36,10 @@ class StashDBScene:
     site: Optional[str] = None
     network: Optional[str] = None
     performers: list[str] = field(default_factory=list)
+    # Aligned 1:1 with `performers`: normalized lowercase gender per performer
+    # ("female", "male", "transgender_female", …) or None when StashDB doesn't
+    # state it. Drives the ♀-first ordering; never rendered as-is.
+    performer_genders: list = field(default_factory=list)
     release_date: Optional[str] = None   # YYYY-MM-DD
     duration: Optional[int] = None       # seconds
     tags: list[str] = field(default_factory=list)
@@ -65,7 +69,7 @@ _SCENE_FIELDS = """
   director
   urls { url }
   studio { name parent { name } }
-  performers { as performer { name } }
+  performers { as performer { name gender } }
   tags { name }
   images { url width }
 """
@@ -801,11 +805,15 @@ class StashDBClient:
         site = studio.get("name") or ""
         parent = (studio.get("parent") or {}).get("name") or None
 
-        performers = [
-            a["performer"]["name"]
-            for a in data.get("performers", [])
-            if a.get("performer", {}).get("name")
-        ]
+        performers = []
+        performer_genders = []
+        for a in data.get("performers", []):
+            perf = a.get("performer", {})
+            if not perf.get("name"):
+                continue
+            performers.append(perf["name"])
+            gender = perf.get("gender")
+            performer_genders.append(str(gender).strip().lower() if gender else None)
         # F6: keep the per-scene credit ("as" = alias credited in THIS scene)
         # alongside the canonical name — free alias-learning material.
         performer_credits = [
@@ -827,6 +835,7 @@ class StashDBClient:
             site=site or None,
             network=parent,
             performers=performers,
+            performer_genders=performer_genders,
             release_date=data.get("date"),
             duration=data.get("duration"),
             tags=tags,

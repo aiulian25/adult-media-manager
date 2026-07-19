@@ -46,7 +46,8 @@ Clean, flat interface with a live naming-template preview and three built-in the
 | Paste a scene link | Paste a `stashdb.org/scenes/…` or `theporndb.net/scenes/…` URL in manual edit and **Fetch** full metadata in one click |
 | Fingerprint matching | OSHash + stash-compatible perceptual-hash (pHash) lookups for exact, "Verified" matches — batched (one query per 40 files) and reusing scan-computed hashes, so fingerprint matching is instant |
 | Self-learning aliases | Confirmed matches teach performer aliases (from StashDB per-scene credits) and site abbreviations ("MFHM" → "My Friends Hot Mom") — matching gets smarter with use |
-| Wrong match? Pick another | Every match keeps its runner-up candidates one click away — swap without a manual-edit round trip |
+| Wrong match? Pick another | Every match keeps its runner-up candidates one click away — numbered rows with title, performers, site and date, and a **Use #N** button so it's always clear which one you picked |
+| Ladies first | Female performers automatically lead `{performer}`/`{performers}`, the match cards and the NFO actor order (gender comes with the metadata; optional — switch back to source order in Settings). Per-file ◀ ▶ arrows on every match card reorder names by hand, with a live rename preview |
 | Live streaming scan & match | Results appear as they're found; **Stop** a scan or **Cancel** a match at any time and keep the partial results |
 | Match cache | Confirmed matches are remembered (by content hash) — rescans are instant and skip the API; **Re-match** forces a refresh |
 | Incremental rescan & duplicates | A catalog tracks organised files so re-scans skip them; same-content duplicates are detected |
@@ -65,20 +66,12 @@ Clean, flat interface with a live naming-template preview and three built-in the
 
 ---
 
-## What's New in v1.12.0
+## What's New in v1.12.1
 
-- **Remux is the default metadata mode** — the container is rewritten by ffmpeg with tags embedded plus a `.nfo` sidecar, for every format. A new **Remux only** mode does the same without the sidecar. All previous modes remain selectable.
-- **arm64 native packages** — AppImage, deb and rpm are now also built for arm64 (Raspberry Pi 5, ARM NAS, Apple-silicon VMs), with the in-app updater picking the right architecture automatically.
-- **ffmpeg now ships inside the native builds** — a sha256-pinned *static* ffmpeg/ffprobe is bundled, so the AppImage no longer depends on the host having ffmpeg installed; deb/rpm keep their declared dependency as a fallback. A new system check in Settings (and `tools` in `/api/health`) names any missing tool instead of features failing quietly.
-- **Much faster StashDB matching** — fingerprints are resolved in one batched query per 40 files, and the pHash computed at scan time is reused at match time (no more 25-seek recomputation per file).
-- **Self-learning matching** — StashDB per-scene "credited as" names teach performer aliases for free, and confirmed renames teach site abbreviations; both persist and improve future matches.
-- **Folder-context detection** — `Vixen/scene.mp4` now scans with site "Vixen"; `Site - Title (2024-05-01)/` folders supply title and date too (rows are marked 📁).
-- **Richer NFOs** — provider page `<url>`, `<fanart>` backdrop, and `<actor>` thumbnails where known; `{code}` (the studio's canonical scene code from StashDB) is a new template variable.
-- **Contribute fingerprints to StashDB (opt-in, off by default)** — a new Settings toggle. When *you* enable it, confirming a StashDB match uploads that file's content hashes (OSHash/pHash) and duration to stashdb.org under your StashDB account, improving fingerprint matching for everyone. **Data leaves your machine only with this toggle on**; file names, paths and personal data are never sent.
-- **Storage dashboard in the Library** — see how big the match cache, learned aliases, history and thumbnails have grown, with two guarded maintenance actions: clear the match cache (confirmed matches are kept) and clear thumbnails.
-- **Scan hidden files when asked** — a new "Include hidden" checkbox in the scan bar; picking a hidden folder in the file browser (with "Show hidden" on) enables it automatically.
-- **Whole-batch rename preflight** — the preview modal now analyses the *entire* batch and calls out name collisions ("2 files wanted the same name — auto-numbered") and names shortened to the 255-byte filesystem limit before you commit; collision-policy skips render as neutral ⏭ rows.
-- **UX fixes** — the "other candidates" panel now shows each candidate's title, performers, site and date; long-lived Docker tabs learn about new releases without a reload; saved API keys can be removed from Settings; the scan list, rename preview and file browser are now fully localized in all 6 languages (goodbye "will be copyd"); long embed batches keep their progress banner past the 10-minute mark (slow-poll mode) instead of silently dropping it.
+- **Ladies first** — female performers now automatically lead `{performer}`/`{performers}` in every generated name, on the match cards and in the NFO actor order. Gender comes with the scene metadata from TPDB/StashDB; the sort is stable, so performers with unstated gender never get shuffled. Prefer the old behavior? Settings → *Performer order in names* → "Keep the source's order".
+- **Per-file performer reordering** — every match card's performer chips grew ◀ ▶ arrows: move any name by hand, the "1st" badge follows the leading name, the row flips to *Manual order* with one-click *Reset to automatic*, and a live "Will rename to:" preview (rendered by the real formatter) shows the result instantly. Manual orders persist through Rename and the confirm cache.
+- **Numbered candidates** — the "other candidates" panel now numbers its rows and the button says **Use #N** instead of an anonymous "Use this"; each row shows title, performers (capped at 3, then "+N"), site and date on two clean lines.
+- **The update actually updates, visibly** — fixed a stale-cache bug where the UI could keep rendering the previous version's JavaScript/CSS after a successful update: the server now sends `Cache-Control: no-cache` on all UI assets (cheap ETag revalidation against the local server), and the desktop app clears its renderer cache on the first launch after a version change. Coming from ≤ v1.12, one hard refresh (browser tabs) or restart (desktop) heals it permanently.
 
 See the [releases page](https://github.com/aiulian25/adult-media-manager/releases) for full notes on every version.
 
@@ -164,10 +157,10 @@ No Docker required. Ships a self-contained Python 3.12 runtime — no system Pyt
 
 ### AppImage (recommended — no root required)
 
-1. Download `Adult.Media.Manager-1.12.0.AppImage`
+1. Download `Adult.Media.Manager-1.12.1.AppImage`
 2. Make it executable:
    ```bash
-   chmod +x Adult.Media.Manager-1.12.0.AppImage
+   chmod +x Adult.Media.Manager-1.12.1.AppImage
    ```
 3. Double-click it (or run it from the terminal)
 
@@ -183,7 +176,7 @@ From that point, launch it from your application menu. The original downloaded f
 ### .deb Package (Debian / Ubuntu / Mint)
 
 ```bash
-sudo apt install ./adult-media-manager_1.12.0_amd64.deb
+sudo apt install ./adult-media-manager_1.12.1_amd64.deb
 ```
 
 Launch **Adult Media Manager** from your application menu, or:
@@ -197,7 +190,7 @@ Launch **Adult Media Manager** from your application menu, or:
 Requires [RPM Fusion](https://rpmfusion.org/) enabled for the `ffmpeg` / `mkvtoolnix` media tools (used as fallback — the package also ships its own bundled copies):
 
 ```bash
-sudo dnf install ./adult-media-manager-1.12.0.x86_64.rpm
+sudo dnf install ./adult-media-manager-1.12.1.x86_64.rpm
 ```
 
 Remove with `sudo dnf remove adult-media-manager`.
@@ -253,7 +246,7 @@ Drop files or folders directly onto the browser window at any time.
 
 ### Settings
 
-Click **** (top-right) to open Settings. There you can set your **interface language** (6 supported) and **colour theme** (Purple Night, Midnight Teal), and manage API keys. Each API key row shows its current status:
+Click **** (top-right) to open Settings. There you can set your **interface language** (6 supported), **colour theme** (Purple Night, Midnight Teal), the default **metadata write mode**, and the **performer order in names** — *Female performers first* (default) puts women at the front of every generated name and NFO, *Keep the source's order* leaves names exactly as TPDB/StashDB return them. You can also manage API keys; each key row shows its current status:
 
 - **Saved** — key stored in the app's settings file
 - **Set via environment** — key comes from `.env` / shell environment (read-only in UI)
@@ -381,6 +374,9 @@ Click **History** to see every action AMM has performed. Each move/copy/hardlink
 
 **Embedding seems stuck / "interrupted"**
 - Metadata is embedded in the background after files move. The progress banner re-attaches after a page refresh and survives brief server hiccups. If the server restarted mid-embed, the `.nfo` sidecars are already written; re-run the embed for any files that still need it.
+
+**UI looks unchanged after an update**
+- Fixed since v1.12: the server now sends `Cache-Control: no-cache` on all UI assets and the desktop app clears its renderer cache on the first launch after a version change, so the interface always matches the installed version. Coming from v1.12 or older, do one hard refresh (Ctrl+Shift+R in a browser tab; desktop fixes itself on restart) and it won't happen again.
 
 **No results from TPDB / StashDB**
 - Verify your API key in **Settings** — the badge shows whether the key is saved or env-managed.

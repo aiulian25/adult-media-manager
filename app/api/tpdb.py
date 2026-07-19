@@ -44,6 +44,10 @@ class TPDBScene:
     site: str
     network: Optional[str] = None
     performers: list[str] = field(default_factory=list)
+    # Aligned 1:1 with `performers`: normalized lowercase gender per performer
+    # ("female", "male", "trans", …) or None when TPDB doesn't state it.
+    # Drives the ♀-first ordering; never rendered as-is.
+    performer_genders: list = field(default_factory=list)
     release_date: Optional[str] = None  # YYYY-MM-DD
     duration: Optional[int] = None  # seconds
     tags: list[str] = field(default_factory=list)
@@ -296,11 +300,18 @@ class TPDBClient:
     def _parse_scene(self, data: dict) -> TPDBScene:
         """Parse scene data from API response."""
         performers = []
+        performer_genders = []
         for p in data.get("performers", []):
             if isinstance(p, dict):
                 performers.append(p.get("name", ""))
+                # Gender lives on the performer object directly or under
+                # "extra" depending on the endpoint — accept both.
+                extra = p.get("extra") if isinstance(p.get("extra"), dict) else {}
+                gender = p.get("gender") or extra.get("gender")
+                performer_genders.append(str(gender).strip().lower() if gender else None)
             else:
                 performers.append(str(p))
+                performer_genders.append(None)
         
         tags = []
         for t in data.get("tags", []):
@@ -333,6 +344,7 @@ class TPDBClient:
             site=site_name,
             network=network_str,
             performers=performers,
+            performer_genders=performer_genders,
             release_date=data.get("date", ""),
             duration=data.get("duration"),
             tags=tags,

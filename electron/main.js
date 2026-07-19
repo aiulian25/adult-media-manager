@@ -718,6 +718,26 @@ async function startApp() {
     // Redundant setIcon call needed on some Linux compositors
     if (icon && !icon.isEmpty()) mainWindow.setIcon(icon);
 
+    // First launch after an update: purge the renderer's HTTP cache. Entries
+    // cached under the old heuristic policy (no Cache-Control before v1.13)
+    // are reused WITHOUT revalidation, so an upgraded install could keep
+    // rendering the previous version's JS/CSS. One clear per version change
+    // guarantees the UI matches the installed backend; the backend now sends
+    // Cache-Control: no-cache so this can't recur, but the purge stays as a
+    // belt-and-braces guard (and rescues caches written by older versions).
+    try {
+        const verFile = path.join(app.getPath("userData"), "last-run-version");
+        let lastRun = null;
+        try { lastRun = fs.readFileSync(verFile, "utf8").trim(); } catch {}
+        if (lastRun !== app.getVersion()) {
+            await mainWindow.webContents.session.clearCache();
+            fs.writeFileSync(verFile, app.getVersion());
+            console.log(`[main] Version change (${lastRun || "first run"} → ${app.getVersion()}): renderer cache cleared`);
+        }
+    } catch (err) {
+        console.error("[main] Cache-clear on version change failed:", err.message);
+    }
+
     mainWindow.loadURL(`http://127.0.0.1:${PORT}`);
 
     // Open external links (e.g. theporndb.net) in the system browser

@@ -96,6 +96,21 @@ app = FastAPI(
 STATIC_DIR = Path(__file__).parent / "static"
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
+
+# Without an explicit Cache-Control, Chromium applies *heuristic* freshness
+# (10% of the file's age) to /static responses and can keep serving JS/CSS
+# from its disk cache for hours after a package upgrade replaced the files —
+# the app updates but the UI doesn't. `no-cache` still allows caching but
+# forces an ETag revalidation on every load; against the local/LAN server a
+# 304 costs ~1 ms, so the UI is always the installed version.
+@app.middleware("http")
+async def _no_stale_ui_cache(request, call_next):
+    response = await call_next(request)
+    path = request.url.path
+    if path == "/" or path.startswith("/static"):
+        response.headers["Cache-Control"] = "no-cache"
+    return response
+
 # Initialize history tracking
 DATA_DIR = Path(os.getenv("DATA_DIR", "/data"))
 DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -210,6 +225,48 @@ def _effective_embed_mode() -> str:
     from app.core.embedder import EMBED_MODES
     val = _load_settings().get("embed_mode")
     return val if val in EMBED_MODES else _DEFAULT_EMBED_MODE
+
+
+# Performer order in generated names/NFOs: "female_first" (default) sorts
+# female performers to the front of every scene's performer list at match
+# time; "source" keeps whatever order TPDB/StashDB returned.
+_ALLOWED_PERFORMER_ORDERS = {"female_first", "source"}
+_DEFAULT_PERFORMER_ORDER = "female_first"
+
+
+def _effective_performer_order() -> str:
+    val = _load_settings().get("performer_order")
+    return val if val in _ALLOWED_PERFORMER_ORDERS else _DEFAULT_PERFORMER_ORDER
+
+
+# Genders counted as "female" for the ♀-first sort. Sources use different
+# vocabularies (StashDB enum FEMALE/TRANSGENDER_FEMALE, TPDB "Female"/"Trans");
+# values arrive normalized to lowercase by the API clients.
+_FEMALE_GENDERS = {"female", "transgender_female", "trans female", "trans_female"}
+
+
+def _apply_performer_order(scene: dict) -> dict:
+    """Reorder a scene dict's performers ♀-first (when the setting says so).
+
+    The sort is STABLE and keys only on is-female — performers whose gender the
+    source didn't state keep their relative position instead of being guessed.
+    `performer_genders` is re-aligned in the same pass so the UI badges stay
+    truthful. Everything downstream ({performer}/{performers}, match cards,
+    NFO <actor> order) reads the list, so sorting once here keeps them agreed.
+    """
+    if _effective_performer_order() != "female_first":
+        return scene
+    perfs = scene.get("performers") or []
+    if len(perfs) < 2:
+        return scene
+    genders = list(scene.get("performer_genders") or [])
+    genders += [None] * (len(perfs) - len(genders))
+    order = sorted(range(len(perfs)),
+                   key=lambda i: 0 if (genders[i] or "") in _FEMALE_GENDERS else 1)
+    if order != list(range(len(perfs))):
+        scene["performers"] = [perfs[i] for i in order]
+        scene["performer_genders"] = [genders[i] for i in order]
+    return scene
 
 
 def _load_settings() -> dict:
@@ -1371,12 +1428,13 @@ async def resolve_duplicates(req: ResolveDuplicatesRequest):
 
 def _stashdb_scene_to_dict(s) -> dict:
     """Convert a StashDBScene to the common scene dict used throughout the app."""
-    return {
+    return _apply_performer_order({
         "id": s.id,
         "title": s.title,
         "site": s.site,
         "network": s.network,
         "performers": s.performers,
+        "performer_genders": s.performer_genders,
         "release_date": s.release_date,
         "tags": s.tags,
         "duration": s.duration,  # seconds — used for duration match scoring (D1)
@@ -1392,7 +1450,7 @@ def _stashdb_scene_to_dict(s) -> dict:
         "performer_credits": s.performer_credits,
         # F7: fanart backdrop (second-widest image) → NFO <fanart>.
         "fanart_url": s.fanart_url,
-    }
+    })
 
 
 # Canonical UUID matcher — StashDB scene IDs are UUIDs. Used to extract the id
@@ -1484,12 +1542,13 @@ _TPDB_SLUG_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*")
 
 def _tpdb_scene_to_dict(s) -> dict:
     """Convert a TPDBScene to the common scene dict used throughout the app."""
-    return {
+    return _apply_performer_order({
         "id": s.id,
         "title": s.title,
         "site": s.site,
         "network": s.network,
         "performers": s.performers,
+        "performer_genders": s.performer_genders,
         "release_date": s.release_date,
         "tags": s.tags,
         "duration": s.duration,
@@ -1500,7 +1559,7 @@ def _tpdb_scene_to_dict(s) -> dict:
         # F7: scene page URL + fanart (background when distinct from poster).
         "url": s.url,
         "fanart_url": s.fanart_url_large,
-    }
+    })
 
 
 def _extract_tpdb_scene_slug(raw: str) -> Optional[str]:
@@ -2670,6 +2729,7 @@ async def get_settings():
         "locale":  _effective_locale(),
         "theme":   _effective_theme(),
         "embed_mode": _effective_embed_mode(),
+        "performer_order": _effective_performer_order(),
         # F5 — opt-in, DEFAULT OFF: only an explicit stored True enables it.
         "contribute_fingerprints": _load_settings().get("contribute_fingerprints") is True,
     }
@@ -2681,6 +2741,7 @@ class SaveSettingsRequest(BaseModel):
     locale:          Optional[str] = None
     theme:           Optional[str] = None
     embed_mode:      Optional[str] = None
+    performer_order: Optional[str] = None
     # F5 — OPT-IN fingerprint contribution to StashDB. Tri-state on the wire:
     # None = leave unchanged, True/False = set explicitly (the generic truthy
     # prefs loop would treat False as "keep", silently making the opt-in
@@ -2736,6 +2797,19 @@ class SaveSettingsRequest(BaseModel):
             return None
         return _validate_embed_mode(v)   # raises on anything outside EMBED_MODES
 
+    @field_validator("performer_order", mode="before")
+    @classmethod
+    def _validate_performer_order(cls, v) -> Optional[str]:
+        if v is None:
+            return None
+        v = str(v).strip().lower()
+        if not v:
+            return None
+        if v not in _ALLOWED_PERFORMER_ORDERS:
+            raise ValueError(
+                f"Unsupported performer order: {v}. Allowed: {sorted(_ALLOWED_PERFORMER_ORDERS)}")
+        return v
+
 
 @app.post("/api/settings")
 async def save_settings(req: SaveSettingsRequest):
@@ -2782,7 +2856,7 @@ async def save_settings(req: SaveSettingsRequest):
 
     # UI preferences (already whitelist-validated above). A blank/None value
     # means "leave unchanged"; only persist when it actually differs.
-    for pref in ("locale", "theme", "embed_mode"):
+    for pref in ("locale", "theme", "embed_mode", "performer_order"):
         new_val = getattr(req, pref)
         if new_val and settings.get(pref) != new_val:
             settings[pref] = new_val
@@ -2824,6 +2898,7 @@ async def save_settings(req: SaveSettingsRequest):
         "locale":  _effective_locale(),
         "theme":   _effective_theme(),
         "embed_mode": _effective_embed_mode(),
+        "performer_order": _effective_performer_order(),
         "contribute_fingerprints": _load_settings().get("contribute_fingerprints") is True,
     }
 

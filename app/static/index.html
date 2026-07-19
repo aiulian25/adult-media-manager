@@ -240,6 +240,15 @@
                     </select>
                     <p class="settings-pref-hint" data-i18n="settings.metadata_mode_hint">Sets how metadata is saved when you rename or save. "Both" (recommended) embeds tags in the file AND writes a .nfo sidecar for extra assurance. Persisted across restarts.</p>
                 </div>
+
+                <div class="settings-pref-row">
+                    <label class="settings-pref-label" for="settings-performer-order" data-i18n="settings.performer_order">Performer order in names</label>
+                    <select id="settings-performer-order" class="glass-input settings-select">
+                        <option value="female_first" data-i18n="settings.performer_order_female">Female performers first (recommended)</option>
+                        <option value="source" data-i18n="settings.performer_order_source">Keep the source's order</option>
+                    </select>
+                    <p class="settings-pref-hint" data-i18n="settings.performer_order_hint">Applies to {performer} and {performers} in names, the match cards and the NFO actor order. Performers whose gender the source doesn't state keep their position — use the ◀ ▶ arrows on a match card to reorder a single file by hand.</p>
+                </div>
                 <div class="settings-pref">
                     <label class="cb-label" for="settings-contribute-fp" style="gap:8px;">
                         <input type="checkbox" id="settings-contribute-fp">
@@ -584,6 +593,7 @@
                     <span class="performers" data-performers hidden></span>
                     <span class="date" data-date hidden></span>
                 </div>
+                <div class="perf-order-note" data-order-note hidden></div>
                 <div class="scene-tags" data-tags hidden></div>
                 <div class="file-name match-original" data-original></div>
                 <div class="match-alts" data-alts hidden></div>
