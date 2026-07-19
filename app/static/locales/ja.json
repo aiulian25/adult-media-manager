@@ -336,5 +336,8 @@
   "update.restart_body_spawn": "新しいバージョンがすぐ起動します — このウィンドウは閉じ、v{version} が開きます。",
   "update.restart_body_relaunch": "v{version} の準備ができました — このウィンドウはまだ v{running} を実行中です。",
   "update.restart_fine": "再起動は AMM を開き直すだけです。ファイル・履歴・設定はそのままです。",
-  "update.restart_later": "後で再起動"
+  "update.restart_later": "後で再起動",
+  "settings.key_remove": "削除",
+  "settings.key_remove_confirm": "保存済みの {label} キーを削除しますか？新しいキーを追加するまで {label} での照合は停止します。",
+  "settings.key_removed": "{label} キーを削除しました。"
 }

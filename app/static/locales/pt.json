@@ -336,5 +336,8 @@
   "update.restart_body_spawn": "A nova versão inicia na hora — esta janela fecha e a v{version} abre no lugar.",
   "update.restart_body_relaunch": "A v{version} está pronta — esta janela ainda executa a v{running}.",
   "update.restart_fine": "Reiniciar apenas reabre o AMM. Seus arquivos, histórico e configurações ficam intactos.",
-  "update.restart_later": "Reiniciar depois"
+  "update.restart_later": "Reiniciar depois",
+  "settings.key_remove": "Remover",
+  "settings.key_remove_confirm": "Remover a chave {label} salva? A correspondência via {label} vai parar até adicionar uma nova chave.",
+  "settings.key_removed": "Chave {label} removida."
 }

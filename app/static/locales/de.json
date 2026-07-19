@@ -336,5 +336,8 @@
   "update.restart_body_spawn": "Die neue Version startet sofort — dieses Fenster schließt sich und v{version} öffnet sich stattdessen.",
   "update.restart_body_relaunch": "v{version} ist bereit — dieses Fenster läuft noch mit v{running}.",
   "update.restart_fine": "Ein Neustart öffnet nur AMM neu. Dateien, Verlauf und Einstellungen bleiben unberührt.",
-  "update.restart_later": "Später neu starten"
+  "update.restart_later": "Später neu starten",
+  "settings.key_remove": "Entfernen",
+  "settings.key_remove_confirm": "Gespeicherten {label}-Schlüssel entfernen? Die Zuordnung über {label} stoppt, bis ein neuer Schlüssel hinterlegt wird.",
+  "settings.key_removed": "{label}-Schlüssel entfernt."
 }

@@ -2207,3 +2207,16 @@ input.input-error {
 .restart-body { font-size: 0.88rem; color: var(--text-secondary); }
 .restart-fine { font-size: 0.74rem; color: var(--text-muted); margin-top: 8px; }
 .restart-actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 16px; }
+
+/* ── Settings: remove-saved-key button (roadmap-2 F14) ─────────────────── */
+.settings-key-clear {
+    background: none;
+    border: 1px solid var(--border-soft);
+    border-radius: 8px;
+    color: var(--text-muted);
+    font-size: 0.72rem;
+    padding: 2px 8px;
+    cursor: pointer;
+    margin-left: 8px;
+}
+.settings-key-clear:hover { color: var(--error); border-color: var(--error); }

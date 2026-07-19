@@ -336,5 +336,8 @@
   "update.restart_body_spawn": "La nueva versión arranca al instante — esta ventana se cierra y v{version} se abre en su lugar.",
   "update.restart_body_relaunch": "v{version} está lista — esta ventana aún ejecuta v{running}.",
   "update.restart_fine": "Reiniciar solo reabre AMM. Tus archivos, historial y ajustes quedan intactos.",
-  "update.restart_later": "Reiniciar más tarde"
+  "update.restart_later": "Reiniciar más tarde",
+  "settings.key_remove": "Eliminar",
+  "settings.key_remove_confirm": "¿Eliminar la clave {label} guardada? El emparejamiento con {label} se detendrá hasta añadir una nueva clave.",
+  "settings.key_removed": "Clave {label} eliminada."
 }

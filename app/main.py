@@ -12,6 +12,7 @@ import threading
 import subprocess
 import tempfile
 import base64
+import hashlib
 import shutil
 from pathlib import Path
 from typing import Optional
@@ -50,7 +51,7 @@ from app.core.embedder import (
 from app.api.tpdb import TPDBClient
 from app.api.stashdb import (
     StashDBClient, compute_oshash, compute_phash_ffmpeg, compute_phash_ffmpeg_sync,
-    PHASH_MATCH_TIMEOUT,
+    PHASH_MATCH_TIMEOUT, _classify_error as _classify_stashdb_error,
 )
 
 
@@ -420,6 +421,29 @@ async def _startup_single_worker_check():
         _job_store.prune(EMBED_JOB_TTL)
     except Exception as e:
         print(f"WARNING: job store startup maintenance failed: {e}")
+
+    # Thumbnail garbage collection (roadmap-2 F1): extract-thumbnails writes six
+    # JPEGs per Manual-Edit open and nothing ever deleted them. Age-prune dirs
+    # older than 7 days — EXCEPT those containing selected.jpg, which confirmed
+    # cache entries reference via their stored thumbnail_url (deleting them would
+    # silently break match-row previews). Best-effort; never blocks startup.
+    try:
+        cutoff = _time.time() - 7 * 86400
+        thumbs_root = DATA_DIR / "thumbnails"
+        removed = 0
+        if thumbs_root.is_dir():
+            for d in thumbs_root.iterdir():
+                try:
+                    if (d.is_dir() and d.stat().st_mtime < cutoff
+                            and not (d / "selected.jpg").exists()):
+                        shutil.rmtree(d, ignore_errors=True)
+                        removed += 1
+                except OSError:
+                    continue
+        if removed:
+            print(f"INFO: pruned {removed} stale thumbnail dir(s).")
+    except Exception as e:
+        print(f"WARNING: thumbnail prune failed: {e}")
 
     if os.getenv("AMM_ALLOW_MULTIWORKER", "0") == "1":
         return
@@ -1295,8 +1319,13 @@ async def stashdb_scene_lookup(req: StashDBLookupRequest):
     try:
         scene = await stashdb.find_scene_by_id(scene_id)
     except Exception as exc:
-        # Transport / GraphQL / auth failure — surface a clean message, no stack.
-        raise HTTPException(status_code=502, detail=f"StashDB lookup failed: {exc}")
+        # Typed failure (roadmap-2 F15): classify auth/rate_limit/network so the
+        # Manual Edit status line shows the same honest message the match rows
+        # do. Raw exception text stays server-side — it can echo GraphQL
+        # internals and belongs in the log, not the client.
+        kind = _classify_stashdb_error(exc)
+        print(f"StashDB scene lookup error ({kind}): {exc}")
+        raise HTTPException(status_code=502, detail={"code": kind})
 
     if scene is None:
         raise HTTPException(status_code=404, detail="No StashDB scene found for that ID.")
@@ -1391,6 +1420,11 @@ async def tpdb_scene_lookup(req: StashDBLookupRequest):
         scene = results[0] if results else None
 
     if scene is None:
+        # Typed failure (roadmap-2 F15): if the provider CALL failed, say so —
+        # previously an expired key here surfaced as a plain 404 ("no scene
+        # found"), a lie. A genuine miss (both lookups ran clean) stays a 404.
+        if tpdb.last_error:
+            raise HTTPException(status_code=502, detail={"code": tpdb.last_error})
         raise HTTPException(status_code=404, detail="No ThePornDB scene found for that link.")
 
     return {"scene": _tpdb_scene_to_dict(scene)}
@@ -2366,6 +2400,11 @@ class SaveSettingsRequest(BaseModel):
     locale:          Optional[str] = None
     theme:           Optional[str] = None
     embed_mode:      Optional[str] = None
+    # Explicit key removal (roadmap-2 F14). Blank still means "keep" — clearing
+    # must be a deliberate, separate signal so an empty form can never wipe a
+    # key by accident. Ignored for env-sourced keys (same precedence as writes).
+    clear_tpdb:      bool = False
+    clear_stashdb:   bool = False
 
     @field_validator("tpdb_api_key", "stashdb_api_key", mode="before")
     @classmethod
@@ -2427,17 +2466,26 @@ async def save_settings(req: SaveSettingsRequest):
     global tpdb, stashdb
 
     settings = _load_settings()
-    changed  = []          # API-key labels — surfaced in the UI toast
+    changed  = []          # API-key labels saved — surfaced in the UI toast
+    removed  = []          # API-key labels cleared (F14) — separate toast
     dirty    = False       # whether anything (keys or prefs) needs persisting
 
-    for field_name, env_var, settings_key, label in [
-        ("tpdb_api_key",    "TPDB_API_KEY",    "tpdb_api_key",    "TPDB"),
-        ("stashdb_api_key", "STASHDB_API_KEY", "stashdb_api_key", "StashDB"),
+    for field_name, env_var, settings_key, label, clear_field in [
+        ("tpdb_api_key",    "TPDB_API_KEY",    "tpdb_api_key",    "TPDB",    "clear_tpdb"),
+        ("stashdb_api_key", "STASHDB_API_KEY", "stashdb_api_key", "StashDB", "clear_stashdb"),
     ]:
         new_val = getattr(req, field_name)
 
         # Env var takes precedence — silently ignore UI attempts to change it.
         if os.getenv(env_var, "").strip():
+            continue
+
+        # Explicit clear (F14) wins over any pasted value in the same request —
+        # removal is the deliberate action; a stray input must not survive it.
+        if getattr(req, clear_field):
+            if settings.pop(settings_key, None) is not None:
+                removed.append(label)
+                dirty = True
             continue
 
         if new_val:          # non-empty → update saved value
@@ -2477,6 +2525,7 @@ async def save_settings(req: SaveSettingsRequest):
     return {
         "ok":      True,
         "changed": changed,
+        "removed": removed,
         "tpdb":    {"active": tpdb    is not None, "source": tpdb_src},
         "stashdb": {"active": stashdb is not None, "source": stashdb_src},
         "locale":  _effective_locale(),
@@ -3335,6 +3384,20 @@ class ThumbnailRequest(BaseModel):
         return str(p)
 
 
+def _thumbnail_dir_for(file_path: Path) -> Path:
+    """Collision-free thumbnail directory for one video (roadmap-2 F1).
+
+    Keyed by stem PLUS an 8-char sha1 of the full path — two `scene.mp4` files
+    in different folders previously shared (and overwrote) one directory. The
+    hash is a path-bucketing key, not a security primitive. Shared by the
+    extract endpoint and the manual-save selected-poster flow so the two can
+    never diverge; the serve route needs no change (the client echoes whatever
+    directory name the server handed out in `thumbnail_url`).
+    """
+    suffix = hashlib.sha1(str(file_path).encode("utf-8")).hexdigest()[:8]
+    return DATA_DIR / "thumbnails" / f"{file_path.stem}-{suffix}"
+
+
 @app.post("/api/extract-thumbnails")
 async def extract_thumbnails(request: ThumbnailRequest):
     """
@@ -3342,6 +3405,13 @@ async def extract_thumbnails(request: ThumbnailRequest):
     Returns base64-encoded images for preview.
     """
     file_path = Path(request.file_path)
+
+    # Defense-in-depth (roadmap-2 F1): ThumbnailRequest.validate_file_path
+    # already rejects non-allowed paths at the model layer (422), so this is
+    # normally unreachable — it exists so a future model refactor can't silently
+    # drop the allowlist for this endpoint.
+    if not _is_allowed_path(file_path):
+        raise HTTPException(status_code=403, detail="Path not in an allowed media directory")
 
     if not file_path.exists() or not file_path.is_file():
         raise HTTPException(status_code=404, detail="Video file not found")
@@ -3359,7 +3429,7 @@ async def extract_thumbnails(request: ThumbnailRequest):
         
         # Generate 6 thumbnails at different timestamps
         thumbnails = []
-        thumbnail_dir = DATA_DIR / "thumbnails" / file_path.stem
+        thumbnail_dir = _thumbnail_dir_for(file_path)
         thumbnail_dir.mkdir(parents=True, exist_ok=True)
         
         # Extract thumbnails at 10%, 25%, 40%, 55%, 70%, 85% of duration
@@ -4021,12 +4091,12 @@ async def save_manual_metadata(req: ManualMetadataRequest, background_tasks: Bac
     # written when write_sidecar. Purely local (ffmpeg frame) — no network.
     thumbnail_url = None
     if req.thumbnail_index is not None:
-        thumbnail_dir = DATA_DIR / "thumbnails" / file_path.stem
+        thumbnail_dir = _thumbnail_dir_for(file_path)
         source_thumb = thumbnail_dir / f"thumb_{req.thumbnail_index}.jpg"
         if source_thumb.exists():
             dest_thumb = thumbnail_dir / "selected.jpg"
             shutil.copy2(source_thumb, dest_thumb)
-            thumbnail_url = f"/api/thumbnail/{file_path.stem}/selected.jpg"
+            thumbnail_url = f"/api/thumbnail/{thumbnail_dir.name}/selected.jpg"
             if write_sidecar:
                 try:
                     poster_dest = file_path.with_name(file_path.stem + "-poster.jpg")

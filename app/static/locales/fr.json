@@ -336,5 +336,8 @@
   "update.restart_body_spawn": "La nouvelle version démarre instantanément — cette fenêtre se ferme et v{version} s'ouvre à sa place.",
   "update.restart_body_relaunch": "v{version} est prête — cette fenêtre exécute encore v{running}.",
   "update.restart_fine": "Redémarrer ne fait que rouvrir AMM. Vos fichiers, historique et réglages sont intacts.",
-  "update.restart_later": "Redémarrer plus tard"
+  "update.restart_later": "Redémarrer plus tard",
+  "settings.key_remove": "Supprimer",
+  "settings.key_remove_confirm": "Supprimer la clé {label} enregistrée ? L'association via {label} s'arrêtera jusqu'à l'ajout d'une nouvelle clé.",
+  "settings.key_removed": "Clé {label} supprimée."
 }

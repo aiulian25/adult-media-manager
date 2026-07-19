@@ -336,5 +336,8 @@
   "update.restart_body_spawn": "The new version starts instantly — this window closes and v{version} opens in its place.",
   "update.restart_body_relaunch": "v{version} is ready to go — this window is still running v{running}.",
   "update.restart_fine": "Restarting only reopens AMM. Your files, history and settings are untouched.",
-  "update.restart_later": "Restart later"
+  "update.restart_later": "Restart later",
+  "settings.key_remove": "Remove",
+  "settings.key_remove_confirm": "Remove the saved {label} key? Matching via {label} will stop until a new key is added.",
+  "settings.key_removed": "{label} key removed."
 }

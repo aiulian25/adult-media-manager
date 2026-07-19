@@ -696,6 +696,12 @@ function _applySettingsStatus(data, isNative = false) {
         const row    = badge?.closest('.settings-key-row');
         if (!badge) continue;
 
+        // Remove-saved-key control (roadmap-2 F14): only meaningful for keys
+        // stored via Settings — env-sourced keys are immutable by design and
+        // unset keys have nothing to remove.
+        const clearBtn = document.getElementById(`settings-${key}-clear`);
+        if (clearBtn) clearBtn.hidden = info.source !== 'settings';
+
         if (info.active) {
             badge.textContent = 'Active';
             badge.className   = 'settings-badge settings-badge-active';
@@ -1130,6 +1136,34 @@ document.addEventListener('DOMContentLoaded', () => {
         document.getElementById('settings-modal').classList.add('hidden');
     });
     document.getElementById('settings-save').addEventListener('click', saveSettings);
+
+    // Remove-saved-key buttons (roadmap-2 F14): confirm, then POST the explicit
+    // clear flag — blank-save still means "keep", so removal is its own signal.
+    document.querySelectorAll('.settings-key-clear').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const prov = btn.dataset.clear;                    // 'tpdb' | 'stashdb'
+            const label = prov === 'tpdb' ? 'TPDB' : 'StashDB';
+            showConfirmModal(t('settings.key_remove_confirm', { label }), async () => {
+                try {
+                    const resp = await fetch('/api/settings', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(prov === 'tpdb'
+                            ? { clear_tpdb: true } : { clear_stashdb: true }),
+                    });
+                    const data = await resp.json();
+                    if (!resp.ok) throw new Error(data.detail || resp.statusText);
+                    _applySettingsStatus(
+                        { tpdb: data.tpdb, stashdb: data.stashdb },
+                        !!(window.electronAPI && window.electronAPI.isElectron));
+                    showToast(t('settings.title'),
+                              t('settings.key_removed', { label }), 'success');
+                } catch (err) {
+                    showToast(t('settings.title'), err.message, 'error');
+                }
+            });
+        });
+    });
 
     // Update notifier buttons (F17). Download is server-driven (no client input);
     // restart goes through the preload bridge and only exists in the native build.

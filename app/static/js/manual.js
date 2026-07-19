@@ -135,7 +135,19 @@ async function _fetchSceneFromUrl(cfg) {
         });
         if (!res.ok) {
             let detail = t(cfg.failedKey);
-            try { const j = await res.json(); detail = j.detail || detail; } catch (_) {}
+            try {
+                const j = await res.json();
+                // Typed lookup failure (roadmap-2 F15): {code: auth|rate_limit|
+                // network} maps through the same keys the match rows use, so
+                // "API key rejected" reads identically on both surfaces.
+                if (j.detail && typeof j.detail === 'object' && j.detail.code) {
+                    const known = ['auth', 'rate_limit', 'network'];
+                    const kind = known.includes(j.detail.code) ? j.detail.code : 'internal';
+                    detail = t('match.lookup_error_' + kind);
+                } else if (j.detail) {
+                    detail = j.detail;
+                }
+            } catch (_) {}
             throw new Error(detail);
         }
         const data = await res.json();

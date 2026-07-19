@@ -193,13 +193,15 @@ class TPDBClient:
         Returns:
             Scene details or None
         """
+        self.last_error = None
         try:
             resp = await self._client.get(f"/scenes/{scene_id}")
             resp.raise_for_status()
             data = resp.json()
             return self._parse_scene(data.get("data", {}))
         except httpx.HTTPError as e:
-            print(f"TPDB get scene error: {e}")
+            self.last_error = _classify_http_error(e)
+            print(f"TPDB get scene error ({self.last_error}): {e}")
             return None
     
     async def search_performer(self, name: str) -> list[TPDBPerformer]:
@@ -213,7 +215,8 @@ class TPDBClient:
             List of matching performers
         """
         params = {"q": name}
-        
+
+        self.last_error = None
         try:
             resp = await self._client.get("/performers", params=params)
             resp.raise_for_status()
@@ -225,19 +228,22 @@ class TPDBClient:
             
             return results
         except httpx.HTTPError as e:
-            print(f"TPDB performer search error: {e}")
+            self.last_error = _classify_http_error(e)
+            print(f"TPDB performer search error ({self.last_error}): {e}")
             return []
     
     async def search_sites(self, query: str) -> list["TPDBSite"]:
         """Search for sites/studios by name."""
         params = {"q": query}
+        self.last_error = None
         try:
             resp = await self._client.get("/sites", params=params)
             resp.raise_for_status()
             data = resp.json()
             return [self._parse_site(item) for item in data.get("data", [])[:20]]
         except httpx.HTTPError as e:
-            print(f"TPDB site search error: {e}")
+            self.last_error = _classify_http_error(e)
+            print(f"TPDB site search error ({self.last_error}): {e}")
             return []
 
     async def get_site(self, site_id: str) -> Optional[TPDBSite]:
@@ -250,13 +256,15 @@ class TPDBClient:
         Returns:
             Site details or None
         """
+        self.last_error = None
         try:
             resp = await self._client.get(f"/sites/{site_id}")
             resp.raise_for_status()
             data = resp.json()
             return self._parse_site(data.get("data", {}))
         except httpx.HTTPError as e:
-            print(f"TPDB get site error: {e}")
+            self.last_error = _classify_http_error(e)
+            print(f"TPDB get site error ({self.last_error}): {e}")
             return None
     
     def _parse_scene(self, data: dict) -> TPDBScene:
