@@ -186,9 +186,16 @@ def match_performers(
     return matches / total if total > 0 else 0.0
 
 
-def match_site(file_site: Optional[str], api_site: str) -> float:
+def match_site(file_site: Optional[str], api_site: str, site_resolver=None) -> float:
     """
-    Match site/studio names with abbreviation and CamelCase handling.
+    Match site/studio names with alias and CamelCase handling.
+
+    site_resolver (F17): optional ``name -> canonical site | None`` callable,
+    injected by the caller — same pure-module pattern as match_performers'
+    alias_resolver. It consults the learned site-alias table plus the known-
+    sites store (name AND network spellings); this module never touches
+    storage itself. The legacy four-entry abbreviation dict (bg/rk/ts/bang)
+    retired into the seeded site_aliases.json defaults.
     """
     if not file_site:
         return 0.0
@@ -216,17 +223,17 @@ def match_site(file_site: Optional[str], api_site: str) -> float:
     if file_camel in api_camel or api_camel in file_camel:
         return 0.9
 
-    # Common abbreviations
-    abbreviations = {
-        'bg': 'brazzers',
-        'rk': 'reality kings',
-        'ts': 'teamskeet',
-        'bang': 'bangbros',
-    }
-
-    file_abbr = abbreviations.get(file_norm, file_norm)
-    if file_abbr == api_norm or file_abbr in api_norm:
-        return 0.95
+    # Learned / known site alias (F17): a resolver hit that lands exactly on
+    # the API site is authoritative (a user confirm or a provider record put
+    # it there). A hit that merely overlaps keeps the old abbreviation score.
+    if site_resolver:
+        resolved = site_resolver(file_site)
+        if resolved:
+            resolved_norm = normalize(resolved)
+            if resolved_norm == api_norm:
+                return 1.0
+            if resolved_norm and (resolved_norm in api_norm or api_norm in resolved_norm):
+                return 0.95
 
     # Fuzzy match on both raw and camel-split versions
     sim = max(
@@ -393,7 +400,8 @@ class MatchScore:
     fields: list[str] = field(default_factory=list)
 
 
-def score_match(file_data: dict, api_result: dict, alias_resolver=None) -> MatchScore:
+def score_match(file_data: dict, api_result: dict, alias_resolver=None,
+                site_resolver=None) -> MatchScore:
     """
     Score a file against an API scene, returning both the absolute (rank) score
     and the renormalized agreement + evidence coverage (review item D7).
@@ -408,6 +416,8 @@ def score_match(file_data: dict, api_result: dict, alias_resolver=None) -> Match
         api_result: API scene metadata (may include ``duration`` in seconds)
         alias_resolver: optional learned-alias lookup forwarded to
             :func:`match_performers` (F12); None = unchanged behavior
+        site_resolver: optional learned-site lookup forwarded to
+            :func:`match_site` (F17); None = unchanged behavior
     """
     weighted = 0.0        # Σ score·weight over comparable fields  → absolute base
     present_weight = 0.0  # Σ weight over comparable fields        → coverage
@@ -427,7 +437,8 @@ def score_match(file_data: dict, api_result: dict, alias_resolver=None) -> Match
     file_site = file_data.get("site")
     if file_site:
         w = CASCADE_WEIGHTS["site"]
-        weighted += match_site(file_site, api_result.get("site", "")) * w
+        weighted += match_site(file_site, api_result.get("site", ""),
+                               site_resolver=site_resolver) * w
         present_weight += w
         fields.append("site")
 
@@ -489,7 +500,8 @@ def _apply_duration_adjustment(score: float, file_data: dict, api_result: dict) 
 
 
 def find_best_match(
-    file_data: dict, api_results: list[dict], alias_resolver=None
+    file_data: dict, api_results: list[dict], alias_resolver=None,
+    site_resolver=None,
 ) -> Optional[tuple[dict, MatchScore]]:
     """
     Find best matching result from API results, returning the chosen scene and its
@@ -514,7 +526,8 @@ def find_best_match(
     best: Optional[MatchScore] = None
 
     for result in api_results:
-        ms = score_match(file_data, result, alias_resolver=alias_resolver)
+        ms = score_match(file_data, result, alias_resolver=alias_resolver,
+                         site_resolver=site_resolver)
         if best is None or ms.rank > best.rank:
             best = ms
             best_match = result

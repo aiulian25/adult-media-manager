@@ -14,6 +14,28 @@ API_BASE = "https://api.theporndb.net"
 IMAGE_BASE = "https://cdn.theporndb.net"
 
 
+def _image_url(val) -> Optional[str]:
+    """Normalise a TPDB image field to a URL string (or None).
+
+    The API is inconsistent: depending on the endpoint an image arrives as a
+    plain URL string OR as a size-variant dict ({"full": …, "large": …}).
+    Live-verified 2026-07: search results return dicts for "background".
+    """
+    if isinstance(val, dict):
+        val = (val.get("full") or val.get("large")
+               or val.get("medium") or val.get("default"))
+    if not val or not isinstance(val, str):
+        return None
+    return val
+
+
+def _absolute_image(url: Optional[str]) -> Optional[str]:
+    """CDN-absolute form: relative paths get IMAGE_BASE, full URLs pass as-is."""
+    if not url:
+        return None
+    return url if url.lower().startswith(("http://", "https://")) else f"{IMAGE_BASE}{url}"
+
+
 @dataclass
 class TPDBScene:
     """Scene metadata from ThePornDB."""
@@ -28,18 +50,22 @@ class TPDBScene:
     poster_url: Optional[str] = None
     thumbnail_url: Optional[str] = None
     description: Optional[str] = None
+    # F7: scene page URL and a fanart backdrop (the API "background" when it is
+    # a different image than the poster — otherwise None, no duplicate art).
+    url: Optional[str] = None
+    fanart_url: Optional[str] = None
 
     @property
     def poster_url_large(self) -> Optional[str]:
-        if self.poster_url:
-            return f"{IMAGE_BASE}{self.poster_url}"
-        return None
+        return _absolute_image(self.poster_url)
+
+    @property
+    def fanart_url_large(self) -> Optional[str]:
+        return _absolute_image(self.fanart_url)
 
     @property
     def thumbnail_url_small(self) -> Optional[str]:
-        if self.thumbnail_url:
-            return f"{IMAGE_BASE}{self.thumbnail_url}"
-        return None
+        return _absolute_image(self.thumbnail_url)
 
 
 @dataclass
@@ -299,6 +325,8 @@ class TPDBClient:
         else:
             network_str = None
 
+        poster = _image_url(data.get("poster"))
+        background = _image_url(data.get("background"))
         return TPDBScene(
             id=str(data.get("id", "")),
             title=data.get("title", ""),
@@ -308,9 +336,13 @@ class TPDBClient:
             release_date=data.get("date", ""),
             duration=data.get("duration"),
             tags=tags,
-            poster_url=data.get("poster"),
-            thumbnail_url=data.get("background") or data.get("poster"),
+            poster_url=poster,
+            thumbnail_url=background or poster,
             description=data.get("description", ""),
+            url=data.get("url"),
+            # Fanart only when the backdrop is a genuinely different image —
+            # never duplicate the poster into <fanart>.
+            fanart_url=background if background and background != poster else None,
         )
     
     def _parse_performer(self, data: dict) -> TPDBPerformer:

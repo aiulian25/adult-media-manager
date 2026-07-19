@@ -39,6 +39,13 @@ function t(key, vars) {
     return str;
 }
 
+// Resolved once the FIRST locale file has loaded. Anything that renders
+// translated text OUTSIDE data-i18n (e.g. the update banner, which is built
+// with textContent at startup) must await this — otherwise it races the
+// locale fetch and bakes raw keys into the DOM.
+let _i18nReadyResolve;
+const _i18nReady = new Promise((resolve) => { _i18nReadyResolve = resolve; });
+
 async function loadI18n() {
     const saved = localStorage.getItem('amm_locale') || 'en';
     try {
@@ -49,6 +56,7 @@ async function loadI18n() {
     } catch (_) {
         // silently fall through to English key names
     }
+    _i18nReadyResolve();
 }
 
 // Three flat themes share one token contract in style.css. Applying sets a
@@ -123,20 +131,20 @@ const template = document.getElementById('template');
 const flatRename = document.getElementById('flat-rename');
 const embedModeSel = document.getElementById('embed-mode');
 
-// Metadata write modes exposed in the UI: 'smart' (Both), 'embed_only'
-// (Embedded only), 'nfo_only' (Sidecar only). 'embed' is a legacy API value
-// (remux+NFO) not shown in the picker — treated like 'smart' if ever seen.
-const _UI_EMBED_MODES = ['smart', 'embed_only', 'nfo_only'];
+// Metadata write modes exposed in the UI: 'embed' (Remux + .nfo, default),
+// 'remux_only' (Remux, no .nfo), 'smart' (Both — in-place + .nfo),
+// 'embed_only' (Embedded only), 'nfo_only' (Sidecar only).
+const _UI_EMBED_MODES = ['embed', 'remux_only', 'smart', 'embed_only', 'nfo_only'];
 
-/** Currently-selected metadata write mode; defaults to 'smart' (Both). */
+/** Currently-selected metadata write mode; defaults to 'embed' (Remux + .nfo). */
 function _getEmbedMode() {
     const v = embedModeSel && embedModeSel.value;
-    return _UI_EMBED_MODES.includes(v) ? v : 'smart';
+    return _UI_EMBED_MODES.includes(v) ? v : 'embed';
 }
 
 /** Apply a persisted default metadata mode to the toolbar picker + cache it. */
 function _applyEmbedMode(mode) {
-    const m = _UI_EMBED_MODES.includes(mode) ? mode : 'smart';
+    const m = _UI_EMBED_MODES.includes(mode) ? mode : 'embed';
     localStorage.setItem('amm_embed_mode', m);
     if (embedModeSel) embedModeSel.value = m;
     return m;
@@ -421,7 +429,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     // server (settings.json) is the durable source of truth and is reconciled
     // immediately after, so a fresh browser/profile still picks up the choice.
     applyTheme(localStorage.getItem('amm_theme') || 'default');
-    _applyEmbedMode(localStorage.getItem('amm_embed_mode') || 'smart');
+    _applyEmbedMode(localStorage.getItem('amm_embed_mode') || 'embed');
     await loadI18n();
     applyI18nToDOM();
     reconcilePrefsFromServer();   // fire-and-forget; updates if server differs
@@ -677,10 +685,15 @@ async function reconcilePrefsFromServer() {
             localStorage.setItem('amm_locale', serverLocale);
             await loadI18n();
             applyI18nToDOM();
+            // Re-render the textContent-built banner in the new language
+            // (data-i18n re-application above doesn't reach it).
+            _maybeShowUpdateBanner();
         }
 
         // Default metadata write mode (persisted server-side; survives restarts).
         if (data.embed_mode) _applyEmbedMode(data.embed_mode);
+        const fpCb0 = document.getElementById('settings-contribute-fp');
+        if (fpCb0) fpCb0.checked = data.contribute_fingerprints === true;
     } catch (_) {
         // Non-fatal — keep the cached values.
     }
@@ -784,7 +797,7 @@ async function openSettingsModal() {
     const embedSel = document.getElementById('settings-embed-mode');
     if (langSel)  langSel.value  = localStorage.getItem('amm_locale') || 'en';
     if (themeSel) themeSel.value = localStorage.getItem('amm_theme')  || 'default';
-    if (embedSel) embedSel.value = localStorage.getItem('amm_embed_mode') || 'smart';
+    if (embedSel) embedSel.value = localStorage.getItem('amm_embed_mode') || 'embed';
 
     // Software update card fills in asynchronously — never blocks the modal.
     refreshUpdateInfo().then(renderUpdateCard);
@@ -799,6 +812,8 @@ async function openSettingsModal() {
             if (langSel  && data.locale) langSel.value  = data.locale;
             if (themeSel && data.theme)  themeSel.value = data.theme;
             if (embedSel && data.embed_mode) embedSel.value = data.embed_mode;
+            const fpCb = document.getElementById('settings-contribute-fp');
+            if (fpCb) fpCb.checked = data.contribute_fingerprints === true;
         }
     } catch (_) {
         // Non-fatal — badges stay in default state
@@ -831,12 +846,30 @@ function _updIsElectron() {
     return !!(window.electronAPI && window.electronAPI.isElectron);
 }
 
+let _lastUpdCheck = 0;    // throttles visibility-driven rechecks to 1/hour (F11)
+
+let _toolHealth = null;   // last /api/health "tools" dict (F2 system check)
+
 async function refreshUpdateInfo() {
     try {
         const resp = await fetch('/api/version');
-        if (resp.ok) updInfo = await resp.json();
+        if (resp.ok) { updInfo = await resp.json(); _lastUpdCheck = Date.now(); }
     } catch (_) { /* offline — card renders nothing */ }
+    try {
+        const h = await fetch('/api/health');
+        if (h.ok) _toolHealth = (await h.json()).tools || null;
+    } catch (_) { /* keep the last known tool state */ }
     return updInfo;
+}
+
+// F2: one-line system check — names any missing external tool. Empty string
+// when everything (or nothing yet) is known-good.
+function _toolsMissingHtml() {
+    if (!_toolHealth) return '';
+    const missing = Object.keys(_toolHealth).filter(k => _toolHealth[k] === false);
+    if (!missing.length) return '';
+    return `<div class="up-tiny" style="color:var(--error)">⚠ ${
+        escapeHtml(t('settings.tools_missing', { tools: missing.join(', ') }))}</div>`;
 }
 
 function renderUpdateCard() {
@@ -847,7 +880,7 @@ function renderUpdateCard() {
     const upd = v.update;
     const relUrl = (upd && upd.url) || v.releases_url || 'https://github.com/aiulian25/adult-media-manager/releases';
 
-    // Up to date — the quiet default.
+    // Up to date — the quiet default. The F2 system-check line rides below.
     if (!upd || !upd.latest) {
         slot.innerHTML = `
             <div class="update-card update-row">
@@ -855,7 +888,7 @@ function renderUpdateCard() {
                 <span style="font-weight:650">AMM v${escapeHtml(v.version)}</span>
                 <span class="up-tiny" style="flex:1">${escapeHtml(t('update.checks_daily'))}</span>
                 <a class="up-tiny" href="${escapeHtml(relUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(t('update.releases_link'))}</a>
-            </div>`;
+            </div>${_toolsMissingHtml()}`;
         return;
     }
 
@@ -869,7 +902,7 @@ function renderUpdateCard() {
                 <h4><span class="update-chip new">${escapeHtml(t('update.chip_new'))}</span> ${escapeHtml(t('update.available_title', { version: upd.latest }))}</h4>
                 <div class="up-muted">${escapeHtml(t('update.youre_on', { version: v.version }))} · ${whatsNew}</div>
                 ${_updIsElectron() ? '' : `<div class="up-tiny" style="margin-top:6px">${escapeHtml(t('update.docker_hint'))} <code>docker compose pull &amp;&amp; docker compose up -d</code></div>`}
-            </div>`;
+            </div>${_toolsMissingHtml()}`;
         return;
     }
 
@@ -1000,20 +1033,30 @@ async function updInstall() {
 }
 
 /* Update banner: one quiet row under the top bar, shown once per release.
-   Dismiss is remembered per-version — never nags again until the NEXT one. */
+   Dismiss is remembered per-version — never nags again until the NEXT one.
+   The decision lives apart from the fetch so periodic rechecks (F11) reuse
+   it — including the dismiss guard, so they can never re-nag. */
+function _maybeShowUpdateBanner() {
+    const v = updInfo;
+    if (!v || !v.version) return;
+    const latest = v.update && v.update.latest;
+    if (!latest) return;
+    if (localStorage.getItem('amm_dismissed_update') === latest) return;
+    document.getElementById('update-banner-title').textContent =
+        t('update.available_title', { version: latest });
+    document.getElementById('update-banner-sub').textContent = updCanAutoDl()
+        ? t('update.banner_sub_native')
+        : (_updIsElectron() ? t('update.banner_sub_manual') : t('update.banner_sub_docker'));
+    document.getElementById('update-banner').classList.remove('hidden');
+}
+
 async function checkUpdateOnStartup() {
     try {
-        const v = await refreshUpdateInfo();
-        if (!v || !v.version) return;
-        const latest = v.update && v.update.latest;
-        if (!latest) return;
-        if (localStorage.getItem('amm_dismissed_update') === latest) return;
-        document.getElementById('update-banner-title').textContent =
-            t('update.available_title', { version: latest });
-        document.getElementById('update-banner-sub').textContent = updCanAutoDl()
-            ? t('update.banner_sub_native')
-            : (_updIsElectron() ? t('update.banner_sub_manual') : t('update.banner_sub_docker'));
-        document.getElementById('update-banner').classList.remove('hidden');
+        await refreshUpdateInfo();
+        // The banner is textContent-rendered — it must not race the locale
+        // load or it displays raw keys (seen live: "update.available_title").
+        await _i18nReady;
+        _maybeShowUpdateBanner();
     } catch (_) { /* offline — no banner */ }
 }
 
@@ -1064,7 +1107,7 @@ async function saveSettings() {
     const stashdbVal = document.getElementById('settings-stashdb-key')?.value.trim() || '';
     const localeVal  = document.getElementById('settings-lang')?.value   || 'en';
     const themeVal   = document.getElementById('settings-theme')?.value  || 'default';
-    const embedVal   = document.getElementById('settings-embed-mode')?.value || 'smart';
+    const embedVal   = document.getElementById('settings-embed-mode')?.value || 'embed';
 
     try {
         const resp = await fetch('/api/settings', {
@@ -1076,6 +1119,9 @@ async function saveSettings() {
                 locale:          localeVal,
                 theme:           themeVal,
                 embed_mode:      embedVal,
+                // F5: explicit true/false — the server treats null as "keep".
+                contribute_fingerprints:
+                    document.getElementById('settings-contribute-fp')?.checked === true,
             }),
         });
 
@@ -1183,6 +1229,18 @@ document.addEventListener('DOMContentLoaded', () => {
         window.electronAPI.onUpdateRestartPending(showRestartModal);
     }
     checkUpdateOnStartup();
+    // F11: long-lived tabs learn about updates too. A pinned Docker tab never
+    // reloads, so re-ask every 6 h, plus on tab refocus when the last check is
+    // over an hour old. The server caches the GitHub check for 24 h, so these
+    // rechecks add no upstream traffic; the per-version dismiss is enforced
+    // inside _maybeShowUpdateBanner, so a dismissed release stays dismissed.
+    setInterval(checkUpdateOnStartup, 6 * 3600 * 1000);
+    document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible'
+            && Date.now() - _lastUpdCheck > 3600 * 1000) {
+            checkUpdateOnStartup();
+        }
+    });
 
     // Show/hide toggle for each key input. We swap the eye ↔ eye-off icon so the
     // toggle gives clear feedback: key fields open EMPTY (never pre-filled, for

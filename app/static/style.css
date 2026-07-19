@@ -2144,7 +2144,11 @@ input.input-error {
     text-overflow: ellipsis;
     white-space: nowrap;
 }
-.match-alt-use { flex: 0 0 auto; font-size: 0.75rem; }
+/* Explicitly NOT match-action-btn: that class is width:100% for the vertical
+   action stack and would crush the info span to zero width in this flex row. */
+.match-alt-use { flex: 0 0 auto; font-size: 0.75rem; padding: 4px 12px; }
+.match-alt-info b { font-weight: 640; color: var(--text-primary); }
+.match-alt-meta { color: var(--text-muted); }
 
 /* ── Software update: banner + card + restart prompt (F17 v2) ─────────── */
 .update-banner {
@@ -2220,3 +2224,37 @@ input.input-error {
     margin-left: 8px;
 }
 .settings-key-clear:hover { color: var(--error); border-color: var(--error); }
+
+/* ── Library stores row (F16): what AMM has accumulated + maintenance ── */
+.library-stores-row {
+    grid-column: 1 / -1;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: stretch;
+    gap: 10px;
+    margin-top: 8px;
+    padding-top: 10px;
+    border-top: 1px solid var(--border-soft);
+}
+.library-stores-title {
+    flex-basis: 100%;
+    font-size: .72rem;
+    text-transform: uppercase;
+    letter-spacing: .04em;
+    color: var(--text-muted);
+}
+.library-stores-row .library-tile { flex: 1 1 100px; }
+.library-stores-row .library-tile .library-tile-num { font-size: 1.15rem; }
+.library-maint-btns {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 6px;
+}
+.library-maint-btns .glass-btn { font-size: .74rem; padding: 5px 10px; }
+
+/* The global confirmation dialog must ALWAYS be topmost — it can be opened
+   from inside any other modal (Settings key-removal, Library maintenance).
+   Same-z-index .modal siblings stack by DOM order, and #library-modal comes
+   later in the DOM, which painted it OVER the confirm dialog (F16 bug). */
+#confirm-modal { z-index: 1200; }

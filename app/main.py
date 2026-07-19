@@ -32,7 +32,7 @@ from app.core.detector import (
     VIDEO_EXTENSIONS, SUBTITLE_EXTENSIONS,
 )
 from app.core.matcher import (
-    score_match, find_best_match, normalize as _perf_normalize,
+    score_match, find_best_match, match_site, normalize as _perf_normalize,
     _performer_pair_score, PARTIAL_NAME_SCORE as _PARTIAL_NAME_SCORE,
 )
 from app.core.formatter import (
@@ -44,6 +44,7 @@ from app.core.renamer import (
 )
 from app.core.history import RenameHistory, HistoryEntry
 from app.core.catalog import Catalog
+from app.core.tools import ffmpeg_path, ffprobe_path
 from app.core.jobs import JobStore
 from app.core.embedder import (
     validate_embed_mode, ffmpeg_metadata_args, build_mkv_tags_xml, plan_embed,
@@ -192,7 +193,7 @@ _DEFAULT_THEME  = "default"
 # it is returned to the browser like locale/theme; the client uses it to seed the
 # per-rename Metadata selector and sends it back on rename/save. "smart" =
 # "Both (file + .nfo)", the recommended default.
-_DEFAULT_EMBED_MODE = "smart"
+_DEFAULT_EMBED_MODE = "embed"   # full ffmpeg remux + NFO — the universal path
 
 
 def _effective_locale() -> str:
@@ -513,6 +514,10 @@ class ScanRequest(BaseModel):
     # large library only surfaces new/unorganised work. Default false → unchanged
     # behaviour.
     skip_organized: bool = False
+    # F12: scan dot-files/dirs too. Default False → today's behaviour (hidden
+    # media is skipped and tallied); the picker can already SHOW hidden files,
+    # so the scanner must be able to honour a hidden selection.
+    include_hidden: bool = False
 
     @field_validator("path")
     @classmethod
@@ -743,7 +748,7 @@ def _probe_duration_seconds(path: Path) -> Optional[float]:
     """
     try:
         out = subprocess.run(
-            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+            [ffprobe_path(), "-v", "error", "-show_entries", "format=duration",
              "-of", "default=noprint_wrappers=1:nokey=1", str(path)],
             capture_output=True, text=True, timeout=8,
         )
@@ -795,7 +800,19 @@ def _resolve_scan_paths_req(req: "ScanRequest") -> tuple[list[Path], Optional[st
 _SCAN_MEDIA_EXTS = VIDEO_EXTENSIONS | SUBTITLE_EXTENSIONS
 
 
-def _build_file_entry(p: Path) -> Optional[dict]:
+def _known_site_norms() -> set:
+    """Normalized known-site names for folder-context detection (F8).
+
+    Computed ONCE per scan by the callers and threaded into every
+    `_build_file_entry` call — never per file (the store read is cached, but
+    the set comprehension over hundreds of sites is not free ×10k files).
+    """
+    return {_perf_normalize(s.get("name") or "")
+            for s in _load_known_sites() if s.get("name")}
+
+
+def _build_file_entry(p: Path, known_sites: Optional[set] = None,
+                      include_hidden: bool = False) -> Optional[dict]:
     """Build the scan ``file_entry`` for one path, or None to skip it.
 
     All blocking filesystem/CPU work for a single file (existence/stat, NFO XML
@@ -810,14 +827,16 @@ def _build_file_entry(p: Path) -> Optional[dict]:
     except (OSError, PermissionError):
         return None
 
-    # Skip hidden files: .fuse_hidden* stubs, .DS_Store, .Trash, etc.
-    if p.name.startswith('.'):
+    # Skip hidden files: .fuse_hidden* stubs, .DS_Store, .Trash, etc. — unless
+    # the scan explicitly asked for them (F12); dot-junk without a media
+    # extension still falls out at the next check either way.
+    if p.name.startswith('.') and not include_hidden:
         return None
     if p.suffix.lower() not in _SCAN_MEDIA_EXTS:
         return None
 
     try:
-        det = detect(p)
+        det = detect(p, known_sites=known_sites)
     except Exception as e:
         print(f"WARNING: Could not detect {p}: {e}")
         return None
@@ -863,6 +882,9 @@ def _build_file_entry(p: Path) -> Optional[dict]:
         "source":           det.source,
         "video_format":     det.video_format,
         "group":            det.group,
+        # F8: "folder" when site/title/date were inferred from a directory
+        # name (gap-fill only) — the UI shows a 📁 hint on such rows.
+        "context_source":   det.context_source,
         # Subtitle files are companions of a video, not standalone scenes (F2).
         # The UI hides a subtitle row when its sibling video is in the same scan
         # (it will be moved along with the video); orphan subtitles still show.
@@ -921,7 +943,9 @@ def scan_directory(req: ScanRequest):
     if error:
         return {"count": 0, "files": [], "error": error}
 
-    files = [e for e in (_build_file_entry(p) for p in paths) if e is not None]
+    _ks = _known_site_norms()   # once per scan, not per file (F8)
+    files = [e for e in (_build_file_entry(p, _ks, req.include_hidden) for p in paths)
+             if e is not None]
 
     # ── Catalog (R1): record this scan + apply incremental rescan ───────────
     try:
@@ -1007,6 +1031,7 @@ async def scan_stream(request: Request, session_id: str = Query(...)):
         skip_hidden = 0
         skip_unreadable = 0
         batch: list[dict] = []   # accumulate for a single catalog upsert
+        _scan_known_sites = _known_site_norms()   # once per scan, not per file (F8)
 
         async def _flush_upsert():
             if batch:
@@ -1025,7 +1050,8 @@ async def scan_stream(request: Request, session_id: str = Query(...)):
                     stopped = True
                     break
 
-                entry = await asyncio.to_thread(_build_file_entry, p)
+                entry = await asyncio.to_thread(_build_file_entry, p, _scan_known_sites,
+                                                req.include_hidden)
                 if entry is None:
                     # Classify WHY this candidate was skipped, for the summary
                     # (F9). Order mirrors _build_file_entry's own skip checks
@@ -1034,7 +1060,7 @@ async def scan_stream(request: Request, session_id: str = Query(...)):
                     try:
                         if not p.is_file():
                             pass  # directory / non-regular — not a skipped file
-                        elif p.name.startswith('.'):
+                        elif p.name.startswith('.') and not req.include_hidden:
                             skip_hidden += 1
                         elif p.suffix.lower() not in _SCAN_MEDIA_EXTS:
                             skip_non_media += 1
@@ -1102,11 +1128,117 @@ async def scan_stream(request: Request, session_id: str = Query(...)):
 
 # ─── Catalog Endpoints (R1) ────────────────────────────────────────────
 
+# ── Store stats (F16): entry counts + on-disk bytes per persistent store. ──
+# The thumbnails rglob can be slow on big DATA_DIRs, so the whole block is
+# cached for 60 s; maintenance endpoints invalidate it.
+_store_stats_cache: dict = {"at": 0.0, "data": None}
+
+
+def _fsize(p: Path) -> int:
+    try:
+        return p.stat().st_size
+    except OSError:
+        return 0
+
+
+def _dir_stats(d: Path) -> tuple[int, int]:
+    """(file_count, total_bytes) for a directory tree; (0, 0) when absent."""
+    files = 0
+    total = 0
+    try:
+        for f in d.rglob("*"):
+            if f.is_file():
+                files += 1
+                total += _fsize(f)
+    except OSError:
+        pass
+    return files, total
+
+
+def _store_stats() -> dict:
+    now = _time.time()
+    if _store_stats_cache["data"] is not None and now - _store_stats_cache["at"] < 60:
+        return _store_stats_cache["data"]
+    mc = _match_cache_store.get()
+    th_count, th_bytes = _dir_stats(DATA_DIR / "thumbnails")
+    data = {
+        "match_cache": {
+            "count": len(mc),
+            "confirmed": sum(1 for v in mc.values() if v.get("user_confirmed")),
+            "bytes": _fsize(_MATCH_CACHE_FILE),
+        },
+        "aliases": {
+            # Learned knowledge, one tile: performer + site aliases + portraits.
+            "count": (len(_performer_aliases_store.get())
+                      + len(_site_aliases_store.get())
+                      + len(_performer_images_store.get())),
+            "bytes": (_fsize(_PERFORMER_ALIASES_FILE) + _fsize(_SITE_ALIASES_FILE)
+                      + _fsize(_PERFORMER_IMAGES_FILE)),
+        },
+        "known_sites": {"count": len(_load_known_sites()),
+                        "bytes": _fsize(KNOWN_SITES_FILE)},
+        "history": {"count": len(history.entries),
+                    "bytes": _fsize(DATA_DIR / "history.json")},
+        "thumbnails": {"count": th_count, "bytes": th_bytes},
+    }
+    _store_stats_cache.update(at=now, data=data)
+    return data
+
+
 @app.get("/api/catalog/stats")
 async def catalog_stats():
     """Aggregate catalog counts for the UI (total / organised / confirmed /
-    duplicate groups). Read-only; safe defaults if the catalog is disabled."""
-    return catalog.stats()
+    duplicate groups) + per-store counts/sizes (F16). Read-only; safe defaults
+    if the catalog is disabled."""
+    out = catalog.stats()
+    try:
+        out["stores"] = _store_stats()
+    except Exception as e:   # stats must never break the Library modal
+        print(f"WARNING: store stats failed: {e}")
+    return out
+
+
+@app.post("/api/maintenance/clear-match-cache")
+async def clear_match_cache():
+    """Drop every NON-confirmed match-cache entry (F16). Zero parameters —
+    nothing user-controllable; user_confirmed entries always survive."""
+    removed = {"n": 0}
+
+    def _apply(cache: dict) -> bool:
+        drop = [k for k, v in cache.items() if not v.get("user_confirmed")]
+        for k in drop:
+            del cache[k]
+        removed["n"] = len(drop)
+        return bool(drop)
+
+    _match_cache_store.mutate(_apply)
+    _store_stats_cache["data"] = None
+    return {"removed": removed["n"]}
+
+
+@app.post("/api/maintenance/clear-thumbnails")
+async def clear_thumbnails():
+    """Delete all extracted preview thumbnails (F16). Zero parameters; the
+    directory itself is kept. Confirmed matches lose their stored preview
+    image (the UI's confirm text says so) — matching is unaffected."""
+    tdir = DATA_DIR / "thumbnails"
+    _, freed = _dir_stats(tdir)
+    removed = 0
+    if tdir.is_dir():
+        try:
+            for child in tdir.iterdir():
+                try:
+                    if child.is_dir():
+                        shutil.rmtree(child)
+                    else:
+                        child.unlink()
+                    removed += 1
+                except OSError as e:
+                    print(f"WARNING: clear-thumbnails skipped {child.name}: {e}")
+        except OSError as e:
+            print(f"WARNING: clear-thumbnails failed: {e}")
+    _store_stats_cache["data"] = None
+    return {"freed_bytes": freed, "removed": removed}
 
 
 @app.get("/api/catalog/duplicates")
@@ -1252,6 +1384,14 @@ def _stashdb_scene_to_dict(s) -> dict:
         "thumbnail_url": s.poster_url,  # StashDB doesn't separate thumb/poster
         "description": s.description,   # synopsis → NFO <plot> (F4)
         "source": "stashdb",            # → NFO <uniqueid type> (F4)
+        # F6: scene code / director / studio URL / per-scene performer credits.
+        # TPDB scenes simply lack these keys — every consumer .get()s them.
+        "code": s.code,
+        "director": s.director,
+        "url": s.url,
+        "performer_credits": s.performer_credits,
+        # F7: fanart backdrop (second-widest image) → NFO <fanart>.
+        "fanart_url": s.fanart_url,
     }
 
 
@@ -1357,6 +1497,9 @@ def _tpdb_scene_to_dict(s) -> dict:
         "thumbnail_url": s.thumbnail_url_small,
         "description": s.description,   # synopsis → NFO <plot> (F4)
         "source": "tpdb",               # → NFO <uniqueid type> (F4)
+        # F7: scene page URL + fanart (background when distinct from poster).
+        "url": s.url,
+        "fanart_url": s.fanart_url_large,
     }
 
 
@@ -1456,50 +1599,135 @@ def _dedup_alternatives(results: list[dict], best: dict) -> list[dict]:
     return out
 
 
-async def _match_one_stashdb(file_data: dict, sem: asyncio.Semaphore) -> dict:
-    """Match a single file against StashDB using fingerprint then text search."""
+def _cheap_phash(file_data: dict, file_path: Path) -> Optional[str]:
+    """F3: resolve a pHash without running ffmpeg — request payload, then
+    catalog row. A hash is reused only when the byte size it was computed at
+    still equals the file on disk (bytes changed → hash invalid), and only in
+    wire format (16 lowercase hex) — the payload crosses the API boundary, so
+    it must never reach StashDB unvalidated."""
+    try:
+        st_size = file_path.stat().st_size
+    except OSError:
+        return None
+    claimed = file_data.get("phash")
+    if (isinstance(claimed, str)
+            and re.fullmatch(r"[0-9a-f]{16}", claimed)
+            and file_data.get("size") == st_size):
+        return claimed
+    phash = catalog.get_phash(str(file_path), size=st_size)
+    if phash is not None and not re.fullmatch(r"[0-9a-f]{16}", phash):
+        return None
+    return phash
+
+
+# One StashDB fingerprint request can carry many files (F4).
+_FP_BATCH_SIZE = 40
+
+
+async def _prefetch_stashdb_fingerprints(files: list[dict], refresh: bool) -> dict[int, list]:
+    """F4: resolve the fingerprint tier for a whole match run in ⌈pending/40⌉
+    round-trips instead of one per file.
+
+    Only cheaply-known fingerprints enter the batch (scan payload / catalog —
+    never live pHash computation); cache-hit files are skipped entirely (they
+    never reach the network). Returns {file_index: [StashDBScene, ...]} — an
+    EMPTY list is an authoritative miss (per-file skips straight to text
+    search). On a batch transport error the affected files are simply absent,
+    so they keep today's per-file path and accuracy never degrades.
+    """
+    if not stashdb:
+        return {}
+    pending: list[tuple[int, list[dict]]] = []
+    for i, f in enumerate(files):
+        try:
+            oshash = f.get("oshash")
+            if not refresh and oshash and _match_cache_lookup(oshash, f):
+                continue
+            p = Path(f.get("path", ""))
+            if not p.is_file():
+                continue   # parity: the per-file path refuses fingerprints too
+            group: list[dict] = []
+            if isinstance(oshash, str) and re.fullmatch(r"[0-9a-f]{16}", oshash):
+                group.append({"algorithm": "OSHASH", "hash": oshash})
+            else:
+                oh = await asyncio.to_thread(compute_oshash, p)
+                if oh:
+                    group.append({"algorithm": "OSHASH", "hash": oh})
+            ph = _cheap_phash(f, p)
+            if ph:
+                group.append({"algorithm": "PHASH", "hash": ph})
+            if group:
+                pending.append((i, group))
+        except Exception as exc:
+            print(f"WARNING: fingerprint prefetch skipped {f.get('filename', '?')}: {exc!r}")
+    out: dict[int, list] = {}
+    for start in range(0, len(pending), _FP_BATCH_SIZE):
+        chunk = pending[start:start + _FP_BATCH_SIZE]
+        res = await stashdb.find_by_fingerprints_batch([g for _, g in chunk])
+        if res is None:
+            continue   # transport error → these files use the per-file path
+        for (idx, _), scenes in zip(chunk, res):
+            out[idx] = scenes
+    return out
+
+
+async def _match_one_stashdb(file_data: dict, sem: asyncio.Semaphore,
+                             prefetched_fp: Optional[list] = None) -> dict:
+    """Match a single file against StashDB using fingerprint then text search.
+
+    ``prefetched_fp`` (F4): when not None it replaces the per-file fingerprint
+    lookup — non-empty is a batch hit, empty is an authoritative batch miss
+    (skip straight to text search). None means "no batch ran for this file"
+    and keeps the full per-file fingerprint path.
+    """
     async with sem:
         no_match = {"original": file_data, "match": None, "confidence": 0, "alternatives": []}
 
         # ── 1. Fingerprint search (highest accuracy) ──────────────────
         file_path = Path(file_data.get("path", ""))
-        if file_path.is_file():
+        fp_results = prefetched_fp
+        if fp_results is None and file_path.is_file():
             # OSHash reads the file head+tail (blocking disk I/O); run it in a
             # worker thread so a slow NAS read doesn't stall the event loop.
             oshash = await asyncio.to_thread(compute_oshash, file_path)
-            # pHash computation is CPU-heavy; run it but cap at 20 s
-            try:
-                # Budget depends on the algorithm (F14): the stash-compatible
-                # sprite needs 25 sequential ffmpeg seeks (slow on NAS mounts).
-                phash = await asyncio.wait_for(
-                    compute_phash_ffmpeg(file_path), timeout=PHASH_MATCH_TIMEOUT)
-            except asyncio.TimeoutError:
-                phash = None
+            # pHash reuse (F3): scan payload → catalog → live compute.
+            phash = _cheap_phash(file_data, file_path)
+            if phash is None:
+                # pHash computation is CPU-heavy; cap the live fallback.
+                try:
+                    # Budget depends on the algorithm (F14): the stash-compatible
+                    # sprite needs 25 sequential ffmpeg seeks (slow on NAS mounts).
+                    phash = await asyncio.wait_for(
+                        compute_phash_ffmpeg(file_path), timeout=PHASH_MATCH_TIMEOUT)
+                except asyncio.TimeoutError:
+                    phash = None
 
             if oshash or phash:
                 fp_results = await stashdb.find_by_fingerprint(oshash=oshash, phash=phash)
-                if fp_results:
-                    best = fp_results[0]
-                    scene_dict = _stashdb_scene_to_dict(best)
-                    ms = score_match(file_data, scene_dict, alias_resolver=_alias_lookup)
-                    alts = _dedup_alternatives(
-                        [_stashdb_scene_to_dict(s) for s in fp_results[1:5]],
-                        scene_dict,
-                    )
-                    # Register the matched studio so the site autocomplete is
-                    # populated for StashDB users too (parity with TPDB, F7).
-                    _add_known_site(scene_dict.get("site") or "", scene_dict.get("network") or "")
-                    return {
-                        "original": file_data,
-                        "match": scene_dict,
-                        "confidence": round(max(ms.agreement * 100, 90.0), 1),
-                        "coverage": round(ms.coverage, 3),
-                        "match_fields": ms.fields,
-                        "alternatives": alts,
-                        # Exact oshash/phash hit — near-certain regardless of the
-                        # cascade %. The UI surfaces this as a "verified" badge.
-                        "match_method": "fingerprint",
-                    }
+
+        if fp_results:
+            best = fp_results[0]
+            scene_dict = _stashdb_scene_to_dict(best)
+            ms = score_match(file_data, scene_dict, alias_resolver=_alias_lookup,
+                                      site_resolver=_site_lookup)
+            alts = _dedup_alternatives(
+                [_stashdb_scene_to_dict(s) for s in fp_results[1:5]],
+                scene_dict,
+            )
+            # Register the matched studio so the site autocomplete is
+            # populated for StashDB users too (parity with TPDB, F7).
+            _add_known_site(scene_dict.get("site") or "", scene_dict.get("network") or "")
+            return {
+                "original": file_data,
+                "match": scene_dict,
+                "confidence": round(max(ms.agreement * 100, 90.0), 1),
+                "coverage": round(ms.coverage, 3),
+                "match_fields": ms.fields,
+                "alternatives": alts,
+                # Exact oshash/phash hit — near-certain regardless of the
+                # cascade %. The UI surfaces this as a "verified" badge.
+                "match_method": "fingerprint",
+            }
 
         # ── 2. Resolve search title/site ──────────────────────────────
         # The detector now extracts site/title/date for "Studio - Title (Date)"
@@ -1543,7 +1771,8 @@ async def _match_one_stashdb(file_data: dict, sem: asyncio.Semaphore) -> dict:
         # (review item D2), so sparse/title-only files are handled here for both
         # StashDB and TPDB — no endpoint-specific fallback copy needed.
         best_result = find_best_match(scoring_data, results_dicts,
-                                      alias_resolver=_alias_lookup)
+                                      alias_resolver=_alias_lookup,
+                                      site_resolver=_site_lookup)
         if best_result:
             best_match, ms = best_result
             # Register the matched studio for the site autocomplete (parity with
@@ -1580,7 +1809,8 @@ async def _match_one_tpdb(file_data: dict, sem: asyncio.Semaphore, auto_match: b
                 # + source ride along automatically and can't drift from the shape
                 # the search path / lookup endpoint produce.
                 scene_dict = _tpdb_scene_to_dict(auto)
-                ms = score_match(file_data, scene_dict, alias_resolver=_alias_lookup)
+                ms = score_match(file_data, scene_dict, alias_resolver=_alias_lookup,
+                                      site_resolver=_site_lookup)
                 return {
                     "original": file_data,
                     "match": scene_dict,
@@ -1603,7 +1833,8 @@ async def _match_one_tpdb(file_data: dict, sem: asyncio.Semaphore, auto_match: b
         if search_results:
             results_dicts = [_tpdb_scene_to_dict(s) for s in search_results[:5]]
             best_result = find_best_match(file_data, results_dicts,
-                                          alias_resolver=_alias_lookup)
+                                          alias_resolver=_alias_lookup,
+                                      site_resolver=_site_lookup)
             if best_result:
                 best_match, ms = best_result
                 return {
@@ -1664,10 +1895,13 @@ async def match_scenes(req: MatchRequest):
                 detail="StashDB API key not configured. Set STASHDB_API_KEY environment variable."
             )
         sem = asyncio.Semaphore(5)
+        # F4: one batched fingerprint query for the whole run; per-file tasks
+        # receive their slice (or None on batch failure → per-file fallback).
+        prefetched = await _prefetch_stashdb_fingerprints(req.files, req.refresh)
         matched_files = await asyncio.gather(*[
-            _cached_match(f, lambda f=f: _match_one_stashdb(f, sem),
+            _cached_match(f, lambda f=f, i=i: _match_one_stashdb(f, sem, prefetched.get(i)),
                           req.refresh, "stashdb", cache_updates)
-            for f in req.files
+            for i, f in enumerate(req.files)
         ])
         _match_cache_flush(cache_updates)
         return {"matches": list(matched_files)}
@@ -1776,12 +2010,13 @@ async def match_stream(request: Request, session_id: str = Query(...)):
     q: asyncio.Queue = asyncio.Queue()
     cache_updates: dict = {}   # batched cache writes, flushed when the stream ends
 
-    async def _match_one_sse(idx: int, file_data: dict) -> None:
+    async def _match_one_sse(idx: int, file_data: dict,
+                             prefetched_fp: Optional[list] = None) -> None:
         result = {"original": file_data, "match": None, "confidence": 0, "alternatives": []}
         try:
             if use_stashdb:
                 result = await _cached_match(
-                    file_data, lambda: _match_one_stashdb(file_data, sem),
+                    file_data, lambda: _match_one_stashdb(file_data, sem, prefetched_fp),
                     req.refresh, "stashdb", cache_updates)
             else:
                 result = await _cached_match(
@@ -1796,8 +2031,20 @@ async def match_stream(request: Request, session_id: str = Query(...)):
         await q.put((idx, result))
 
     async def _event_stream():
+        # F4: one batched fingerprint query up-front (⌈pending/40⌉ round-trips)
+        # so the per-file tasks below skip their individual fingerprint calls.
+        # Defensive: a prefetch crash must never kill the stream — files just
+        # fall back to the per-file path.
+        prefetched: dict[int, list] = {}
+        if use_stashdb:
+            try:
+                prefetched = await _prefetch_stashdb_fingerprints(files, req.refresh)
+            except Exception as exc:
+                print(f"WARNING: fingerprint prefetch failed: {exc!r}")
+
         # Kick off all match tasks concurrently (semaphore limits parallelism)
-        tasks = [asyncio.create_task(_match_one_sse(i, f)) for i, f in enumerate(files)]
+        tasks = [asyncio.create_task(_match_one_sse(i, f, prefetched.get(i)))
+                 for i, f in enumerate(files)]
 
         # Ordered slots so we can reconstruct the final list client-side
         ordered: list[dict | None] = [None] * total
@@ -1932,6 +2179,7 @@ async def rename_files(req: RenameRequest, background_tasks: BackgroundTasks):
     history_batch = []   # (old, new, action, success) — written in ONE save below
     confirm_updates = {} # oshash -> confirmed cache entry, flushed once below (D3)
     alias_learn_jobs = []  # (file_performers, api_performers) per confirm (F12)
+    fp_submissions = 0     # per-request cap on opt-in StashDB contributions (F5)
     reserved: set[str] = set()  # targets claimed by THIS batch (collision policy, F1)
     for operation in req.operations:
         old_path   = Path(operation["old_path"])
@@ -1942,14 +2190,17 @@ async def rename_files(req: RenameRequest, background_tasks: BackgroundTasks):
 
         bindings = extract_template_vars(
             scene_data, file_data, operation.get("performer_limit"))
-        new_path = build_new_path(old_path, tmpl, bindings)
+        # F10: byte-budget truncation is reported so the preflight modal can
+        # say "N names shortened" instead of the user discovering it post-hoc.
+        path_report: dict = {}
+        new_path = build_new_path(old_path, tmpl, bindings, report=path_report)
         if flat:
             new_path = old_path.parent / new_path.name
 
         # Collision policy (F1): resolve against the disk AND the targets this
         # batch already claimed, BEFORE touching the filesystem. Applies in
         # test mode too, so the preview shows the exact suffixed names.
-        resolved_target, skip_code = resolve_collision(
+        resolved_target, skip_code, collision_resolved = resolve_collision(
             old_path, new_path, req.on_conflict, reserved)
         if resolved_target is None:
             if skip_code == "target_exists":
@@ -1961,6 +2212,8 @@ async def rename_files(req: RenameRequest, background_tasks: BackgroundTasks):
                     success=False, old_path=old_path, new_path=new_path,
                     action=action,
                     error=f"No free auto-number slot for: {new_path}")
+            result.truncated = bool(path_report.get("truncated"))   # F10
+            result.collision_resolved = False
             phase1.append((result, new_path, {}, None))
             continue
         new_path = resolved_target
@@ -1970,6 +2223,10 @@ async def rename_files(req: RenameRequest, background_tasks: BackgroundTasks):
         # with the same action, so a rename never orphans a `.srt`/`-poster.jpg`
         # next to the old name (F2). Companion results ride on result.companions.
         result = execute_rename_with_companions(old_path, new_path, action)
+        # F10: preflight flags for the modal summary — the suffix policy changed
+        # this name / a component was byte-budget shortened.
+        result.collision_resolved = collision_resolved
+        result.truncated = bool(path_report.get("truncated"))
 
         meta = {
             "title":        scene_data.get("title", ""),
@@ -1994,6 +2251,9 @@ async def rename_files(req: RenameRequest, background_tasks: BackgroundTasks):
             "network":      scene_data.get("network", ""),
             "quality":      file_data.get("quality", ""),
             "video_format": file_data.get("video_format", ""),
+            # NFO round three (F7): provider page link + fanart backdrop.
+            "url":          scene_data.get("url", ""),
+            "fanart_url":   scene_data.get("fanart_url", ""),
         }
         # Catalog payload for this op — applied in Phase 2 ONLY after the NFO is
         # actually written, so a file is never flagged "organized" (which the UI
@@ -2019,6 +2279,20 @@ async def rename_files(req: RenameRequest, background_tasks: BackgroundTasks):
                     file_data.get("performers") or [],
                     scene_data.get("performers") or [],
                 ))
+                # F6: StashDB per-scene credits carry alias↔canonical pairs
+                # directly — seed them now, zero API calls (no-op for TPDB).
+                _seed_credit_aliases(scene_data)
+                # F5 (OPT-IN, default off): contribute this confirmed file's
+                # fingerprints back to StashDB — capped per request.
+                if fp_submissions < 20:
+                    fp_submissions += _maybe_submit_fingerprints(scene_data, file_data)
+                # F17: a confirmed rename whose filename site fuzzy-missed the
+                # scene site IS the evidence for a site alias — learn it now.
+                _f_site = str(file_data.get("site") or "").strip()
+                _s_site = str(scene_data.get("site") or "").strip()
+                if (_f_site and _s_site
+                        and match_site(_f_site, _s_site, site_resolver=_site_lookup) < 0.9):
+                    _site_alias_learn(_f_site, _s_site)
             cat = {
                 "oshash":     oshash,
                 "scene_id":   scene_data.get("id"),
@@ -2076,6 +2350,10 @@ async def rename_files(req: RenameRequest, background_tasks: BackgroundTasks):
             # Collision-policy skip code (F1): "target_exists" renders as a
             # neutral ⏭ row, never as a red error.
             "skipped":       result.skipped,
+            # Preflight flags (F10): the suffix policy renamed this target /
+            # a component was shortened to the 255-byte budget.
+            "collision_resolved": getattr(result, "collision_resolved", False),
+            "truncated":          getattr(result, "truncated", False),
             "embed_warning": None,
             # Number of companion sidecars (subtitles/NFO/artwork) moved with this
             # file (F2) — the UI shows "+N companion file(s)" on the row.
@@ -2210,7 +2488,8 @@ async def _run_embed_phase(job_id: str, tasks: list, embed_mode: str = "embed") 
 
     embed_sem = _get_embed_sem()
     nfo_only   = embed_mode == "nfo_only"     # sidecar, no container
-    embed_only = embed_mode == "embed_only"   # container, no sidecar
+    # Container-only modes (no sidecar): in-place strategy or pure remux.
+    embed_only = embed_mode in ("embed_only", "remux_only")
 
     async def _embed_one(result, new_path, meta, cat):
         warning = None
@@ -2391,6 +2670,8 @@ async def get_settings():
         "locale":  _effective_locale(),
         "theme":   _effective_theme(),
         "embed_mode": _effective_embed_mode(),
+        # F5 — opt-in, DEFAULT OFF: only an explicit stored True enables it.
+        "contribute_fingerprints": _load_settings().get("contribute_fingerprints") is True,
     }
 
 
@@ -2400,6 +2681,11 @@ class SaveSettingsRequest(BaseModel):
     locale:          Optional[str] = None
     theme:           Optional[str] = None
     embed_mode:      Optional[str] = None
+    # F5 — OPT-IN fingerprint contribution to StashDB. Tri-state on the wire:
+    # None = leave unchanged, True/False = set explicitly (the generic truthy
+    # prefs loop would treat False as "keep", silently making the opt-in
+    # impossible to turn OFF — handled separately in save_settings).
+    contribute_fingerprints: Optional[bool] = None
     # Explicit key removal (roadmap-2 F14). Blank still means "keep" — clearing
     # must be a deliberate, separate signal so an empty form can never wipe a
     # key by accident. Ignored for env-sourced keys (same precedence as writes).
@@ -2502,6 +2788,13 @@ async def save_settings(req: SaveSettingsRequest):
             settings[pref] = new_val
             dirty = True
 
+    # F5: explicit tri-state boolean — False is a REAL value (turn the opt-in
+    # off), so it can't ride the truthy prefs loop above.
+    if (req.contribute_fingerprints is not None
+            and settings.get("contribute_fingerprints") != req.contribute_fingerprints):
+        settings["contribute_fingerprints"] = req.contribute_fingerprints
+        dirty = True
+
     if dirty:
         _save_settings(settings)
 
@@ -2531,6 +2824,7 @@ async def save_settings(req: SaveSettingsRequest):
         "locale":  _effective_locale(),
         "theme":   _effective_theme(),
         "embed_mode": _effective_embed_mode(),
+        "contribute_fingerprints": _load_settings().get("contribute_fingerprints") is True,
     }
 
 
@@ -3059,6 +3353,7 @@ def _add_known_site(name: str, network: str = "") -> None:
             return False
         sites.append({"name": name, "network": network})
         sites.sort(key=lambda s: s["name"].lower())
+        _invalidate_site_index()   # F17: resolver index rebuilds lazily
         return True
 
     _known_sites_store.mutate(_add)
@@ -3088,6 +3383,7 @@ async def search_sites(q: str = Query(default="", min_length=0)):
                 added = True
         if added:
             known.sort(key=lambda x: x["name"].lower())
+            _invalidate_site_index()   # F17
         return added
 
     _known_sites_store.mutate(_add_all)
@@ -3239,6 +3535,122 @@ def _match_cache_rekey(old_oshash: Optional[str], new_oshash: str, *,
 _PERFORMER_ALIASES_FILE = DATA_DIR / "performer_aliases.json"
 _performer_aliases_store = _JsonStore(_PERFORMER_ALIASES_FILE, dict)
 
+# Learned site aliases (F17): {normalized filename token: canonical site}.
+# Taught by user-confirmed renames whose filename site fuzzy-missed the scene
+# site — the confirmed pair IS the evidence, no API calls. Seeded once with
+# the four abbreviations that used to be hardcoded in matcher.py, so behavior
+# is a strict superset of the old dict.
+_SITE_ALIASES_FILE = DATA_DIR / "site_aliases.json"
+_site_aliases_store = _JsonStore(_SITE_ALIASES_FILE, dict)
+
+_LEGACY_SITE_ABBREVIATIONS = {
+    "bg": "Brazzers", "rk": "Reality Kings", "ts": "TeamSkeet", "bang": "BangBros",
+}
+
+
+def _seed_site_aliases() -> None:
+    """Migrate the retired matcher.py abbreviation dict into the store (once)."""
+    def _apply(cache: dict) -> bool:
+        changed = False
+        for k, v in _LEGACY_SITE_ABBREVIATIONS.items():
+            if k not in cache:
+                cache[k] = v
+                changed = True
+        return changed
+    _site_aliases_store.mutate(_apply)
+
+
+_seed_site_aliases()
+
+# Lazily-built lookup over known_sites.json: normalize(name) AND
+# normalize(network) → canonical spelling. Invalidated whenever the known-sites
+# store changes (_add_known_site / bulk add) so new matches teach immediately.
+_site_index_cache: dict = {"index": None}
+
+
+def _invalidate_site_index() -> None:
+    _site_index_cache["index"] = None
+
+
+def _site_lookup(name: str) -> Optional[str]:
+    """Resolve a filename site token to a canonical site name (or None).
+
+    Learned aliases win over the known-sites index — a user correction is
+    stronger evidence than a spelling merely seen in past matches.
+    """
+    if not name:
+        return None
+    key = _perf_normalize(str(name))
+    if not key:
+        return None
+    learned = _site_aliases_store.get_key(key)
+    if learned:
+        return learned
+    idx = _site_index_cache["index"]
+    if idx is None:
+        idx = {}
+        for s in _load_known_sites():
+            n = str(s.get("name") or "")
+            net = str(s.get("network") or "")
+            if n:
+                idx.setdefault(_perf_normalize(n), n)
+            if net:
+                idx.setdefault(_perf_normalize(net), net)
+        _site_index_cache["index"] = idx
+    return idx.get(key)
+
+
+def _site_alias_learn(alias: str, canonical: str) -> None:
+    """Persist one site alias→canonical mapping (validated, idempotent)."""
+    key = _perf_normalize(str(alias or ""))
+    canonical = str(canonical or "").strip()
+    if (not key or not canonical or len(key) > 120 or len(canonical) > 200
+            or key == _perf_normalize(canonical)):
+        return
+
+    def _apply(cache: dict) -> bool:
+        if cache.get(key) == canonical:
+            return False
+        cache[key] = canonical
+        return True
+
+    _site_aliases_store.mutate(_apply)
+
+
+# Performer portrait URLs (F7): {normalized name: image_url}, filled
+# OPPORTUNISTICALLY from the search_performer results the alias learner
+# already paid for — never a dedicated API call. Consumed by write_nfo as
+# <actor><thumb>. Same DATA_DIR JSON-store pattern as the alias table.
+_PERFORMER_IMAGES_FILE = DATA_DIR / "performer_images.json"
+_performer_images_store = _JsonStore(_PERFORMER_IMAGES_FILE, dict)
+_PERFORMER_IMAGES_MAX = 10000   # sanity cap — ~1 URL per performer ever seen
+
+
+def _performer_image_lookup(name: str) -> Optional[str]:
+    """Resolve a performer name to a stored portrait URL (or None)."""
+    if not name:
+        return None
+    return _performer_images_store.get_key(_perf_normalize(str(name)))
+
+
+def _performer_image_learn(name: str, image_url) -> None:
+    """Persist one performer→portrait mapping (validated, capped, idempotent)."""
+    key = _perf_normalize(str(name or ""))
+    url = str(image_url or "").strip()
+    if (not key or not url or len(url) > 500
+            or not url.lower().startswith(("http://", "https://"))):
+        return
+
+    def _apply(cache: dict) -> bool:
+        if cache.get(key) == url:
+            return False
+        if key not in cache and len(cache) >= _PERFORMER_IMAGES_MAX:
+            return False
+        cache[key] = url
+        return True
+
+    _performer_images_store.mutate(_apply)
+
 # Per-run cap on TPDB performer lookups while learning — a 300-file confirmed
 # batch must not fan out into hundreds of API calls.
 _ALIAS_LEARN_MAX_LOOKUPS = 5
@@ -3265,6 +3677,67 @@ def _alias_learn(alias: str, canonical: str) -> None:
         return True
 
     _performer_aliases_store.mutate(_apply)
+
+
+def _maybe_submit_fingerprints(scene: dict, file_data: dict) -> int:
+    """F5: schedule an OPT-IN fingerprint contribution for a user-confirmed
+    StashDB match. Returns 1 when a background submission was scheduled, else 0
+    (callers enforce a per-request cap with the sum).
+
+    Hard gates, all must hold:
+      • the "contribute_fingerprints" setting is EXPLICITLY True (default off —
+        with the toggle off this function is a guaranteed no-op, zero traffic);
+      • the scene is StashDB-sourced with a real UUID id;
+      • the file has a validated 16-hex oshash;
+      • a positive duration exists (the stash-box schema requires it).
+    Only content hashes + duration ever leave the machine — never names/paths.
+    """
+    if _load_settings().get("contribute_fingerprints") is not True:
+        return 0
+    if stashdb is None or not isinstance(scene, dict):
+        return 0
+    if (scene.get("source") or "") != "stashdb":
+        return 0
+    scene_id = str(scene.get("id") or "")
+    if not _UUID_RE.fullmatch(scene_id):
+        return 0
+    oshash = file_data.get("oshash")
+    if not (isinstance(oshash, str) and re.fullmatch(r"[0-9a-f]{16}", oshash)):
+        return 0
+    duration = file_data.get("duration_seconds") or scene.get("duration")
+    try:
+        if not duration or float(duration) <= 0:
+            return 0
+    except (TypeError, ValueError):
+        return 0
+    phash = file_data.get("phash")
+    if not (isinstance(phash, str) and re.fullmatch(r"[0-9a-f]{16}", phash)):
+        phash = None
+    asyncio.create_task(stashdb.submit_fingerprint(
+        scene_id, oshash=oshash, phash=phash, duration=duration))
+    return 1
+
+
+def _seed_credit_aliases(scene: dict) -> None:
+    """F6: learn alias→canonical pairs from StashDB per-scene credits — free.
+
+    A credit's ``as`` is the alias the performer was credited under in THIS
+    scene, so the pair needs no TPDB lookup. Only runs on confirmed matches
+    (rename / confirm endpoints) — never on raw auto-matches — so a wrong
+    auto-match can't poison the table. Values are length- and count-capped
+    because /api/confirm-match scenes cross the API boundary.
+    """
+    credits = scene.get("performer_credits")
+    if not isinstance(credits, list):
+        return
+    for credit in credits[:30]:
+        if not isinstance(credit, dict):
+            continue
+        alias = credit.get("as")
+        name = credit.get("name")
+        if (isinstance(alias, str) and isinstance(name, str)
+                and 0 < len(alias) <= 120 and 0 < len(name) <= 120):
+            _alias_learn(alias, name)   # idempotent; identity pairs no-op
 
 
 async def _learn_aliases(pairs: list) -> None:
@@ -3303,6 +3776,10 @@ async def _learn_aliases(pairs: list) -> None:
                 lookups += 1
                 results = await tpdb.search_performer(str(f_perf))
                 for perf in results or []:
+                    # F7: bank every portrait this already-paid-for lookup
+                    # returned — write_nfo turns them into <actor><thumb>.
+                    _performer_image_learn(perf.name, getattr(perf, "image_url", None))
+                for perf in results or []:
                     name_norm = _perf_normalize(perf.name or "")
                     alias_hit = any(_perf_normalize(al) == f_norm
                                     for al in (perf.aliases or []))
@@ -3340,6 +3817,12 @@ async def confirm_match(req: ConfirmMatchRequest):
         raise HTTPException(status_code=400, detail="Scene must have a title")
     source = str(req.scene.get("source") or "manual").strip() or "manual"
     _match_cache_confirm(req.oshash, req.scene, source)
+    # F6: a user-picked scene is ground truth — seed its credit aliases too
+    # (capped + validated inside; scene dicts here cross the API boundary).
+    _seed_credit_aliases(req.scene)
+    # F5 (OPT-IN, default off): a picked StashDB scene is a confirm — the
+    # oshash comes from the validated request; duration from the scene.
+    _maybe_submit_fingerprints(req.scene, {"oshash": req.oshash})
     return {"success": True}
 
 
@@ -3419,7 +3902,7 @@ async def extract_thumbnails(request: ThumbnailRequest):
     try:
         # Get video duration first
         probe_cmd = [
-            "ffprobe", "-v", "error",
+            ffprobe_path(), "-v", "error",
             "-show_entries", "format=duration",
             "-of", "default=noprint_wrappers=1:nokey=1",
             str(file_path)
@@ -3441,7 +3924,7 @@ async def extract_thumbnails(request: ThumbnailRequest):
             
             # Extract frame with ffmpeg
             ffmpeg_cmd = [
-                "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+                ffmpeg_path(), "-hide_banner", "-loglevel", "error", "-y",
                 "-ss", str(timestamp),
                 "-i", str(file_path),
                 "-vframes", "1",
@@ -3525,6 +4008,9 @@ async def write_nfo_endpoint(req: WriteNfoRequest):
         "network":      req.scene_data.get("network", ""),
         "quality":      req.file_data.get("quality", ""),
         "video_format": req.file_data.get("video_format", ""),
+        # NFO round three (F7): provider page link + fanart backdrop.
+        "url":          req.scene_data.get("url", ""),
+        "fanart_url":   req.scene_data.get("fanart_url", ""),
     }
     try:
         write_nfo(file_path, meta)
@@ -3583,6 +4069,11 @@ def write_nfo(file_path: Path, metadata: dict) -> None:
     # ("H.264" → "h264"; "x265" stays "x265").
     codec        = (metadata.get("video_format") or "").strip().lower().replace(".", "")
     height       = _NFO_QUALITY_HEIGHTS.get((metadata.get("quality") or "").strip().lower())
+    # NFO round three (F7): provider page link + fanart backdrop. Both are
+    # plain REFERENCES — AMM never downloads fanart itself, players fetch it
+    # (so AMM_FETCH_POSTERS=0 zero-egress deployments stay zero-egress).
+    scene_url    = (metadata.get("url") or "").strip()
+    fanart_url   = (metadata.get("fanart_url") or "").strip()
 
     root = ET.Element("movie")
     ET.SubElement(root, "title").text         = title
@@ -3621,11 +4112,24 @@ def write_nfo(file_path: Path, metadata: dict) -> None:
         ET.SubElement(root, "thumb", {"aspect": "poster"}).text = poster_path
         art = ET.SubElement(root, "art")
         ET.SubElement(art, "poster").text = poster_path
+    # Provider page link (F7) — Kodi/Jellyfin's standard <url> element.
+    if scene_url:
+        ET.SubElement(root, "url").text = scene_url
+    # Fanart backdrop (F7) — remote-URL form; the player fetches it, AMM never
+    # does. Omitted entirely when the scene has no distinct backdrop image.
+    if fanart_url:
+        fanart_el = ET.SubElement(root, "fanart")
+        ET.SubElement(fanart_el, "thumb").text = fanart_url
     for tag in tags:
         ET.SubElement(root, "tag").text        = tag
     for performer in performers:
         actor_el = ET.SubElement(root, "actor")
         ET.SubElement(actor_el, "name").text   = performer
+        # Actor portrait (F7) — only when the alias learner already banked one;
+        # name-only actors stay exactly as before.
+        actor_thumb = _performer_image_lookup(performer)
+        if actor_thumb:
+            ET.SubElement(actor_el, "thumb").text = actor_thumb
 
     # Stream details (F5) — what Jellyfin/Kodi use for resolution/codec badges
     # and filtering. Only written when at least one field is known.
@@ -3723,7 +4227,7 @@ async def embed_metadata(file_path: Path, metadata: dict) -> tuple[bool, str]:
 
     try:
         cmd = [
-            "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+            ffmpeg_path(), "-hide_banner", "-loglevel", "error", "-y",
             "-i", str(file_path),
             # Map only video, audio, and subtitle streams (? = skip if absent).
             # Deliberately excludes data/timecode streams (codec=none) that
@@ -4080,9 +4584,9 @@ async def save_manual_metadata(req: ManualMetadataRequest, background_tasks: Bac
         "source":       req.source or "manual",
     }
 
-    # "embed_only" writes container tags but NO sidecar (.nfo / -poster.jpg),
-    # so the whole sidecar path below is gated on this.
-    write_sidecar = req.embed_mode != "embed_only"
+    # Container-only modes ("embed_only", "remux_only") write tags but NO
+    # sidecar (.nfo / -poster.jpg), so the whole sidecar path below is gated.
+    write_sidecar = req.embed_mode not in ("embed_only", "remux_only")
 
     # ── Preferred thumbnail → poster (cheap local copies) ───────────────────
     # Done BEFORE the NFO write so the NFO can reference the poster. The
@@ -4242,11 +4746,33 @@ async def get_version():
 @app.get("/api/health")
 async def health_check():
     """
-    Health check endpoint.
+    Health check endpoint. ``tools`` (F2) reports whether each external A/V
+    tool actually resolves (env override or PATH) — the capability "doctor"
+    behind the Settings system-check line.
     """
     return {
         "status": "healthy",
         "version": APP_VERSION,
         "tpdb_configured": tpdb is not None,
         "stashdb_configured": stashdb is not None,
+        "tools": _tool_health(),
     }
+
+
+# Tool availability, cached (health is polled; which() hits the filesystem).
+_tool_health_cache: dict = {"at": 0.0, "data": None}
+
+
+def _tool_health() -> dict:
+    now = _time.time()
+    if _tool_health_cache["data"] is not None and now - _tool_health_cache["at"] < 60:
+        return _tool_health_cache["data"]
+    data = {
+        # ffmpeg/ffprobe resolve via AMM_FFMPEG/AMM_FFPROBE (bundled) or PATH.
+        "ffmpeg":        shutil.which(ffmpeg_path()) is not None,
+        "ffprobe":       shutil.which(ffprobe_path()) is not None,
+        "mkvpropedit":   _mkvpropedit_path() is not None,
+        "atomicparsley": _atomicparsley_path() is not None,
+    }
+    _tool_health_cache.update(at=now, data=data)
+    return data

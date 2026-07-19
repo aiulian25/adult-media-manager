@@ -47,7 +47,9 @@ MP4_LIKE_EXTS: frozenset[str] = frozenset({".mp4", ".m4v", ".mov", ".m4a"})
 #   nfo_only    → sidecar only (no container write)
 #   embed_only  → container tags only, NO sidecar
 #   smart/embed → both (container tags + sidecar)
-EMBED_MODES: frozenset[str] = frozenset({"embed", "smart", "nfo_only", "embed_only"})
+EMBED_MODES: frozenset[str] = frozenset(
+    {"embed", "smart", "nfo_only", "embed_only", "remux_only"}
+)
 
 
 def validate_embed_mode(v: str) -> str:
@@ -151,10 +153,12 @@ def plan_embed(
 
     Args:
         ext: lowercased file extension (e.g. ".mkv").
-        mode: public mode — "nfo_only" | "embed" | "smart" | "embed_only"
-              (aliases: "remux" ≡ embed, "inplace" ≡ smart). "embed_only" shares
-              "smart"'s in-place container plan — the two differ only by whether
-              the app also writes a sidecar, which is decided outside this planner.
+        mode: public mode — "nfo_only" | "embed" | "smart" | "embed_only" |
+              "remux_only" (aliases: "remux" ≡ embed, "inplace" ≡ smart).
+              "embed_only" shares "smart"'s in-place container plan and
+              "remux_only" shares "embed"'s remux plan — each pair differs only
+              by whether the app also writes a sidecar, which is decided
+              outside this planner.
         has_mkvpropedit / has_atomicparsley: whether each in-place tool resolved.
 
     Returns:
@@ -164,7 +168,7 @@ def plan_embed(
 
     if mode == "nfo_only":
         return []
-    if mode in ("embed", "remux"):
+    if mode in ("embed", "remux", "remux_only"):
         return ["remux"]
 
     # "smart" / "inplace" / "embed_only": prefer the fast in-place editor for the

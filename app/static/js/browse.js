@@ -36,7 +36,7 @@ function _browseShowHidden() {
 
 async function loadBrowseDirectory(path) {
     document.getElementById('browse-path').textContent = path;
-    document.getElementById('browse-list').innerHTML = '<div style="text-align:center;padding:20px;">Loading...</div>';
+    document.getElementById('browse-list').innerHTML = `<div style="text-align:center;padding:20px;">${escapeHtml(t('browse.loading'))}</div>`;
 
     try {
         const response = await fetch(`/api/browse?path=${encodeURIComponent(path)}&show_hidden=${_browseShowHidden()}`);
@@ -83,12 +83,12 @@ async function loadBrowseDirectory(path) {
         browseFocusIdx  = -1;
         browseAnchorIdx = -1;
 
-        document.getElementById('browse-list').innerHTML = html || '<div style="text-align:center;padding:20px;color:var(--text-muted);">Empty folder</div>';
+        document.getElementById('browse-list').innerHTML = html || `<div style="text-align:center;padding:20px;color:var(--text-muted);">${escapeHtml(t('browse.empty'))}</div>`;
         updateSelectionCounter();
         updateBrowseBackBtn();
         
     } catch (error) {
-        document.getElementById('browse-list').innerHTML = `<div style="color:var(--error);text-align:center;padding:20px;">Error: ${escapeHtml(error.message)}</div>`;
+        document.getElementById('browse-list').innerHTML = `<div style="color:var(--error);text-align:center;padding:20px;">${escapeHtml(t('browse.error'))} ${escapeHtml(error.message)}</div>`;
     }
 }
 
@@ -256,13 +256,28 @@ function updateSelectionCounter() {
     }
 }
 
+// F12: if the picker was showing hidden entries and the user chose a path with
+// a dot-segment, tick "Include hidden" so the scan can actually see the
+// selection (the scanner skips dot-files unless asked).
+function _maybeEnableHiddenScan(paths) {
+    if (!_browseShowHidden()) return;
+    const hasHidden = paths.some(p => String(p).split('/')
+        .some(seg => seg.length > 1 && seg.startsWith('.') && seg !== '..'));
+    if (hasHidden) {
+        const cb = document.getElementById('include-hidden');
+        if (cb) cb.checked = true;
+    }
+}
+
 function selectBrowseFolder() {
     if (browseSelectionMode === 'folder') {
         scanPath.value = currentBrowsePath;
+        _maybeEnableHiddenScan([currentBrowsePath]);
         browseModal.classList.add('hidden');
     } else if (browseSelectionMode === 'files' && selectedFiles.length > 0) {
         // Set scan path and auto-scan immediately — no extra click needed
         scanPath.value = selectedFiles.map(f => f.path).join(',');
+        _maybeEnableHiddenScan(selectedFiles.map(f => f.path));
         browseModal.classList.add('hidden');
         scanFolder();   // ← auto-trigger
     } else {
@@ -302,7 +317,7 @@ async function openHistoryModal() {
 }
 
 async function loadHistory() {
-    document.getElementById('history-list').innerHTML = '<div style="text-align:center;padding:20px;">Loading...</div>';
+    document.getElementById('history-list').innerHTML = `<div style="text-align:center;padding:20px;">${escapeHtml(t('browse.loading'))}</div>`;
     
     try {
         const response = await fetch('/api/history?limit=50');
@@ -342,7 +357,7 @@ async function loadHistory() {
         document.getElementById('history-list').innerHTML = note + rows;
 
     } catch (error) {
-        document.getElementById('history-list').innerHTML = `<div style="color:var(--error);text-align:center;padding:20px;">Error: ${escapeHtml(error.message)}</div>`;
+        document.getElementById('history-list').innerHTML = `<div style="color:var(--error);text-align:center;padding:20px;">${escapeHtml(t('browse.error'))} ${escapeHtml(error.message)}</div>`;
     }
 }
 
@@ -443,13 +458,55 @@ async function openLibraryModal() {
 }
 
 function _libraryStatTiles(s) {
-    const tile = (labelKey, val) =>
-        `<div class="library-tile"><span class="library-tile-num">${Number(val) || 0}</span>` +
+    const tile = (labelKey, val, raw = false) =>
+        `<div class="library-tile"><span class="library-tile-num">${raw ? val : (Number(val) || 0)}</span>` +
         `<span class="library-tile-label">${escapeHtml(t(labelKey))}</span></div>`;
-    return tile('library.tracked', s.total)
-         + tile('library.organized', s.organized)
-         + tile('library.confirmed', s.confirmed)
-         + tile('library.duplicate_groups', s.duplicates);
+    let html = tile('library.tracked', s.total)
+             + tile('library.organized', s.organized)
+             + tile('library.confirmed', s.confirmed)
+             + tile('library.duplicate_groups', s.duplicates);
+    // F16: what AMM has learned/accumulated on disk + guarded maintenance.
+    const st = s.stores;
+    if (st) {
+        html += `
+            <div class="library-stores-row">
+                <div class="library-stores-title">${escapeHtml(t('library.stores_title'))}</div>
+                ${tile('library.store_cache', st.match_cache.count)}
+                ${tile('library.store_aliases', st.aliases.count)}
+                ${tile('library.store_history', st.history.count)}
+                ${tile('library.store_thumbs', escapeHtml(formatFileSize(st.thumbnails.bytes)), true)}
+                <div class="library-maint-btns">
+                    <button class="glass-btn" id="library-clear-cache">🧹 ${escapeHtml(t('library.clear_cache'))}</button>
+                    <button class="glass-btn" id="library-clear-thumbs">🧹 ${escapeHtml(t('library.clear_thumbs'))}</button>
+                </div>
+            </div>`;
+    }
+    return html;
+}
+
+// F16: guarded maintenance actions. Both endpoints take ZERO parameters —
+// nothing user-controllable reaches the server; the confirm modal is the guard.
+function _libraryMaintenance(kind) {
+    const isCache = kind === 'cache';
+    showConfirmModal(
+        t(isCache ? 'library.clear_cache_confirm' : 'library.clear_thumbs_confirm'),
+        async () => {
+            try {
+                const res = await fetch(
+                    isCache ? '/api/maintenance/clear-match-cache'
+                            : '/api/maintenance/clear-thumbnails',
+                    { method: 'POST' });
+                const j = await res.json();
+                if (!res.ok) throw new Error(j.detail || res.status);
+                showToast(t('nav.library'),
+                    isCache ? t('library.clear_cache_done', { n: j.removed })
+                            : t('library.clear_thumbs_done', { size: formatFileSize(j.freed_bytes) }),
+                    'success');
+                openLibraryModal();   // re-fetch + re-render with post-clear numbers
+            } catch (err) {
+                showToast(t('nav.library'), String(err.message || err), 'error');
+            }
+        });
 }
 
 // A duplicate path is only "removable" here if it's actually in the current
@@ -604,6 +661,10 @@ async function _resolveGroup(gi) {
 // match.js:removeMatchedFile — hides it from the app, never deletes on disk),
 // then re-render so the button disappears for the now-removed path.
 (function initLibraryInput() {
+    document.getElementById('library-stats')?.addEventListener('click', (e) => {
+        if (e.target.closest('#library-clear-cache'))  { _libraryMaintenance('cache');  return; }
+        if (e.target.closest('#library-clear-thumbs')) { _libraryMaintenance('thumbs'); return; }
+    });
     const dupes = document.getElementById('library-dupes');
     if (!dupes) return;
     dupes.addEventListener('click', (e) => {

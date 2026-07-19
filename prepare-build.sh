@@ -16,7 +16,18 @@ cd "$(dirname "$0")"
 # ── Config ────────────────────────────────────────────────────────────────────
 PY_VERSION="3.12.13"
 BUILD_DATE="20260602"
-ARCH="x86_64"
+# Target CPU architecture (F18). x86_64 (default) or aarch64:
+#   bash prepare-build.sh                      → x64 assets (unchanged)
+#   AMM_BUILD_ARCH=aarch64 bash prepare-build.sh → arm64 assets (cross-stage)
+# The bundled dirs are OVERWRITTEN per run — build the matching electron
+# artifact immediately after each pass:
+#   bash prepare-build.sh && npm run build
+#   AMM_BUILD_ARCH=aarch64 bash prepare-build.sh && npm run build:arm64
+ARCH="${AMM_BUILD_ARCH:-x86_64}"
+case "$ARCH" in x86_64|aarch64) ;; *) echo "AMM_BUILD_ARCH must be x86_64 or aarch64"; exit 1;; esac
+HOST_ARCH="$(uname -m)"
+CROSS=""
+[ "$ARCH" != "$HOST_ARCH" ] && CROSS=1
 TARBALL="cpython-${PY_VERSION}+${BUILD_DATE}-${ARCH}-unknown-linux-gnu-install_only_stripped.tar.gz"
 ENCODED_TARBALL="cpython-${PY_VERSION}%2B${BUILD_DATE}-${ARCH}-unknown-linux-gnu-install_only_stripped.tar.gz"
 DOWNLOAD_URL="https://github.com/astral-sh/python-build-standalone/releases/download/${BUILD_DATE}/${ENCODED_TARBALL}"
@@ -24,13 +35,18 @@ DOWNLOAD_URL="https://github.com/astral-sh/python-build-standalone/releases/down
 PYTHON_DIR="bundled-python"
 PACKAGES_DIR="bundled-packages"
 
+echo "Target arch: ${ARCH}$( [ -n "$CROSS" ] && echo ' (cross-staging on '"$HOST_ARCH"')' )"
+
 # ── Download standalone Python ────────────────────────────────────────────────
+# Arch marker instead of executing the binary — a cross-staged aarch64 python
+# cannot run on the build host.
+PY_MARKER="${PYTHON_DIR}/.amm-py"
+WANT_PY="${PY_VERSION}-${ARCH}"
 if [ -x "${PYTHON_DIR}/bin/python3" ]; then
-    CURRENT_VER=$("${PYTHON_DIR}/bin/python3" --version 2>&1 | awk '{print $2}')
-    if [ "$CURRENT_VER" = "$PY_VERSION" ]; then
-        echo "✓ Bundled Python ${PY_VERSION} already present — skipping download"
+    if [ "$(cat "$PY_MARKER" 2>/dev/null)" = "$WANT_PY" ]; then
+        echo "✓ Bundled Python ${WANT_PY} already present — skipping download"
     else
-        echo "→ Found ${CURRENT_VER}, re-downloading ${PY_VERSION}..."
+        echo "→ Bundled python is not ${WANT_PY} — re-downloading..."
         rm -rf "$PYTHON_DIR"
     fi
 fi
@@ -54,32 +70,48 @@ if [ ! -x "${PYTHON_DIR}/bin/python3" ]; then
     find "${PYTHON_DIR}" -name "*.pyc" -delete
     find "${PYTHON_DIR}" -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
 
-    echo "✓ Python ${PY_VERSION} standalone ready"
+    echo "$WANT_PY" > "$PY_MARKER"
+    echo "✓ Python ${PY_VERSION} standalone (${ARCH}) ready"
 fi
 
 # ── Install packages ──────────────────────────────────────────────────────────
 # --target installs flat into the directory — no venv, no symlinks, no ABI path issues.
 # We use the BUNDLED Python so all compiled extensions (.so) match exactly.
-REQ_HASH=$(sha256sum requirements.txt | awk '{print $1}')
+REQ_HASH="$(sha256sum requirements.txt | awk '{print $1}')-${ARCH}"
 HASH_FILE="${PACKAGES_DIR}/.req-hash"
 
 if [ -d "$PACKAGES_DIR" ] && [ -f "$HASH_FILE" ] && [ "$(cat "$HASH_FILE")" = "$REQ_HASH" ]; then
-    echo "✓ Packages up to date (requirements.txt unchanged)"
+    echo "✓ Packages up to date (requirements.txt unchanged, ${ARCH})"
 else
-    echo "→ Installing packages into ${PACKAGES_DIR}/ ..."
+    echo "→ Installing packages into ${PACKAGES_DIR}/ (${ARCH}) ..."
     rm -rf "$PACKAGES_DIR"
     mkdir -p "$PACKAGES_DIR"
 
-    "${PYTHON_DIR}/bin/pip3" install \
-        --target="${PACKAGES_DIR}" \
-        --no-deps \
-        --quiet \
-        pip setuptools wheel
+    if [ -n "$CROSS" ]; then
+        # Cross-stage (F18): the bundled aarch64 python can't run here, so the
+        # HOST python downloads prebuilt manylinux aarch64 wheels only — no
+        # source builds can slip in (--only-binary=:all: makes a missing wheel
+        # a HARD ERROR rather than a silently wrong-arch package).
+        python3 -m pip install \
+            --target="${PACKAGES_DIR}" \
+            --platform manylinux2014_aarch64 \
+            --only-binary=:all: \
+            --python-version "${PY_VERSION%.*}" \
+            --implementation cp \
+            --quiet \
+            -r requirements.txt
+    else
+        "${PYTHON_DIR}/bin/pip3" install \
+            --target="${PACKAGES_DIR}" \
+            --no-deps \
+            --quiet \
+            pip setuptools wheel
 
-    "${PYTHON_DIR}/bin/pip3" install \
-        --target="${PACKAGES_DIR}" \
-        --quiet \
-        -r requirements.txt
+        "${PYTHON_DIR}/bin/pip3" install \
+            --target="${PACKAGES_DIR}" \
+            --quiet \
+            -r requirements.txt
+    fi
 
     # Remove pip/setuptools from the bundle — not needed at runtime
     rm -rf "${PACKAGES_DIR}/pip" "${PACKAGES_DIR}/pip-"* \
@@ -110,6 +142,12 @@ rm -rf "$TOOLS_DIR"
 mkdir -p "$TOOLS_DIR/bin" "$TOOLS_DIR/lib"
 
 MKV_SRC="$(command -v mkvpropedit || true)"
+if [ -n "$CROSS" ]; then
+    echo "⚠ Cross-staging ${ARCH}: skipping mkvpropedit/AtomicParsley bundling (host"
+    echo "  binaries are ${HOST_ARCH}; ldd cannot resolve cross-arch). deb/rpm declare"
+    echo "  them as dependencies and the embed planner falls back to the ffmpeg remux."
+    MKV_SRC=""
+fi
 if [ -n "$MKV_SRC" ]; then
     echo "→ Bundling mkvpropedit from ${MKV_SRC} ..."
     cp -L "$MKV_SRC" "$TOOLS_DIR/bin/mkvpropedit.bin"
@@ -149,6 +187,7 @@ fi
 # the build host: the backend then falls back to PATH and finally the ffmpeg
 # remux, and the deb additionally declares atomicparsley as a dependency.
 AP_SRC="$(command -v AtomicParsley || command -v atomicparsley || true)"
+[ -n "$CROSS" ] && AP_SRC=""
 if [ -n "$AP_SRC" ]; then
     echo "→ Bundling AtomicParsley from ${AP_SRC} ..."
     cp -L "$AP_SRC" "$TOOLS_DIR/bin/AtomicParsley.bin"
@@ -177,11 +216,108 @@ else
     echo "  remux. To bundle it: sudo apt-get install atomicparsley && re-run."
 fi
 
+# ── Bundle ffmpeg + ffprobe (remux embed mode, probes, thumbnails, pHash) ──────
+# Remux is the DEFAULT metadata mode, so ffmpeg must be guaranteed on every
+# target: Docker apt-installs it, deb/rpm declare it as a dependency, and the
+# AppImage — "any distro, no root" — gets it bundled here (F2).
+#
+# PREFERRED: the johnvansickle STATIC build — two self-contained binaries, no
+# shared libs, no launcher, no host-lib drift, ~160 MB unpacked vs ~200 MB of
+# ldd-copied system libs. Pinned by sha256; the tarball is cached in /tmp so
+# re-runs don't re-download. FALLBACK (download/verify failure): ldd-copy the
+# host ffmpeg with the same launcher mechanism as mkvpropedit above.
+FFSTATIC_VERSION="7.0.2"
+# Per-arch static builds from the same source (F18): both sha256-pinned.
+case "$ARCH" in
+    aarch64) FFSTATIC_ARCHNAME="arm64"
+             FFSTATIC_SHA256="f4149bb2b0784e30e99bdda85471c9b5930d3402014e934a5098b41d0f7201b1" ;;
+    *)       FFSTATIC_ARCHNAME="amd64"
+             FFSTATIC_SHA256="abda8d77ce8309141f83ab8edf0596834087c52467f6badf376a6a2a4c87cf67" ;;
+esac
+FFSTATIC_URLS="https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-${FFSTATIC_ARCHNAME}-static.tar.xz
+https://johnvansickle.com/ffmpeg/old-releases/ffmpeg-${FFSTATIC_VERSION}-${FFSTATIC_ARCHNAME}-static.tar.xz"
+FFSTATIC_TAR="/tmp/amm-ffmpeg-${FFSTATIC_VERSION}-${FFSTATIC_ARCHNAME}-static.tar.xz"
+FF_MARKER="$TOOLS_DIR/.amm-ffmpeg"
+WANT_FF="${FFSTATIC_VERSION}-${FFSTATIC_ARCHNAME}"
+
+ffmpeg_static_ok=""
+if [ -x "$TOOLS_DIR/bin/ffmpeg" ] && [ "$(cat "$FF_MARKER" 2>/dev/null)" = "$WANT_FF" ]; then
+    echo "✓ Static ffmpeg ${WANT_FF} already bundled"
+    ffmpeg_static_ok=1
+else
+    for url in $FFSTATIC_URLS; do
+        if [ ! -f "$FFSTATIC_TAR" ] || ! echo "${FFSTATIC_SHA256}  ${FFSTATIC_TAR}" | sha256sum -c --quiet - 2>/dev/null; then
+            echo "→ Downloading static ffmpeg ${FFSTATIC_VERSION} (~40 MB) from ${url%%/releases*}… "
+            curl -fL --progress-bar -o "$FFSTATIC_TAR" "$url" || { rm -f "$FFSTATIC_TAR"; continue; }
+        fi
+        if echo "${FFSTATIC_SHA256}  ${FFSTATIC_TAR}" | sha256sum -c --quiet - 2>/dev/null; then
+            echo "→ Extracting static ffmpeg + ffprobe (sha256 verified) ..."
+            TMP_FF="$(mktemp -d)"
+            tar -xJf "$FFSTATIC_TAR" -C "$TMP_FF" --strip-components=1 \
+                "ffmpeg-${FFSTATIC_VERSION}-${FFSTATIC_ARCHNAME}-static/ffmpeg" \
+                "ffmpeg-${FFSTATIC_VERSION}-${FFSTATIC_ARCHNAME}-static/ffprobe"
+            install -m 755 "$TMP_FF/ffmpeg" "$TOOLS_DIR/bin/ffmpeg"
+            install -m 755 "$TMP_FF/ffprobe" "$TOOLS_DIR/bin/ffprobe"
+            rm -rf "$TMP_FF"
+            echo "$WANT_FF" > "$FF_MARKER"
+            echo "✓ Static ffmpeg + ffprobe ${WANT_FF} bundled"
+            ffmpeg_static_ok=1
+            break
+        else
+            echo "⚠ sha256 mismatch for ${url} — trying next source"
+            rm -f "$FFSTATIC_TAR"
+        fi
+    done
+fi
+
+if [ -z "$ffmpeg_static_ok" ] && [ -n "$CROSS" ]; then
+    echo "✗ Cross-staging ${ARCH}: static ffmpeg is REQUIRED (no ldd fallback cross-arch)."
+    exit 1
+fi
+if [ -z "$ffmpeg_static_ok" ]; then
+    echo "⚠ Static ffmpeg unavailable — falling back to ldd-copying the host build."
+    FF_EXCLUDE='^(ld-linux.*|libc|libm|libdl|libpthread|librt|libresolv|libutil)\.so'
+    for FTOOL in ffmpeg ffprobe; do
+        FT_SRC="$(command -v "$FTOOL" || true)"
+        if [ -n "$FT_SRC" ]; then
+            echo "→ Bundling ${FTOOL} from ${FT_SRC} ..."
+            cp -L "$FT_SRC" "$TOOLS_DIR/bin/${FTOOL}.bin"
+            chmod +x "$TOOLS_DIR/bin/${FTOOL}.bin"
+            ldd "$FT_SRC" | awk '/=> \// {print $3}' | sort -u | while read -r lib; do
+                base="$(basename "$lib")"
+                echo "$base" | grep -qE "$FF_EXCLUDE" && continue
+                [ -e "$TOOLS_DIR/lib/$base" ] || cp -L "$lib" "$TOOLS_DIR/lib/" 2>/dev/null || true
+            done
+            cat > "$TOOLS_DIR/bin/${FTOOL}" <<'WRAP'
+#!/bin/sh
+HERE="$(dirname "$(readlink -f "$0")")"
+export LD_LIBRARY_PATH="$HERE/../lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+exec "$HERE/$(basename "$0").bin" "$@"
+WRAP
+            chmod +x "$TOOLS_DIR/bin/${FTOOL}"
+            echo "✓ ${FTOOL} bundled (ldd)"
+        else
+            echo "⚠ ${FTOOL} not found on build host — the AppImage will rely on the"
+            echo "  host's ${FTOOL} (if any); remux/probe features degrade without it."
+        fi
+    done
+fi
+echo "  bundled-tools total: $(du -sh "$TOOLS_DIR" | awk '{print $1}')"
+
 # ── Summary ───────────────────────────────────────────────────────────────────
-PY_ACTUAL=$("${PYTHON_DIR}/bin/python3" --version)
+# Cross-staged binaries can't execute on the build host — report the marker.
+if [ -n "$CROSS" ]; then
+    PY_ACTUAL="Python $(cat "$PY_MARKER" 2>/dev/null || echo "${PY_VERSION}-${ARCH}")"
+else
+    PY_ACTUAL=$("${PYTHON_DIR}/bin/python3" --version)
+fi
 echo ""
 echo "Build assets ready:"
 echo "  Python: ${PY_ACTUAL}  →  ${PYTHON_DIR}/"
 echo "  Packages ($(du -sh "${PACKAGES_DIR}" | awk '{print $1}')) →  ${PACKAGES_DIR}/"
 echo ""
-echo "Now run: npm run build"
+if [ -n "$CROSS" ]; then
+    echo "Now run: npm run build:arm64   (assets staged for ${ARCH})"
+else
+    echo "Now run: npm run build"
+fi

@@ -503,10 +503,21 @@ function _fillAlternatives(panel, index) {
         row.className = 'match-alt-row';
         const info = document.createElement('span');
         info.className = 'match-alt-info';
-        info.textContent = [alt.title, alt.site, alt.release_date]
+        const title = document.createElement('b');
+        title.textContent = alt.title || '';
+        info.appendChild(title);
+        // Performers cap at 3 so one gang scene can't turn the row into a wall.
+        const perfs = Array.isArray(alt.performers) ? alt.performers : [];
+        const perfText = perfs.slice(0, 3).join(', ')
+            + (perfs.length > 3 ? ` +${perfs.length - 3}` : '');
+        const meta = document.createElement('span');
+        meta.className = 'match-alt-meta';
+        const metaText = [alt.site, perfText, alt.release_date]
             .filter(Boolean).join(' · ');
+        meta.textContent = (title.textContent && metaText ? ' — ' : '') + metaText;
+        info.appendChild(meta);
         const useBtn = document.createElement('button');
-        useBtn.className = 'glass-btn match-action-btn match-alt-use';
+        useBtn.className = 'glass-btn match-alt-use';
         useBtn.textContent = t('match.use_this');
         useBtn.addEventListener('click', () => useAlternative(index, altIdx));
         row.appendChild(info);

@@ -4,7 +4,7 @@ FROM python:3.11-slim
 # Single version source for the image: the ARG default feeds the LABEL AND the
 # runtime ENV (read by app.main._resolve_app_version + docker-entrypoint.sh), so a
 # release bump changes ONE line here. Keep it in sync with package.json's version.
-ARG AMM_VERSION=1.11.0
+ARG AMM_VERSION=1.12.0
 
 LABEL maintainer="Adult Media Manager <app@adultmediamanager.local>"
 LABEL description="Adult media metadata organizer with TPDB integration"

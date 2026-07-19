@@ -65,7 +65,7 @@ def resolve_collision(
     new_path: Path,
     policy: str,
     reserved: set[str],
-) -> tuple[Optional[Path], Optional[str]]:
+) -> tuple[Optional[Path], Optional[str], bool]:
     """Apply the batch collision policy BEFORE executing a rename (F1).
 
     A collision is ``new_path`` existing on disk OR already claimed by an
@@ -73,30 +73,32 @@ def resolve_collision(
     a collision — :func:`execute_rename` treats it as a no-op success (the file
     is already organized), and suffixing it would pointlessly rename it.
 
-    Returns ``(path_to_use, skip_code)``:
-      • no collision            → ``(new_path, None)``
+    Returns ``(path_to_use, skip_code, collision_resolved)`` — the third element
+    is True only when the suffix policy actually CHANGED the path (F10: the
+    preflight modal calls these out explicitly):
+      • no collision            → ``(new_path, None, False)``
       • policy ``"suffix"``     → first free `` (N)`` slot, N=2..99 (F9 reserves
-        the byte budget for exactly this suffix); exhausted → ``(None,
-        "no_free_suffix")``
-      • policy ``"skip"``       → ``(None, "target_exists")``
-      • policy ``"fail"``       → ``(new_path, None)`` — execute_rename then
-        fails with today's exact "Target file already exists" error.
+        the byte budget for exactly this suffix) → ``(cand, None, True)``;
+        exhausted → ``(None, "no_free_suffix", False)``
+      • policy ``"skip"``       → ``(None, "target_exists", False)``
+      • policy ``"fail"``       → ``(new_path, None, False)`` — execute_rename
+        then fails with today's exact "Target file already exists" error.
     """
     try:
         if old_path.resolve() == new_path.resolve():
-            return new_path, None
+            return new_path, None, False
     except OSError:
         pass
     collides = new_path.exists() or str(new_path) in reserved
     if not collides or policy == "fail":
-        return new_path, None
+        return new_path, None, False
     if policy == "skip":
-        return None, "target_exists"
+        return None, "target_exists", False
     for n in range(2, 100):
         cand = new_path.with_name(f"{new_path.stem} ({n}){new_path.suffix}")
         if not cand.exists() and str(cand) not in reserved:
-            return cand, None
-    return None, "no_free_suffix"
+            return cand, None, True
+    return None, "no_free_suffix", False
 
 
 def execute_rename(

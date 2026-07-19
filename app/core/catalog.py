@@ -169,7 +169,15 @@ class Catalog:
                         -- didn't compute one (AMM_SCAN_PHASH off): NULL must not
                         -- wipe an existing hash. A pHash-on rescan (non-NULL)
                         -- refreshes it, so in-place re-encodes still update.
-                        phash=COALESCE(excluded.phash, files.phash),
+                        -- EXCEPT when the byte size changed: the old hash was
+                        -- computed from different bytes and is stale — keeping
+                        -- it would poison dedup grouping and match-time reuse
+                        -- (F3), where the stored size would "verify" a hash
+                        -- that no longer describes the file.
+                        phash=CASE WHEN files.size IS NOT excluded.size
+                                   THEN excluded.phash
+                                   ELSE COALESCE(excluded.phash, files.phash)
+                              END,
                         size=excluded.size,
                         duration=excluded.duration,
                         normalized_filename=excluded.normalized_filename,
@@ -181,6 +189,29 @@ class Catalog:
                 self._conn.commit()
         except Exception as e:
             print(f"WARNING: catalog upsert_scanned failed: {e}")
+
+    def get_phash(self, path: str, size: Optional[int] = None) -> Optional[str]:
+        """Return the stored pHash for ``path``, or None.
+
+        When ``size`` is given, the hash is returned only if the stored byte
+        size matches — bytes changed since the scan means the hash is stale
+        and must not be reused (F3 match-time reuse).
+        """
+        if not self._conn or not path:
+            return None
+        try:
+            with self._lock:
+                row = self._conn.execute(
+                    "SELECT phash, size FROM files WHERE path=?", (path,)
+                ).fetchone()
+        except Exception as e:
+            print(f"WARNING: catalog get_phash failed: {e}")
+            return None
+        if not row or not row["phash"]:
+            return None
+        if size is not None and row["size"] != size:
+            return None
+        return row["phash"]
 
     def get_states(self, paths: list[str]) -> dict[str, dict]:
         """Return per-path match state for the given paths (only those present).

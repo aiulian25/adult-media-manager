@@ -38,6 +38,10 @@ class AdultDetectionResult:
     #   tokens:          unique word tokens of normalized_name (cheap pre-filter).
     normalized_name: str = ""
     tokens: list[str] = field(default_factory=list)
+    # F8: "folder" when site/title/date were (partly) inferred from an ancestor
+    # directory name rather than the filename; None otherwise. The UI shows a
+    # subtle hint so the user knows where the guess came from.
+    context_source: Optional[str] = None
 
 
 # Video file extensions — all formats the scanner will consider
@@ -253,16 +257,68 @@ def parse_date(date_str: str) -> tuple[Optional[str], Optional[int]]:
     return None, None
 
 
-def detect(path: Path) -> AdultDetectionResult:
+def _apply_folder_context(det: AdultDetectionResult, path: Path,
+                          known_sites: Optional[set]) -> None:
+    """F8: fill detection gaps from up to two ancestor directory names.
+
+    Only runs when the filename yielded no site. Filename-derived fields are
+    never overwritten: a "Site - Title (Date)"-shaped folder supplies the site,
+    plus title/date only when the filename produced no structure at all (no
+    performers, no date — i.e. the generic-fallback case where scene_title is
+    just the cleaned stem); a folder whose normalized name is in the injected
+    ``known_sites`` set supplies the site alone. Mutates ``det`` in place and
+    stamps ``context_source = "folder"`` when anything was filled.
+    """
+    if det.site:
+        return
+    # "Unstructured" = the generic fallback ran: its scene_title is merely the
+    # cleaned stem, so a folder-shaped title is strictly better information.
+    unstructured = not det.performers and det.release_date is None
+    candidates = []
+    for parent in (path.parent, path.parent.parent):
+        name = parent.name.strip() if parent is not None and parent.name else ""
+        if name:
+            candidates.append(name)
+    for name in candidates[:2]:
+        st = _try_site_title(name)
+        if st:
+            f_site, f_title, f_date, f_year = st
+            det.site = f_site
+            if unstructured and f_title:
+                det.scene_title = f_title
+            if det.release_date is None and f_date:
+                det.release_date = f_date
+                det.year = f_year
+            det.context_source = "folder"
+            return
+        if known_sites and normalize(name) in known_sites:
+            det.site = name
+            det.context_source = "folder"
+            return
+
+
+def detect(path: Path, known_sites: Optional[set] = None) -> AdultDetectionResult:
     """
     Detect adult scene metadata from filename.
-    
+
     Args:
         path: File path
-        
+        known_sites: optional set of NORMALIZED site names (injected by the
+            caller — this module stays storage-free, mirroring matcher's
+            alias_resolver pattern). Used only for folder-context gap-fill
+            (F8) when the filename itself yields no site.
+
     Returns:
         AdultDetectionResult with extracted metadata
     """
+    det = _detect_filename(path)
+    if det.site is None:
+        _apply_folder_context(det, path, known_sites)
+    return det
+
+
+def _detect_filename(path: Path) -> AdultDetectionResult:
+    """Filename-only detection (the pre-F8 ``detect`` body, unchanged)."""
     filename = path.stem  # Remove extension
     original = filename
     

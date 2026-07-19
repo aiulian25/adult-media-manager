@@ -1,6 +1,6 @@
 {
   "name": "adult-media-manager",
-  "version": "1.11.0",
+  "version": "1.12.0",
   "desktopName": "adult-media-manager.desktop",
   "description": "Adult Media Manager — Smart metadata organizer for adult content",
   "main": "electron/main.js",
@@ -11,7 +11,8 @@
   "homepage": "https://github.com/adult-media-manager/adult-media-manager",
   "scripts": {
     "start": "electron .",
-    "build": "electron-builder --linux"
+    "build": "electron-builder --linux",
+    "build:arm64": "electron-builder --linux AppImage:arm64 deb:arm64 rpm:arm64"
   },
   "build": {
     "appId": "com.adult-media-manager.app",

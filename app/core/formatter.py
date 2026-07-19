@@ -16,7 +16,7 @@ from typing import Optional, Any
 TEMPLATE_VARS: frozenset[str] = frozenset({
     "site", "network", "performer", "performers", "scene", "title", "id",
     "clean_name", "date", "year", "month", "day", "quality", "vf", "source", "group",
-    "duration",
+    "duration", "code",
 })
 
 
@@ -160,7 +160,14 @@ def apply_template(template: str, bindings: dict[str, Any]) -> str:
     result = re.sub(r'/+', '/', result)  # Multiple slashes
     result = re.sub(r'\s*\(\s*\)', '', result)  # Empty parens
     result = re.sub(r'\s*\[\s*\]', '', result)  # Empty brackets
-    result = result.strip(' -/')
+    # Dot runs from empty dot-separated bindings ("{site}.{code}.{scene}" with
+    # no code → "Site..Scene"). Collapsing also means a component can never be
+    # the ".." traversal name. Component-edge dots ("/." , "./") drop too, so
+    # an empty leading binding can't produce a hidden dotfile.
+    result = re.sub(r'\.\.+', '.', result)
+    result = re.sub(r'/\.+', '/', result)   # leading dots in a component
+    result = re.sub(r'\.+/', '/', result)   # trailing dots in a component
+    result = result.strip(' -/.')
     
     return result
 
@@ -219,16 +226,21 @@ def build_new_path(
     template: str,
     bindings: dict[str, Any],
     output_dir: Optional[Path] = None,
+    report: Optional[dict] = None,
 ) -> Path:
     """
     Build new file path from template.
-    
+
     Args:
         original_path: Original file path
         template: Naming template
         bindings: Template variables
         output_dir: Output directory (default: same as original)
-        
+        report: optional out-param dict (F10) — filled with
+            ``{"truncated": bool}``: True when any component was shortened to
+            fit the 255-byte NAME_MAX budget, so the preflight modal can call
+            it out before the user commits.
+
     Returns:
         New file path
     """
@@ -253,8 +265,11 @@ def build_new_path(
     # extension plus 8 bytes for a collision suffix (" (NN)", F1) so appending
     # either can never push it back over NAME_MAX.
     reserve_last = len(extension.encode("utf-8")) + 8
-    parts = ([_truncate_component(p) for p in parts[:-1]]
-             + [_truncate_component(parts[-1], reserve=reserve_last)])
+    budgeted = ([_truncate_component(p) for p in parts[:-1]]
+                + [_truncate_component(parts[-1], reserve=reserve_last)])
+    if report is not None:
+        report["truncated"] = budgeted != parts
+    parts = budgeted
 
     parts[-1] = parts[-1] + extension
 
@@ -319,6 +334,9 @@ def extract_template_vars(
     return {
         "site": scene_data.get("site") or file_data.get("site", ""),
         "network": scene_data.get("network", ""),
+        # Studio's canonical scene code (StashDB `code`, F6). TPDB scenes lack
+        # the key → empty string, and apply_template collapses the empty slot.
+        "code": scene_data.get("code") or "",
         "performers": performers,
         "scene": scene_title,
         "id": scene_data.get("id", ""),

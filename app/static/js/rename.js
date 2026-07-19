@@ -55,7 +55,7 @@ async function renameFiles() {
             // at the correct destination — those are silently skipped during the rename.
             const degenerate = pvData.previews.find(p => p.degenerate);
             if (degenerate) {
-                showStatus('Template error: destination filename is empty — edit the template before renaming.', 'error');
+                showStatus(t('rename.template_empty_error'), 'error');
                 progressFill.style.width = '0%';
                 btnRename.disabled = false;
                 return;
@@ -63,7 +63,7 @@ async function renameFiles() {
             // Warn (but don't block) if every sampled file is already at its destination.
             const allSame = pvData.previews.length > 0 && pvData.previews.every(p => p.same_as_source);
             if (allSame) {
-                showStatus('Note: sampled files appear to already be at the correct destination.', 'info');
+                showStatus(t('rename.already_at_dest_note'), 'info');
             }
         }
         // If the endpoint is unreachable, fall through to the full test pass.
@@ -102,46 +102,86 @@ function _showRenamePreviewModal(testResults, operations, actionType, embedMode 
     const btnCancel = document.getElementById('preview-modal-cancel');
     const btnClose  = document.getElementById('preview-modal-close');
 
-    // Partition results into three buckets:
-    //  • skips  — old_path === new_path (already at destination, no-op)
-    //  • moves  — success and actually changing path
-    //  • errors — failed
-    const skips  = testResults.filter(r =>  r.success && r.old_path === r.new_path);
-    const moves  = testResults.filter(r =>  r.success && r.old_path !== r.new_path);
-    const errors = testResults.filter(r => !r.success);
+    // Partition results into four buckets:
+    //  • skips       — old_path === new_path (already at destination, no-op)
+    //  • policySkips — collision policy "skip" refused the target (⏭, neutral)
+    //  • moves       — success and actually changing path
+    //  • errors      — failed for a real reason
+    const skips       = testResults.filter(r =>  r.success && r.old_path === r.new_path);
+    const moves       = testResults.filter(r =>  r.success && r.old_path !== r.new_path);
+    const policySkips = testResults.filter(r => !r.success &&  r.skipped);
+    const errors      = testResults.filter(r => !r.success && !r.skipped);
+    // Whole-batch preflight callouts (F10): names the suffix policy changed
+    // and names shortened to the 255-byte filesystem budget.
+    const collisions  = moves.filter(r => r.collision_resolved);
+    const truncated   = testResults.filter(r => r.success && r.truncated);
 
+    const verbKey = { move: 'rename.will_move', copy: 'rename.will_copy',
+                      hardlink: 'rename.will_hardlink', symlink: 'rename.will_symlink' }[actionType]
+                    || 'rename.will_move';
     const parts = [];
-    if (moves.length)  parts.push(`${moves.length} file${moves.length  !== 1 ? 's' : ''} will be ${actionType}d`);
-    if (errors.length) parts.push(`${errors.length} will fail (see below)`);
-    if (skips.length)  parts.push(`${skips.length} already at destination — will skip`);
-    summary.textContent = parts.join(' · ') || 'Nothing to do.';
+    if (moves.length)  parts.push(t(verbKey, { n: moves.length }));
+    if (errors.length) parts.push(t('rename.will_fail', { n: errors.length }));
+    if (policySkips.length) parts.push(t('rename.will_skip_exists', { n: policySkips.length }));
+    if (skips.length)  parts.push(t('rename.will_skip', { n: skips.length }));
+    summary.textContent = parts.join(' · ') || t('rename.nothing_to_do');
 
     // Only render errors and actual moves inline; collapse skips into a
     // single summary line so they don't drown out the important rows.
     const renderRow = (r) => {
         const samePlace = r.old_path === r.new_path;
         if (samePlace) return ''; // rendered separately below
+        // Policy skip (⏭): neutral, not an error — the collision policy chose
+        // to leave this file alone because the target name already exists.
+        if (!r.success && r.skipped) {
+            return `
+            <div style="border:1px solid rgba(255,165,0,.3);border-radius:8px;padding:.6rem .9rem;font-size:.8rem;line-height:1.5">
+                <div style="color:var(--text-muted)">
+                    ⏭ <span style="color:var(--text)">${escapeHtml(r.old_path)}</span><br>
+                    ${escapeHtml(t('rename.skipped_exists'))}
+                </div>
+            </div>`;
+        }
         const colour = r.success ? 'rgba(0,255,136,.25)' : 'rgba(255,71,87,.35)';
         return `
             <div style="border:1px solid ${colour};border-radius:8px;padding:.6rem .9rem;font-size:.8rem;line-height:1.5">
                 <div style="color:var(--text-muted);margin-bottom:.2rem">
                     ${r.success ? '✅' : '❌'} From: <span style="color:var(--text)">${escapeHtml(r.old_path)}</span>
                 </div>
-                ${r.new_path ? `<div>→ To: <strong>${escapeHtml(r.new_path)}</strong></div>` : ''}
+                ${r.new_path ? `<div>→ To: <strong>${escapeHtml(r.new_path)}</strong>${r.collision_resolved ? ' <span title="' + escapeHtml(t('rename.preview_collisions', { n: 1 })) + '">🔀</span>' : ''}</div>` : ''}
                 ${r.error    ? `<div style="color:var(--error);margin-top:.2rem">⚠ ${escapeHtml(r.error)}</div>` : ''}
             </div>`;
     };
 
-    let html = testResults.map(renderRow).join('');
+    // Preflight callout blocks (F10) — shown ABOVE the rows so a collision at
+    // batch position 250 is impossible to miss.
+    const basename = (p) => (p || '').split('/').pop();
+    let html = '';
+    if (collisions.length) {
+        html += `
+            <div style="border:1px solid rgba(255,165,0,.45);border-radius:8px;padding:.6rem .9rem;
+                        font-size:.8rem;line-height:1.5">
+                🔀 <strong>${escapeHtml(t('rename.preview_collisions', { n: collisions.length }))}</strong><br>
+                <span style="color:var(--text-muted)">${collisions.map(r => escapeHtml(basename(r.new_path))).join(' · ')}</span>
+            </div>`;
+    }
+    if (truncated.length) {
+        html += `
+            <div style="border:1px solid rgba(255,165,0,.45);border-radius:8px;padding:.6rem .9rem;
+                        font-size:.8rem;line-height:1.5">
+                ✂️ <strong>${escapeHtml(t('rename.preview_truncated', { n: truncated.length }))}</strong><br>
+                <span style="color:var(--text-muted)">${truncated.map(r => escapeHtml(basename(r.new_path))).join(' · ')}</span>
+            </div>`;
+    }
+    html += testResults.map(renderRow).join('');
 
     if (skips.length) {
         html += `
             <div style="border:1px solid rgba(255,165,0,.3);border-radius:8px;padding:.6rem .9rem;
                         font-size:.8rem;color:var(--text-muted);line-height:1.5">
-                ⏭ ${skips.length} file${skips.length !== 1 ? 's are' : ' is'} already named exactly
-                as the selected template would produce — nothing to rename.<br>
-                <strong style="color:var(--text)">Choose a different template</strong> to give them a new name.
-                For example: <code>{site}.{scene}.{quality}</code> or <code>{site} - {performer} - {scene}</code>.
+                ⏭ ${escapeHtml(t('rename.skips_exact', { n: skips.length }))}<br>
+                <strong style="color:var(--text)">${escapeHtml(t('rename.skip_advice'))}</strong>
+                <code>{site}.{scene}.{quality}</code> · <code>{site} - {performer} - {scene}</code>
             </div>`;
     }
 
@@ -362,9 +402,9 @@ function _showUnmatchedPanel() {
     const header = document.createElement('div');
     header.style.cssText = 'display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;';
     header.innerHTML = `
-        <h3 style="margin:0;color:var(--error);">⚠ ${remaining} unmatched file${remaining !== 1 ? 's' : ''} — action required</h3>
+        <h3 style="margin:0;color:var(--error);">⚠ ${escapeHtml(t('rename.unmatched_title', { n: remaining }))}</h3>
         <button class="glass-btn btn-primary" onclick="displayMatches();statusBar.classList.add('hidden');document.getElementById('unmatched-panel')?.remove();"
-                style="font-size:12px;">✏️ Edit &amp; Rename Remaining</button>
+                style="font-size:12px;">✏️ ${escapeHtml(t('rename.unmatched_edit_all'))}</button>
     `;
     panel.appendChild(header);
 
@@ -377,7 +417,7 @@ function _showUnmatchedPanel() {
         item.innerHTML = `
             <span style="font-size:.82rem;color:var(--text-muted);word-break:break-all;flex:1;">${escapeHtml(r.original.filename)}</span>
             <button class="glass-btn" style="font-size:11px;white-space:nowrap;flex-shrink:0;"
-                    onclick='openManualEditModal(${JSON.stringify(r.original).replace(/'/g, "&#39;")})'>✏️ Edit Manually</button>
+                    onclick='openManualEditModal(${JSON.stringify(r.original).replace(/'/g, "&#39;")})'>✏️ ${escapeHtml(t('rename.unmatched_edit_one'))}</button>
         `;
         list.appendChild(item);
     });
@@ -397,9 +437,15 @@ function _showUnmatchedPanel() {
  * @param {string} jobId   - The hex job id returned by /api/rename
  * @param {number} total   - Total files in the batch (for the status label)
  */
+// F13: poll pacing. After the fast window (10 min) the poller DEGRADES to a
+// 30-second slow poll instead of quitting — the backend job store is durable
+// and a single remux is allowed up to an hour, so the UI must not abandon a
+// live job. Module-level `let`s so tests can shrink them.
+let EMBED_POLL_INTERVAL_MS = 2000;
+let EMBED_POLL_FAST_LIMIT  = 300;    // ticks at fast pace (300 × 2 s = 10 min)
+let EMBED_POLL_SLOW_MS     = 30000;
+
 async function _pollEmbedStatus(jobId, total) {
-    const INTERVAL_MS = 2000;
-    const MAX_POLLS   = 300;  // 10 minutes safety cap (300 × 2 s)
     // Tolerate transient connection failures (e.g. the server restarting
     // mid-embed → ERR_CONNECTION_REFUSED). The backend persists the job
     // durably, so once it's back the next poll re-attaches. Only give up after
@@ -407,11 +453,12 @@ async function _pollEmbedStatus(jobId, total) {
     const MAX_NET_FAILS = 8;  // ~16 s of unreachable server before giving up
     let polls = 0;
     let netFails = 0;
+    let slowNotified = false;  // one-time "still embedding" notice on escalation
 
     // Mark embedding as active — enables beforeunload guard and banner
     _embedInProgress = true;
     _setEmbedBanner(t('embed.banner', { done: 0, total }));
-    document.title = `⏳ Embedding (0/${total}) — Adult Media Manager`;
+    document.title = `⏳ ${t('embed.title_progress', { done: 0, total })}`;
     // Persist so a refresh can re-attach (R2). Cleared in _finishEmbedPolling.
     try { localStorage.setItem(EMBED_JOB_KEY, JSON.stringify({ jobId, total })); } catch {}
 
@@ -433,9 +480,9 @@ async function _pollEmbedStatus(jobId, total) {
 
             // Keep the banner and title in sync with progress
             _setEmbedBanner(t('embed.banner', { done: job.done, total: job.total }));
-            document.title = `⏳ Embedding (${job.done}/${job.total}) — Adult Media Manager`;
+            document.title = `⏳ ${t('embed.title_progress', { done: job.done, total: job.total })}`;
 
-            if (job.complete || polls >= MAX_POLLS) {
+            if (job.complete) {
                 // R2: a job the server flipped to "interrupted" (restart killed
                 // the FFmpeg work) is terminal — tell the user rather than
                 // silently stopping. NFO sidecars written before the restart are
@@ -445,23 +492,32 @@ async function _pollEmbedStatus(jobId, total) {
                 }
                 _finishEmbedPolling(job.warnings);
             } else {
-                setTimeout(tick, INTERVAL_MS);
+                // F13: past the fast window, degrade to the slow poll — never
+                // abandon a live job. The one-time notice explains the pace.
+                const slow = polls >= EMBED_POLL_FAST_LIMIT;
+                if (slow && !slowNotified) {
+                    slowNotified = true;
+                    showStatus(t('embed.long_running'), 'info');
+                }
+                setTimeout(tick, slow ? EMBED_POLL_SLOW_MS : EMBED_POLL_INTERVAL_MS);
             }
         } catch {
             // Transient network error (server restarting / momentarily
             // unreachable). Keep retrying up to MAX_NET_FAILS so a brief outage
-            // doesn't abandon a still-running, durably-persisted job.
+            // doesn't abandon a still-running, durably-persisted job. Retries
+            // stay at the FAST interval even in slow mode — re-attaching
+            // quickly matters more than politeness when the server just came back.
             netFails++;
-            if (netFails >= MAX_NET_FAILS || polls >= MAX_POLLS) {
+            if (netFails >= MAX_NET_FAILS) {
                 _finishEmbedPolling(null);
             } else {
                 _setEmbedBanner(t('embed.reconnecting'));
-                setTimeout(tick, INTERVAL_MS);
+                setTimeout(tick, EMBED_POLL_INTERVAL_MS);
             }
         }
     }
 
-    setTimeout(tick, INTERVAL_MS);
+    setTimeout(tick, EMBED_POLL_INTERVAL_MS);
 }
 
 /**
@@ -490,7 +546,7 @@ function _finishEmbedPolling(warnings) {
     extra.style.cssText = 'padding:16px;margin-top:12px;border:1px solid rgba(240,165,0,.35)';
     extra.innerHTML = `
         <h4 style="margin:0 0 10px;color:var(--warning,#f0a500)">
-            ⚠ Metadata embedding warnings (${warnings.length})
+            ⚠ ${escapeHtml(t('rename.embed_warnings_title', { n: warnings.length }))}
         </h4>
         <div style="display:flex;flex-direction:column;gap:6px">
             ${warnings.map(w => `
@@ -507,7 +563,7 @@ function _finishEmbedPolling(warnings) {
 function displayRenameResults(results) {
     resultsContainer.innerHTML = `
         <div class="glass-panel" style="padding: 20px;">
-            <h3 style="margin-bottom: 15px;">Rename Results</h3>
+            <h3 style="margin-bottom: 15px;">${escapeHtml(t('rename.results_title'))}</h3>
             <div class="file-list">
                 ${results.map(result => {
                     // Collision-policy skip (F1): neutral row, never red.

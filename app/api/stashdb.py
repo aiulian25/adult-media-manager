@@ -22,6 +22,8 @@ from typing import Optional
 
 import httpx
 
+from app.core.tools import ffmpeg_path, ffprobe_path
+
 GRAPHQL_ENDPOINT = "https://stashdb.org/graphql"
 
 
@@ -39,6 +41,16 @@ class StashDBScene:
     tags: list[str] = field(default_factory=list)
     poster_url: Optional[str] = None
     description: Optional[str] = None     # scene synopsis (GraphQL "details")
+    # F6 — data StashDB always had but we never requested:
+    code: Optional[str] = None            # studio's canonical scene code
+    director: Optional[str] = None
+    url: Optional[str] = None             # first scene URL (studio page)
+    # Per-scene performer credits: [{"name": canonical, "as": credited-alias|None}].
+    # "as" is the alias the performer was credited under IN THIS SCENE — the
+    # alias↔canonical pair the learned-alias table otherwise pays TPDB for.
+    performer_credits: list[dict] = field(default_factory=list)
+    # F7: fanart backdrop — the second-widest image (the widest is the poster).
+    fanart_url: Optional[str] = None
 
 
 # ─── Queries ───────────────────────────────────────────────────────────────────
@@ -49,8 +61,11 @@ _SCENE_FIELDS = """
   details
   date
   duration
+  code
+  director
+  urls { url }
   studio { name parent { name } }
-  performers { performer { name } }
+  performers { as performer { name } }
   tags { name }
   images { url width }
 """
@@ -77,6 +92,19 @@ query FindScene($id: ID!) {{
     {_SCENE_FIELDS}
   }}
 }}
+"""
+
+# F5 — fingerprint contribution (OPT-IN, default off). Shape verified against
+# the live stash-box schema by introspection (2026-07-19):
+#   FingerprintSubmission { scene_id: ID!, fingerprint: FingerprintInput!,
+#                           unmatch: Boolean, vote: FingerprintSubmissionType }
+#   FingerprintInput { hash: FingerprintHash!, algorithm: MD5|OSHASH|PHASH,
+#                      duration: Int! }   ← duration is REQUIRED
+# One fingerprint per submission — OSHASH and PHASH are two separate calls.
+_M_SUBMIT_FP = """
+mutation SubmitFingerprint($input: FingerprintSubmission!) {
+  submitFingerprint(input: $input)
+}
 """
 
 
@@ -239,7 +267,7 @@ def _sprite_frame_cmd(file_path: Path, seek: float) -> list[str]:
     the same swscale `scale=160:-2` output; BMP is lossless).
     """
     return [
-        "ffmpeg", "-ss", str(seek), "-i", str(file_path),
+        ffmpeg_path(), "-ss", str(seek), "-i", str(file_path),
         "-vframes", "1",
         "-vf", f"scale={_SPRITE_SCREENSHOT_WIDTH}:-2",
         "-f", "rawvideo", "-pix_fmt", "rgb24",
@@ -374,7 +402,7 @@ def compute_videophash_sync(file_path: Path) -> Optional[str]:
     """Stash-compatible sprite pHash (sync, scan path). None on any failure."""
     try:
         probe = subprocess.run(
-            ["ffprobe", "-v", "quiet", "-print_format", "json",
+            [ffprobe_path(), "-v", "quiet", "-print_format", "json",
              "-show_entries", "format=duration", str(file_path)],
             capture_output=True, timeout=15,
         )
@@ -406,7 +434,7 @@ async def compute_videophash(file_path: Path) -> Optional[str]:
     """Stash-compatible sprite pHash (async, match path). None on any failure."""
     try:
         probe = await asyncio.create_subprocess_exec(
-            "ffprobe", "-v", "quiet", "-print_format", "json",
+            ffprobe_path(), "-v", "quiet", "-print_format", "json",
             "-show_entries", "format=duration", str(file_path),
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
         )
@@ -469,7 +497,7 @@ async def _compute_frame_phash(file_path: Path) -> Optional[str]:
     try:
         # ── Step 1: get duration from ffprobe ────────────────────────────
         probe_cmd = [
-            "ffprobe", "-v", "quiet", "-print_format", "json",
+            ffprobe_path(), "-v", "quiet", "-print_format", "json",
             "-show_entries", "format=duration",
             str(file_path),
         ]
@@ -490,7 +518,7 @@ async def _compute_frame_phash(file_path: Path) -> Optional[str]:
 
         # ── Step 2: extract one 32×32 greyscale frame ────────────────────
         frame_cmd = [
-            "ffmpeg", "-ss", str(seek), "-i", str(file_path),
+            ffmpeg_path(), "-ss", str(seek), "-i", str(file_path),
             "-vframes", "1",
             "-vf", _PHASH_FRAME_VF,
             "-f", "rawvideo", "-pix_fmt", "gray",
@@ -533,7 +561,7 @@ def _compute_frame_phash_sync(file_path: Path) -> Optional[str]:
     """
     try:
         probe = subprocess.run(
-            ["ffprobe", "-v", "quiet", "-print_format", "json",
+            [ffprobe_path(), "-v", "quiet", "-print_format", "json",
              "-show_entries", "format=duration", str(file_path)],
             capture_output=True, timeout=15,
         )
@@ -546,7 +574,7 @@ def _compute_frame_phash_sync(file_path: Path) -> Optional[str]:
         seek = duration * _PHASH_SEEK_FRACTION
 
         ff = subprocess.run(
-            ["ffmpeg", "-ss", str(seek), "-i", str(file_path),
+            [ffmpeg_path(), "-ss", str(seek), "-i", str(file_path),
              "-vframes", "1",
              "-vf", _PHASH_FRAME_VF,
              "-f", "rawvideo", "-pix_fmt", "gray",
@@ -694,6 +722,77 @@ class StashDBClient:
             print(f"StashDB fingerprint error ({self.last_error}): {exc}")
             return []
 
+    async def find_by_fingerprints_batch(
+        self, groups: list[list[dict]]
+    ) -> Optional[list[list[StashDBScene]]]:
+        """
+        Batched fingerprint lookup (F4) — one round-trip for many files.
+
+        ``groups`` is one inner list of FingerprintQueryInput dicts per file
+        (the shape find_by_fingerprint builds for a single file). Returns the
+        parsed result lists positionally — ``result[i]`` belongs to
+        ``groups[i]``, empty list on no hit — or **None on a transport/query
+        error** so callers can fall back to the per-file path (which retries
+        the fingerprint tier itself) instead of silently losing accuracy.
+        """
+        if not groups:
+            return []
+        self.last_error = None
+        try:
+            data = await self._query(_Q_FINGERPRINTS, {"fingerprints": groups})
+            nested = data.get("findScenesBySceneFingerprints") or []
+            out = [[self._parse(s) for s in (grp or [])] for grp in nested]
+            # Positional contract: pad if the server returned fewer groups.
+            while len(out) < len(groups):
+                out.append([])
+            return out
+        except Exception as exc:
+            self.last_error = _classify_error(exc)
+            print(f"StashDB batch fingerprint error ({self.last_error}): {exc}")
+            return None
+
+    async def submit_fingerprint(
+        self,
+        scene_id: str,
+        oshash: Optional[str] = None,
+        phash: Optional[str] = None,
+        duration: Optional[float] = None,
+    ) -> bool:
+        """Contribute this file's fingerprints for ``scene_id`` (F5, OPT-IN).
+
+        Sends ONLY content hashes + duration — never file names, paths, or any
+        other metadata. The stash-box schema requires a duration per
+        fingerprint (Int!), so without one nothing is sent. Best-effort: one
+        mutation per available hash, errors are classified into the server log
+        and never raised, and ``last_error`` is deliberately NOT touched (these
+        run in background tasks; polluting the shared classifier state could
+        mislabel a concurrent lookup's failure). Returns True if at least one
+        submission succeeded.
+        """
+        if not scene_id or duration is None:
+            return False
+        try:
+            dur = int(round(float(duration)))
+        except (TypeError, ValueError):
+            return False
+        if dur <= 0:
+            return False
+        ok = False
+        for algorithm, value in (("OSHASH", oshash), ("PHASH", phash)):
+            if not value:
+                continue
+            try:
+                await self._query(_M_SUBMIT_FP, {"input": {
+                    "scene_id": scene_id,
+                    "fingerprint": {"hash": value, "algorithm": algorithm,
+                                    "duration": dur},
+                }})
+                ok = True
+            except Exception as exc:
+                kind = _classify_error(exc)
+                print(f"StashDB fingerprint submission error ({kind}): {exc}")
+        return ok
+
     # ── parsing ────────────────────────────────────────────────────────
 
     @staticmethod
@@ -707,11 +806,20 @@ class StashDBClient:
             for a in data.get("performers", [])
             if a.get("performer", {}).get("name")
         ]
+        # F6: keep the per-scene credit ("as" = alias credited in THIS scene)
+        # alongside the canonical name — free alias-learning material.
+        performer_credits = [
+            {"name": a["performer"]["name"], "as": (a.get("as") or None)}
+            for a in data.get("performers", [])
+            if a.get("performer", {}).get("name")
+        ]
         tags = [t["name"] for t in data.get("tags", []) if t.get("name")]
+        urls = [u.get("url") for u in data.get("urls", []) if u.get("url")]
 
-        # Pick best image: prefer widest
+        # Pick best image: prefer widest; the runner-up becomes fanart (F7).
         images = sorted(data.get("images", []), key=lambda i: i.get("width", 0), reverse=True)
         poster_url = images[0]["url"] if images else None
+        fanart_url = images[1]["url"] if len(images) >= 2 else None
 
         return StashDBScene(
             id=data.get("id", ""),
@@ -724,4 +832,9 @@ class StashDBClient:
             tags=tags,
             poster_url=poster_url,
             description=data.get("details") or None,
+            code=data.get("code") or None,
+            director=data.get("director") or None,
+            url=urls[0] if urls else None,
+            performer_credits=performer_credits,
+            fanart_url=fanart_url,
         )

@@ -117,6 +117,22 @@ function findAtomicParsley() {
     return null;
 }
 
+// ── Bundled ffmpeg / ffprobe resolution ───────────────────────────────────────
+// Remux is the default metadata mode, so the AppImage must not depend on the
+// host having ffmpeg. Same launcher mechanism as mkvpropedit; the backend
+// honours AMM_FFMPEG / AMM_FFPROBE (app/core/tools.py). Absent → PATH
+// (deb/rpm declare ffmpeg as a dependency; Docker installs it in the image).
+function findBundledTool(name) {
+    const candidates = [
+        path.join(process.resourcesPath, "bundled-tools", "bin", name),
+        path.join(__dirname, "..", "bundled-tools", "bin", name),
+    ];
+    for (const p of candidates) {
+        try { fs.accessSync(p, fs.constants.X_OK); return p; } catch {}
+    }
+    return null;
+}
+
 // ── Package type detection (update notifier) ─────────────────────────────────
 // Which release asset fits this install. Queried from the source of truth:
 // $APPIMAGE (set by the AppImage runtime), else whichever package manager
@@ -227,6 +243,22 @@ function startPython() {
         console.log("[main] Bundled AtomicParsley:", atomicParsley);
     } else {
         console.warn("[main] bundled AtomicParsley not found — smart mode uses PATH/ffmpeg fallback");
+    }
+
+    // ── Bundled ffmpeg / ffprobe (remux embed mode, probes, thumbnails) ──────
+    const ffmpegBin = findBundledTool("ffmpeg");
+    if (ffmpegBin) {
+        childEnv.AMM_FFMPEG = ffmpegBin;
+        console.log("[main] Bundled ffmpeg:", ffmpegBin);
+    } else {
+        console.warn("[main] bundled ffmpeg not found — remux/probe features use PATH ffmpeg");
+    }
+    const ffprobeBin = findBundledTool("ffprobe");
+    if (ffprobeBin) {
+        childEnv.AMM_FFPROBE = ffprobeBin;
+        console.log("[main] Bundled ffprobe:", ffprobeBin);
+    } else {
+        console.warn("[main] bundled ffprobe not found — duration/quality probes use PATH ffprobe");
     }
 
     // ── Optional API key passthrough ─────────────────────────────────────────

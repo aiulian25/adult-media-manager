@@ -87,7 +87,9 @@
                 <div class="toolbar-group">
                     <label class="toolbar-label" data-i18n="toolbar.metadata">Metadata</label>
                     <select id="embed-mode" class="glass-select"
-                            title="How scene metadata is written. Both (recommended): tags written INTO the file (fast in-place, remux fallback) AND a matching .nfo sidecar — maximum player compatibility. Embedded only: container tags only, no .nfo. Sidecar only: just the .nfo, file untouched. Default comes from Settings and persists across restarts.">
+                            title="How scene metadata is written. Remux (default): the container is rewritten by ffmpeg with tags embedded AND a matching .nfo sidecar — works for every format, maximum player compatibility. Remux only: same rewrite, no .nfo. Both: fast in-place tag edit (remux fallback) + .nfo. Embedded only: container tags only, no .nfo. Sidecar only: just the .nfo, file untouched. Default comes from Settings and persists across restarts.">
+                        <option value="embed" data-i18n="toolbar.metadata.remux">Remux — file + .nfo</option>
+                        <option value="remux_only" data-i18n="toolbar.metadata.remux_only">Remux only (in file)</option>
                         <option value="smart" data-i18n="toolbar.metadata.both">Both — file + .nfo</option>
                         <option value="embed_only" data-i18n="toolbar.metadata.embedded">Embedded only (in file)</option>
                         <option value="nfo_only" data-i18n="toolbar.metadata.sidecar">Sidecar only (.nfo)</option>
@@ -119,6 +121,7 @@
                     <button type="button" class="tvar-chip" data-var="year">year</button>
                     <button type="button" class="tvar-chip" data-var="quality">quality</button>
                     <button type="button" class="tvar-chip" data-var="duration">duration</button>
+                    <button type="button" class="tvar-chip" data-var="code">code</button>
                 </div>
                 <div class="chips-cluster performer-limit-cluster" title="How many names {performers} renders before &quot;et al&quot;">
                     <span class="chips-key" data-i18n="toolbar.performer_limit">Max performers</span>
@@ -163,6 +166,7 @@
             </button>
             <label class="cb-label"><input type="checkbox" id="recursive" checked><span data-i18n="scan.recursive">Recursive</span></label>
             <label class="cb-label" title="" data-i18n-attr="title" data-i18n="scan.skip_organized_hint"><input type="checkbox" id="skip-organized"><span data-i18n="scan.skip_organized">Skip organized</span></label>
+            <label class="cb-label" title="" data-i18n-attr="title" data-i18n="scan.include_hidden_hint"><input type="checkbox" id="include-hidden"><span data-i18n="scan.include_hidden">Include hidden</span></label>
             <label class="cb-label" title="" data-i18n-attr="title" data-i18n="match.rematch_hint"><input type="checkbox" id="ignore-cache"><span data-i18n="match.rematch">Re-match</span></label>
             <div class="scanbar-actions">
                 <button id="btn-scan" class="glass-btn btn-scan" data-i18n="nav.scan">Scan</button>
@@ -228,11 +232,20 @@
                 <div class="settings-pref-row">
                     <label class="settings-pref-label" for="settings-embed-mode" data-i18n="settings.metadata_mode">Default metadata write</label>
                     <select id="settings-embed-mode" class="glass-input settings-select">
+                        <option value="embed" data-i18n="toolbar.metadata.remux">Remux — file + .nfo</option>
+                        <option value="remux_only" data-i18n="toolbar.metadata.remux_only">Remux only (in file)</option>
                         <option value="smart" data-i18n="toolbar.metadata.both">Both — file + .nfo</option>
                         <option value="embed_only" data-i18n="toolbar.metadata.embedded">Embedded only (in file)</option>
                         <option value="nfo_only" data-i18n="toolbar.metadata.sidecar">Sidecar only (.nfo)</option>
                     </select>
                     <p class="settings-pref-hint" data-i18n="settings.metadata_mode_hint">Sets how metadata is saved when you rename or save. "Both" (recommended) embeds tags in the file AND writes a .nfo sidecar for extra assurance. Persisted across restarts.</p>
+                </div>
+                <div class="settings-pref">
+                    <label class="cb-label" for="settings-contribute-fp" style="gap:8px;">
+                        <input type="checkbox" id="settings-contribute-fp">
+                        <span data-i18n="settings.contribute_fp">Contribute fingerprints to StashDB (sends data to an external service)</span>
+                    </label>
+                    <p class="settings-pref-hint" data-i18n="settings.contribute_fp_hint">⚠ Off by default. When enabled, confirming a StashDB match UPLOADS that file's content hashes (OSHash/pHash) and duration to stashdb.org under your StashDB account — improving fingerprint matching for everyone. No file names, paths, or other personal data are ever sent.</p>
                 </div>
 
                 <!-- ── API keys ─────────────────────────────────────────── -->

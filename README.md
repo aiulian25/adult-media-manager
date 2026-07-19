@@ -41,34 +41,46 @@ Clean, flat interface with a live naming-template preview and three built-in the
 | | |
 |---|---|
 | Smart detection | 7 filename pattern formats — parses site, date, performers, quality automatically |
+| Folder-context detection | A generically-named file inside `Vixen/` or `Site - Title (Date)/` folders inherits the site/title from the folder name (marked 📁) |
 | Two databases | [ThePornDB](https://theporndb.net/) and [StashDB](https://stashdb.org/) — use one or both |
 | Paste a scene link | Paste a `stashdb.org/scenes/…` or `theporndb.net/scenes/…` URL in manual edit and **Fetch** full metadata in one click |
-| Fingerprint matching | OSHash + perceptual-hash (pHash) lookups for exact, "Verified" matches |
+| Fingerprint matching | OSHash + stash-compatible perceptual-hash (pHash) lookups for exact, "Verified" matches — batched (one query per 40 files) and reusing scan-computed hashes, so fingerprint matching is instant |
+| Self-learning aliases | Confirmed matches teach performer aliases (from StashDB per-scene credits) and site abbreviations ("MFHM" → "My Friends Hot Mom") — matching gets smarter with use |
+| Wrong match? Pick another | Every match keeps its runner-up candidates one click away — swap without a manual-edit round trip |
 | Live streaming scan & match | Results appear as they're found; **Stop** a scan or **Cancel** a match at any time and keep the partial results |
 | Match cache | Confirmed matches are remembered (by content hash) — rescans are instant and skip the API; **Re-match** forces a refresh |
 | Incremental rescan & duplicates | A catalog tracks organised files so re-scans skip them; same-content duplicates are detected |
 | Confidence bands & review queue | High / Medium / Low colour bands + filters to batch-confirm strong matches and focus on the ambiguous middle |
 | Naming templates | 6 built-in + fully custom with a **live preview** and unknown-variable warnings |
-| Metadata write modes | **Embed in file + NFO**, **Smart in-place** (`mkvpropedit`/`AtomicParsley`, no remux), or **NFO only** |
-| NFO sidecars | Writes Kodi/Jellyfin/Plex-compatible `.nfo` files alongside renamed files |
+| Metadata write modes | **Remux + NFO** (default), **Remux only**, **Smart in-place** (`mkvpropedit`/`AtomicParsley`), **Embedded only**, or **NFO only** |
+| NFO sidecars | Kodi/Jellyfin/Plex-compatible `.nfo` with synopsis, provider link, fanart backdrop, actor thumbnails, runtime and stream details |
+| In-app updates | A dismissible banner announces new releases (even in long-lived tabs); desktop builds download, sha256-verify and install the update from inside the app |
 | Drag & drop | Drop files or folders directly onto the browser window |
 | Themes | Three built-in themes — **Legacy**, **Dark**, **Light** — switchable in Settings |
 | Settings UI | Add API keys, pick language & theme in the browser — no config file editing required |
 | 6 languages | English, German, French, Spanish, Portuguese, Japanese |
 | History & per-row revert | Every action is logged; move/copy/hardlink/symlink can each be reverted individually |
 | Docker | Single-container, named volume, PUID/PGID support |
-| Native Linux | Self-installing AppImage + `.deb` package — no Python required |
+| Native Linux | Self-installing AppImage + `.deb`/`.rpm` packages — no Python required; `ffmpeg`, `mkvpropedit` and `AtomicParsley` ship bundled |
 
 ---
 
-## What's New in v1.2.0
+## What's New in v1.12.0
 
-- **Native file & folder picker (AppImage/deb).** The **Browse** button now opens your desktop's native file chooser — multi-select files *or* folders, with hidden-file support — instead of the in-app browser. Docker/browser installs keep the built-in server-side browser.
-- **Cancel a running match.** The **Match** button turns into **Cancel** while matching is in progress, so you can stop a long run at any time and keep the matches already found. (Available in all 6 languages.)
-- **Multi-folder scans.** Select several folders at once and they're all scanned in a single pass.
-- **More reliable launch (AppImage/deb).** The backend now resolves a free port at startup and a single-instance lock focuses the existing window instead of starting a second copy — fixing intermittent "won't launch" failures caused by a leftover process holding a fixed port.
+- **Remux is the default metadata mode** — the container is rewritten by ffmpeg with tags embedded plus a `.nfo` sidecar, for every format. A new **Remux only** mode does the same without the sidecar. All previous modes remain selectable.
+- **arm64 native packages** — AppImage, deb and rpm are now also built for arm64 (Raspberry Pi 5, ARM NAS, Apple-silicon VMs), with the in-app updater picking the right architecture automatically.
+- **ffmpeg now ships inside the native builds** — a sha256-pinned *static* ffmpeg/ffprobe is bundled, so the AppImage no longer depends on the host having ffmpeg installed; deb/rpm keep their declared dependency as a fallback. A new system check in Settings (and `tools` in `/api/health`) names any missing tool instead of features failing quietly.
+- **Much faster StashDB matching** — fingerprints are resolved in one batched query per 40 files, and the pHash computed at scan time is reused at match time (no more 25-seek recomputation per file).
+- **Self-learning matching** — StashDB per-scene "credited as" names teach performer aliases for free, and confirmed renames teach site abbreviations; both persist and improve future matches.
+- **Folder-context detection** — `Vixen/scene.mp4` now scans with site "Vixen"; `Site - Title (2024-05-01)/` folders supply title and date too (rows are marked 📁).
+- **Richer NFOs** — provider page `<url>`, `<fanart>` backdrop, and `<actor>` thumbnails where known; `{code}` (the studio's canonical scene code from StashDB) is a new template variable.
+- **Contribute fingerprints to StashDB (opt-in, off by default)** — a new Settings toggle. When *you* enable it, confirming a StashDB match uploads that file's content hashes (OSHash/pHash) and duration to stashdb.org under your StashDB account, improving fingerprint matching for everyone. **Data leaves your machine only with this toggle on**; file names, paths and personal data are never sent.
+- **Storage dashboard in the Library** — see how big the match cache, learned aliases, history and thumbnails have grown, with two guarded maintenance actions: clear the match cache (confirmed matches are kept) and clear thumbnails.
+- **Scan hidden files when asked** — a new "Include hidden" checkbox in the scan bar; picking a hidden folder in the file browser (with "Show hidden" on) enables it automatically.
+- **Whole-batch rename preflight** — the preview modal now analyses the *entire* batch and calls out name collisions ("2 files wanted the same name — auto-numbered") and names shortened to the 255-byte filesystem limit before you commit; collision-policy skips render as neutral ⏭ rows.
+- **UX fixes** — the "other candidates" panel now shows each candidate's title, performers, site and date; long-lived Docker tabs learn about new releases without a reload; saved API keys can be removed from Settings; the scan list, rename preview and file browser are now fully localized in all 6 languages (goodbye "will be copyd"); long embed batches keep their progress banner past the 10-minute mark (slow-poll mode) instead of silently dropping it.
 
-See the [v1.2.0 release notes](https://github.com/aiulian25/adult-media-manager/releases/tag/v1.2.0) for the full list.
+See the [releases page](https://github.com/aiulian25/adult-media-manager/releases) for full notes on every version.
 
 ---
 
@@ -152,10 +164,10 @@ No Docker required. Ships a self-contained Python 3.12 runtime — no system Pyt
 
 ### AppImage (recommended — no root required)
 
-1. Download `Adult.Media.Manager-1.11.0.AppImage`
+1. Download `Adult.Media.Manager-1.12.0.AppImage`
 2. Make it executable:
    ```bash
-   chmod +x Adult.Media.Manager-1.11.0.AppImage
+   chmod +x Adult.Media.Manager-1.12.0.AppImage
    ```
 3. Double-click it (or run it from the terminal)
 
@@ -164,12 +176,14 @@ No Docker required. Ships a self-contained Python 3.12 runtime — no system Pyt
 - Installs the icon in `~/.local/share/icons/hicolor/`
 - Creates a desktop entry so it appears in your app launcher
 
+The AppImage is fully self-contained: Python, `ffmpeg`/`ffprobe`, `mkvpropedit` and `AtomicParsley` are all bundled — nothing needs to be installed on the host.
+
 From that point, launch it from your application menu. The original downloaded file can be deleted.
 
 ### .deb Package (Debian / Ubuntu / Mint)
 
 ```bash
-sudo apt install ./adult-media-manager_1.11.0_amd64.deb
+sudo apt install ./adult-media-manager_1.12.0_amd64.deb
 ```
 
 Launch **Adult Media Manager** from your application menu, or:
@@ -180,10 +194,10 @@ Launch **Adult Media Manager** from your application menu, or:
 
 ### .rpm Package (Fedora / RHEL / openSUSE)
 
-Requires [RPM Fusion](https://rpmfusion.org/) enabled for the `ffmpeg` / `mkvtoolnix` media tools:
+Requires [RPM Fusion](https://rpmfusion.org/) enabled for the `ffmpeg` / `mkvtoolnix` media tools (used as fallback — the package also ships its own bundled copies):
 
 ```bash
-sudo dnf install ./adult-media-manager-1.11.0.x86_64.rpm
+sudo dnf install ./adult-media-manager-1.12.0.x86_64.rpm
 ```
 
 Remove with `sudo dnf remove adult-media-manager`.
@@ -210,7 +224,7 @@ Scan → Match → Review → Rename
 
 5. **Rename** — Pick the **Metadata** write mode and an **Action**, then click **Rename**:
    - **Action:** TEST *(preview only — always try first)* · MOVE · COPY · HARDLINK *(same filesystem)* · SYMLINK
-   - **Metadata:** **Embed in file + NFO** *(default — FFmpeg tags + sidecar)* · **Smart in-place + NFO** *(instant `mkvpropedit`/`AtomicParsley` tagging where possible, no full remux)* · **NFO sidecar only**
+   - **Metadata:** **Remux — file + .nfo** *(default — FFmpeg rewrite + sidecar)* · **Remux only** · **Both — file + .nfo** *(instant `mkvpropedit`/`AtomicParsley` in-place tagging where possible)* · **Embedded only** · **Sidecar only** — see [Metadata Write Modes](#metadata-write-modes)
 
 Metadata is written in the background after the files move; a progress banner tracks it and survives a page refresh. A `.nfo` sidecar is written alongside each file for Kodi/Jellyfin/Plex.
 
@@ -218,9 +232,13 @@ Metadata is written in the background after the files move; a progress banner tr
 
 | Mode | What it does | When to use |
 |---|---|---|
-| **Embed in file + NFO** | Re-muxes tags into the container with FFmpeg **and** writes a `.nfo` | Maximum compatibility (default) |
-| **Smart in-place + NFO** | Tags MKV via `mkvpropedit` / MP4 via `AtomicParsley` **in place** (no remux), falls back to FFmpeg otherwise, plus `.nfo` | Large files / slow NAS — near-instant, minimal bandwidth |
-| **NFO sidecar only** | Writes just the `.nfo`, leaves the video untouched | Players that read sidecars (Jellyfin/Plex/Kodi); avoids rewriting files |
+| **Remux — file + .nfo** *(default)* | Rewrites the container with FFmpeg, tags embedded, **and** writes a `.nfo` | Works for every format — maximum player compatibility |
+| **Remux only (in file)** | Same FFmpeg rewrite, no `.nfo` | Embedded tags without sidecar clutter |
+| **Both — file + .nfo** | Tags MKV via `mkvpropedit` / MP4 via `AtomicParsley` **in place** (no remux), falls back to FFmpeg, plus `.nfo` | Large files / slow NAS — near-instant, minimal bandwidth |
+| **Embedded only (in file)** | In-place tags (remux fallback), no `.nfo` | Container tags only |
+| **Sidecar only (.nfo)** | Writes just the `.nfo`, leaves the video untouched | Players that read sidecars (Jellyfin/Plex/Kodi); avoids rewriting files |
+
+The toolbar picker applies to the current session; the persistent default is set in **Settings → Default metadata write**.
 
 ### Review Queue & Confidence
 
@@ -277,6 +295,7 @@ Click **History** to see every action AMM has performed. Each move/copy/hardlink
 | `{source}` | Source type | `WEB-DL` |
 | `{group}` | Release group | `XLF` |
 | `{duration}` | Runtime in whole minutes | `42min` |
+| `{code}` | Studio's canonical scene code (StashDB) | `SPE028_s04` |
 | `{ext}` | File extension | `mp4`, `mkv` |
 
 ---
@@ -285,6 +304,7 @@ Click **History** to see every action AMM has performed. Each move/copy/hardlink
 
 - **API keys** — stored in `.env` (Docker) or `~/.local/share/adult-media-manager/settings.json` (native); never returned in API responses
 - **Path validation** — every path is checked against an allowlist of permitted roots before any file operation; paths outside the allowlist are rejected with 403
+- **Fingerprint contribution is opt-in** — by default AMM only *reads* from TPDB/StashDB. The "Contribute fingerprints" toggle (Settings, off by default) is the only feature that uploads anything: content hashes (OSHash/pHash) + duration of scenes you confirm, to stashdb.org, under your StashDB account. Never file names, paths, or personal data
 - **NAS / FUSE safety** — metadata embedding uses a 3-phase commit: FFmpeg writes to a local staging area, the result is verified, then atomically swapped into place — no partial writes land on your network share
 - **Do not commit `.env`** — it contains your API keys; add it to `.gitignore` if you fork this repo
 

@@ -51,6 +51,7 @@ async function scanFolder() {
                 path,
                 recursive: recursive.checked,
                 skip_organized: skipOrganized ? skipOrganized.checked : false,
+                include_hidden: document.getElementById('include-hidden')?.checked || false,
             }),
         });
         if (!sessResp.ok) {
@@ -225,6 +226,7 @@ function _scannedNewRowHtml(i, file) {
                 <div class="file-name">${escapeHtml(file.filename)}</div>
                 <div class="file-meta">
                     ${file.site ? `<span class="badge site-badge">${escapeHtml(file.site)}</span>` : ''}
+                    ${file.context_source === 'folder' ? `<span class="badge" title="${escapeHtml(t('scan.from_folder_hint'))}">📁</span>` : ''}
                     ${file.performers && file.performers.length > 0 ? `<span>${file.performers.map(escapeHtml).join(', ')}</span>` : ''}
                     ${file.quality ? `<span class="badge quality-badge">${escapeHtml(file.quality)}</span>` : ''}
                     ${file.release_date ? `<span>${escapeHtml(file.release_date)}</span>` : ''}
@@ -252,7 +254,7 @@ function _scannedOrgRowHtml(i, file) {
                     ${nfo.title      ? `<span style="color:var(--text-muted);font-size:.8rem;">${escapeHtml(nfo.title)}</span>` : ''}
                 </div>
             </div>
-            <div style="font-size:.72rem;color:rgba(0,255,136,.7);white-space:nowrap;align-self:center;">✅ has NFO</div>
+            <div style="font-size:.72rem;color:rgba(0,255,136,.7);white-space:nowrap;align-self:center;">✅ ${escapeHtml(t('scan.has_nfo'))}</div>
         </div>`;
 }
 
@@ -340,15 +342,15 @@ function displayScannedFiles() {
         <details class="glass-panel" style="padding:16px;margin-bottom:12px;border:1px solid rgba(0,255,136,.25);">
             <summary style="cursor:pointer;display:flex;align-items:center;gap:10px;list-style:none;user-select:none;">
                 <span style="font-size:1.1rem;">✅</span>
-                <span style="font-weight:600;">Already Organised &nbsp;
+                <span style="font-weight:600;">${escapeHtml(t('scan.already_organized'))} &nbsp;
                     <span class="selection-count" style="background:rgba(0,255,136,.2);padding:2px 8px;border-radius:12px;">
                         ${orgEntries.length}
                     </span>
                 </span>
                 <span style="font-size:.78rem;color:var(--text-muted);margin-left:4px;">
-                    — NFO sidecar found, excluded from matching by default
+                    ${escapeHtml(t('scan.organized_hint'))}
                 </span>
-                <span style="margin-left:auto;font-size:.8rem;color:var(--text-muted);">▼ expand</span>
+                <span style="margin-left:auto;font-size:.8rem;color:var(--text-muted);">▼ ${escapeHtml(t('scan.expand'))}</span>
             </summary>
             <div class="file-list" id="organized-file-list" style="margin-top:12px;"></div>
         </details>
@@ -361,14 +363,14 @@ function displayScannedFiles() {
                 <label class="select-all-label">
                     <input type="checkbox" id="select-all-scanned" ${newEntries.length > 0 ? 'checked' : ''}
                            onchange="toggleSelectAllScanned(this.checked)">
-                    <span>Select All</span>
+                    <span>${escapeHtml(t('scan.select_all'))}</span>
                 </label>
-                <h3>Scanned Files &nbsp;<span class="selection-count" id="scanned-sel-count">${newEntries.length}</span> / ${scannedFiles.length} selected</h3>
+                <h3>${escapeHtml(t('scan.scanned_files'))} &nbsp;<span class="selection-count" id="scanned-sel-count">${newEntries.length}</span> / ${scannedFiles.length} ${escapeHtml(t('scan.selected_suffix'))}</h3>
             </div>
             <div class="file-list" id="new-file-list">
                 ${newEntries.length === 0
                     ? `<div style="text-align:center;padding:20px;color:var(--text-muted);">
-                           All scanned files already have NFO sidecars.
+                           ${escapeHtml(t('scan.all_have_nfo'))}
                        </div>`
                     : ''
                 }
