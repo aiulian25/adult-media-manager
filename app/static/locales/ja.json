@@ -403,5 +403,7 @@
   "library.clear_thumbs_done": "{size} を解放しました",
   "settings.contribute_fp": "StashDB にフィンガープリントを提供（外部サービスへデータを送信します）",
   "settings.contribute_fp_hint": "⚠ 既定でオフ。有効にすると、StashDB のマッチを確認した際にそのファイルのコンテンツハッシュ（OSHash/pHash）と再生時間が、お使いの StashDB アカウントで stashdb.org にアップロードされます — 全員のフィンガープリント照合が向上します。ファイル名・パス・その他の個人データは一切送信されません。",
-  "settings.tools_missing": "不足しているツール: {tools} — 再生時間の取得・サムネイル・埋め込みに必要です"
+  "settings.tools_missing": "不足しているツール: {tools} — 再生時間の取得・サムネイル・埋め込みに必要です",
+  "toolbar.chips_more": "すべて表示",
+  "toolbar.chips_less": "表示を減らす"
 }

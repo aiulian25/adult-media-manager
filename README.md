@@ -59,6 +59,7 @@ Clean, flat interface with a live naming-template preview and three built-in the
 | Drag & drop | Drop files or folders directly onto the browser window |
 | Themes | Three built-in themes — **Legacy**, **Dark**, **Light** — switchable in Settings |
 | Settings UI | Add API keys, pick language & theme in the browser — no config file editing required |
+| Compact fusion toolbar | Brand, source/action/metadata/conflict, naming template and the scan bar live in one dense three-row panel (~60% less chrome than before) — rarely-used template chips and presets tuck behind "+N" toggles |
 | 6 languages | English, German, French, Spanish, Portuguese, Japanese |
 | History & per-row revert | Every action is logged; move/copy/hardlink/symlink can each be reverted individually |
 | Docker | Single-container, named volume, PUID/PGID support |
@@ -66,12 +67,9 @@ Clean, flat interface with a live naming-template preview and three built-in the
 
 ---
 
-## What's New in v1.12.1
+## What's New in v1.12.2
 
-- **Ladies first** — female performers now automatically lead `{performer}`/`{performers}` in every generated name, on the match cards and in the NFO actor order. Gender comes with the scene metadata from TPDB/StashDB; the sort is stable, so performers with unstated gender never get shuffled. Prefer the old behavior? Settings → *Performer order in names* → "Keep the source's order".
-- **Per-file performer reordering** — every match card's performer chips grew ◀ ▶ arrows: move any name by hand, the "1st" badge follows the leading name, the row flips to *Manual order* with one-click *Reset to automatic*, and a live "Will rename to:" preview (rendered by the real formatter) shows the result instantly. Manual orders persist through Rename and the confirm cache.
-- **Numbered candidates** — the "other candidates" panel now numbers its rows and the button says **Use #N** instead of an anonymous "Use this"; each row shows title, performers (capped at 3, then "+N"), site and date on two clean lines.
-- **The update actually updates, visibly** — fixed a stale-cache bug where the UI could keep rendering the previous version's JavaScript/CSS after a successful update: the server now sends `Cache-Control: no-cache` on all UI assets (cheap ETag revalidation against the local server), and the desktop app clears its renderer cache on the first launch after a version change. Coming from ≤ v1.12, one hard refresh (browser tabs) or restart (desktop) heals it permanently.
+- **Compact fusion toolbar** — the top of the app was rebuilt for density: brand, the four decision selects (Source / Action / Metadata / On conflict), the naming template and the scan bar now live in **one three-row panel** instead of three stacked bars — about **60% less chrome**, so your results start near the top of the window. Library/History/Settings became icon buttons; rarely-used template chips and presets tuck behind "+N" toggles; nothing moved off-screen and every control keeps its place and shortcut.
 
 See the [releases page](https://github.com/aiulian25/adult-media-manager/releases) for full notes on every version.
 
@@ -157,10 +155,10 @@ No Docker required. Ships a self-contained Python 3.12 runtime — no system Pyt
 
 ### AppImage (recommended — no root required)
 
-1. Download `Adult.Media.Manager-1.12.1.AppImage`
+1. Download `Adult.Media.Manager-1.12.2.AppImage`
 2. Make it executable:
    ```bash
-   chmod +x Adult.Media.Manager-1.12.1.AppImage
+   chmod +x Adult.Media.Manager-1.12.2.AppImage
    ```
 3. Double-click it (or run it from the terminal)
 
@@ -176,7 +174,7 @@ From that point, launch it from your application menu. The original downloaded f
 ### .deb Package (Debian / Ubuntu / Mint)
 
 ```bash
-sudo apt install ./adult-media-manager_1.12.1_amd64.deb
+sudo apt install ./adult-media-manager_1.12.2_amd64.deb
 ```
 
 Launch **Adult Media Manager** from your application menu, or:
@@ -190,7 +188,7 @@ Launch **Adult Media Manager** from your application menu, or:
 Requires [RPM Fusion](https://rpmfusion.org/) enabled for the `ffmpeg` / `mkvtoolnix` media tools (used as fallback — the package also ships its own bundled copies):
 
 ```bash
-sudo dnf install ./adult-media-manager-1.12.1.x86_64.rpm
+sudo dnf install ./adult-media-manager-1.12.2.x86_64.rpm
 ```
 
 Remove with `sudo dnf remove adult-media-manager`.

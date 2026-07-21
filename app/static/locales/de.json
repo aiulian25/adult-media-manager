@@ -403,5 +403,7 @@
   "library.clear_thumbs_done": "{size} freigegeben",
   "settings.contribute_fp": "Fingerabdrücke an StashDB beitragen (sendet Daten an einen externen Dienst)",
   "settings.contribute_fp_hint": "⚠ Standardmäßig aus. Wenn aktiviert, LÄDT das Bestätigen eines StashDB-Treffers die Inhalts-Hashes (OSHash/pHash) und die Laufzeit der Datei zu stashdb.org HOCH — unter Ihrem StashDB-Konto; das verbessert das Fingerprint-Matching für alle. Dateinamen, Pfade oder andere persönliche Daten werden niemals gesendet.",
-  "settings.tools_missing": "Fehlende Werkzeuge: {tools} — Laufzeit-Analyse, Vorschaubilder und Einbettung benötigen sie"
+  "settings.tools_missing": "Fehlende Werkzeuge: {tools} — Laufzeit-Analyse, Vorschaubilder und Einbettung benötigen sie",
+  "toolbar.chips_more": "Alle anzeigen",
+  "toolbar.chips_less": "Weniger anzeigen"
 }

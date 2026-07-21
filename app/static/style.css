@@ -2349,3 +2349,82 @@ input.input-error {
    Same-z-index .modal siblings stack by DOM order, and #library-modal comes
    later in the DOM, which painted it OVER the confirm dialog (F16 bug). */
 #confirm-modal { z-index: 1200; }
+
+/* ═══════════════════════════════════════════════════════════════════════
+   FUSION BAR (Option B density) — brand │ decisions │ template │ scan in
+   ONE panel, three ~30px rows. Placed last so equal-specificity rules here
+   win over the earlier layout blocks by source order.
+   ═══════════════════════════════════════════════════════════════════════ */
+.fusion-bar { padding: 8px 10px; margin-bottom: 10px; }
+.fusion-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.fusion-row + .fusion-row { margin-top: 7px; padding-top: 7px; border-top: 1px solid var(--border-soft); }
+
+/* compact controls: 30px tall, one font step down */
+.fusion-bar .glass-select,
+.fusion-bar .glass-input {
+    height: 30px;
+    width: auto;
+    padding: 0 10px;
+    font-size: 12.5px;
+    box-sizing: border-box;
+}
+.fusion-bar .glass-select { padding-right: 26px; background-position: right 8px center; }
+.fusion-bar #datasource      { width: 128px; }
+.fusion-bar #action          { width: 134px; }
+.fusion-bar #embed-mode      { width: 182px; }
+.fusion-bar #conflict-policy { width: 142px; }
+.fusion-bar #template        { flex: 1 1 240px; min-width: 200px; }
+.fusion-bar .performer-limit-select { width: 52px; height: 24px; padding: 0 4px 0 8px; }
+
+/* brand: small logo + AMM, still the home/reset button */
+.fusion-bar .topbar-title { display: inline-flex; align-items: center; gap: 7px; background: none; border: 0; padding: 0 4px 0 0; font-family: inherit; cursor: pointer; }
+.fusion-brand-name { font-weight: 700; font-size: 14px; color: var(--text-primary); letter-spacing: 0.01em; }
+
+/* nav: icon-only buttons, labels stay for screen readers */
+.fusion-nav { display: flex; gap: 6px; margin-left: auto; }
+.fusion-nav .glass-btn { width: 30px; height: 30px; padding: 0; justify-content: center; }
+.fusion-nav .glass-btn > span {
+    position: absolute;
+    width: 1px; height: 1px;
+    margin: -1px; padding: 0; border: 0;
+    clip-path: inset(50%);
+    overflow: hidden;
+    white-space: nowrap;
+}
+
+/* chips + presets: tighter, label words dropped (tooltips carry them) */
+.fusion-bar .chips-row { margin-top: 7px; justify-content: flex-start; gap: 8px; }
+.fusion-bar .chips-key { display: none; }
+.fusion-bar .tvar-chip { font-size: 11px; padding: 2px 7px; }
+.fusion-bar .preset-btn { font-size: 11px; padding: 3px 9px; }
+.fusion-bar .chips-cluster { gap: 5px; }
+.chip-hidden { display: none !important; }
+.chips-more {
+    font-family: var(--mono);
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--accent-light);
+    background: var(--accent-soft);
+    border: 1px solid transparent;
+    padding: 2px 8px;
+    border-radius: 7px;
+    cursor: pointer;
+}
+.chips-more:hover { border-color: var(--primary); }
+
+/* preview + warning: compact lines, no divider band */
+.fusion-bar .template-preview { margin-top: 6px; padding-top: 0; border-top: 0; font-size: 11.5px; }
+.fusion-bar .template-warning { font-size: 11.5px; }
+
+/* scan row: was a standalone panel, now the last fusion row */
+.fusion-bar .scanbar { padding: 0; margin: 0; background: none; border-radius: 0; box-shadow: none; border-left: 0; border-right: 0; border-bottom: 0; gap: 8px; row-gap: 6px; }
+.fusion-bar .scanbar-input { flex: 1 1 240px; min-width: 160px; height: 30px; padding: 0 10px; font-size: 12.5px; }
+.fusion-bar .cb-label { font-size: 12px; gap: 5px; }
+.fusion-bar .cb-label input[type="checkbox"] { width: 14px; height: 14px; }
+.fusion-bar .glass-btn { padding: 5px 10px; font-size: 12px; }
+.fusion-bar .scanbar-actions { margin-left: auto; display: flex; gap: 6px; }
+.fusion-bar .scanbar-actions .btn-rename { padding: 5px 12px; }
+
+@media (max-width: 900px) {
+    .fusion-bar #template { min-width: 100%; order: -1; }
+}

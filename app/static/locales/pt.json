@@ -403,5 +403,7 @@
   "library.clear_thumbs_done": "{size} liberados",
   "settings.contribute_fp": "Contribuir impressões digitais para o StashDB (envia dados a um serviço externo)",
   "settings.contribute_fp_hint": "⚠ Desligado por padrão. Quando ativado, confirmar uma correspondência do StashDB ENVIA os hashes de conteúdo (OSHash/pHash) e a duração do arquivo para stashdb.org com a sua conta StashDB — melhorando a correspondência por impressão digital para todos. Nomes de arquivos, caminhos ou outros dados pessoais nunca são enviados.",
-  "settings.tools_missing": "Ferramentas ausentes: {tools} — duração, miniaturas e incorporação precisam delas"
+  "settings.tools_missing": "Ferramentas ausentes: {tools} — duração, miniaturas e incorporação precisam delas",
+  "toolbar.chips_more": "Mostrar tudo",
+  "toolbar.chips_less": "Mostrar menos"
 }

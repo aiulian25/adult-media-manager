@@ -403,5 +403,7 @@
   "library.clear_thumbs_done": "{size} libérés",
   "settings.contribute_fp": "Contribuer les empreintes à StashDB (envoie des données à un service externe)",
   "settings.contribute_fp_hint": "⚠ Désactivé par défaut. Si activé, confirmer une correspondance StashDB ENVOIE les empreintes de contenu (OSHash/pHash) et la durée du fichier à stashdb.org via votre compte StashDB — améliorant l'appariement par empreinte pour tous. Aucun nom de fichier, chemin ni autre donnée personnelle n'est jamais envoyé.",
-  "settings.tools_missing": "Outils manquants : {tools} — l'analyse de durée, les miniatures et l'intégration en ont besoin"
+  "settings.tools_missing": "Outils manquants : {tools} — l'analyse de durée, les miniatures et l'intégration en ont besoin",
+  "toolbar.chips_more": "Tout afficher",
+  "toolbar.chips_less": "Afficher moins"
 }

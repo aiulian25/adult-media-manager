@@ -403,5 +403,7 @@
   "library.clear_thumbs_done": "{size} freed",
   "settings.contribute_fp": "Contribute fingerprints to StashDB (sends data to an external service)",
   "settings.contribute_fp_hint": "⚠ Off by default. When enabled, confirming a StashDB match UPLOADS that file's content hashes (OSHash/pHash) and duration to stashdb.org under your StashDB account — improving fingerprint matching for everyone. No file names, paths, or other personal data are ever sent.",
-  "settings.tools_missing": "Missing tools: {tools} — duration probing, thumbnails and embedding need them"
+  "settings.tools_missing": "Missing tools: {tools} — duration probing, thumbnails and embedding need them",
+  "toolbar.chips_more": "Show all",
+  "toolbar.chips_less": "Show fewer"
 }

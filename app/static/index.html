@@ -18,41 +18,6 @@
     </div>
 
     <div class="app">
-        <!-- ═══ Top Bar ═══ -->
-        <header class="glass-panel topbar">
-            <div class="topbar-left">
-                <img src="/static/icon.png" alt="AMM" class="logo-icon" width="34" height="34" style="border-radius:50%;" onerror="this.style.display='none'">
-                <div class="brand-text">
-                    <button class="topbar-title" id="btn-home" title="New scan / Reset">AMM <span class="reset-hint" data-i18n="nav.new_scan">new scan</span></button>
-                    <span class="brand-sub" data-i18n="app.subtitle">Scan, match &amp; rename your media</span>
-                </div>
-            </div>
-            <div class="topbar-right">
-                <button id="btn-library" class="glass-btn" title="Library — catalog stats &amp; duplicates">
-                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <ellipse cx="12" cy="5" rx="9" ry="3"/>
-                        <path d="M3 5v14a9 3 0 0 0 18 0V5"/>
-                        <path d="M3 12a9 3 0 0 0 18 0"/>
-                    </svg>
-                    <span data-i18n="nav.library">Library</span>
-                </button>
-                <button id="btn-history" class="glass-btn" title="View rename history">
-                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M3 3v5h5M3.05 13A9 9 0 1 0 6 5.3L3 8"/>
-                        <path d="M12 7v5l4 2"/>
-                    </svg>
-                    <span data-i18n="nav.history">History</span>
-                </button>
-                <button id="btn-settings" class="glass-btn" title="Settings">
-                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <circle cx="12" cy="12" r="3"/>
-                        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
-                    </svg>
-                    <span data-i18n="nav.settings">Settings</span>
-                </button>
-            </div>
-        </header>
-
         <!-- ── Update banner: announces a new release once; dismiss is
              remembered per-version (never nags until the NEXT release). ── -->
         <div id="update-banner" class="update-banner hidden">
@@ -64,29 +29,26 @@
             <button id="update-banner-dismiss" class="banner-dismiss" title="Dismiss for this version">&times;</button>
         </div>
 
-        <!-- ═══ Controls ═══ -->
-        <section class="glass-panel controls-card">
-            <div class="ctl-grid">
-                <div class="toolbar-group">
-                    <label class="toolbar-label" data-i18n="toolbar.source">Source</label>
-                    <select id="datasource" class="glass-select">
-                        <option value="tpdb">ThePornDB</option>
-                        <option value="stashdb" selected>StashDB</option>
-                    </select>
-                </div>
-                <div class="toolbar-group">
-                    <label class="toolbar-label" data-i18n="toolbar.action">Action</label>
-                    <select id="action" class="glass-select">
-                        <option value="test" data-i18n="toolbar.action.test">Test (Dry Run)</option>
-                        <option value="move" data-i18n="toolbar.action.move">Move</option>
-                        <option value="copy" data-i18n="toolbar.action.copy">Copy</option>
-                        <option value="hardlink" data-i18n="toolbar.action.hardlink">Hard Link</option>
-                        <option value="symlink" data-i18n="toolbar.action.symlink">Symlink</option>
-                    </select>
-                </div>
-                <div class="toolbar-group">
-                    <label class="toolbar-label" data-i18n="toolbar.metadata">Metadata</label>
-                    <select id="embed-mode" class="glass-select"
+        <!-- ═══ Fusion bar (Option B): brand │ decisions │ template │ scan — one panel ═══ -->
+        <section class="glass-panel controls-card fusion-bar">
+            <div class="fusion-row">
+                <button class="topbar-title" id="btn-home" title="New scan / Reset">
+                    <img src="/static/icon.png" alt="" class="logo-icon" width="22" height="22" style="border-radius:50%;" onerror="this.style.display='none'">
+                    <span class="fusion-brand-name">AMM</span>
+                    <span class="reset-hint" data-i18n="nav.new_scan">new scan</span>
+                </button>
+                <select id="datasource" class="glass-select" data-i18n-attr="title" data-i18n="toolbar.source">
+                    <option value="tpdb">ThePornDB</option>
+                    <option value="stashdb" selected>StashDB</option>
+                </select>
+                <select id="action" class="glass-select" data-i18n-attr="title" data-i18n="toolbar.action">
+                    <option value="test" data-i18n="toolbar.action.test">Test (Dry Run)</option>
+                    <option value="move" data-i18n="toolbar.action.move">Move</option>
+                    <option value="copy" data-i18n="toolbar.action.copy">Copy</option>
+                    <option value="hardlink" data-i18n="toolbar.action.hardlink">Hard Link</option>
+                    <option value="symlink" data-i18n="toolbar.action.symlink">Symlink</option>
+                </select>
+                <select id="embed-mode" class="glass-select"
                             title="How scene metadata is written. Remux (default): the container is rewritten by ffmpeg with tags embedded AND a matching .nfo sidecar — works for every format, maximum player compatibility. Remux only: same rewrite, no .nfo. Both: fast in-place tag edit (remux fallback) + .nfo. Embedded only: container tags only, no .nfo. Sidecar only: just the .nfo, file untouched. Default comes from Settings and persists across restarts.">
                         <option value="embed" data-i18n="toolbar.metadata.remux">Remux — file + .nfo</option>
                         <option value="remux_only" data-i18n="toolbar.metadata.remux_only">Remux only (in file)</option>
@@ -94,24 +56,42 @@
                         <option value="embed_only" data-i18n="toolbar.metadata.embedded">Embedded only (in file)</option>
                         <option value="nfo_only" data-i18n="toolbar.metadata.sidecar">Sidecar only (.nfo)</option>
                     </select>
-                </div>
-                <div class="toolbar-group">
-                    <label class="toolbar-label" data-i18n="toolbar.conflict">On conflict</label>
-                    <select id="conflict-policy" class="glass-select"
-                            title="What happens when a target filename already exists (on disk, or claimed by another file in this batch). Auto-number: land at the first free ' (2)'…' (99)' name. Skip: leave the file untouched and mark the row skipped. Fail: report an error (previous behavior).">
-                        <option value="suffix" data-i18n="toolbar.conflict.suffix">Auto-number (2)</option>
-                        <option value="skip" data-i18n="toolbar.conflict.skip">Skip existing</option>
-                        <option value="fail" data-i18n="toolbar.conflict.fail">Fail</option>
-                    </select>
-                </div>
-                <div class="toolbar-group template-group">
-                    <label class="toolbar-label" data-i18n="toolbar.template">Naming template</label>
-                    <input type="text" id="template" class="glass-input mono"
-                           value="{site}/{performer}/{site}.{date}.{scene}.{quality}" spellcheck="false">
+                <select id="conflict-policy" class="glass-select"
+                        title="What happens when a target filename already exists (on disk, or claimed by another file in this batch). Auto-number: land at the first free ' (2)'…' (99)' name. Skip: leave the file untouched and mark the row skipped. Fail: report an error (previous behavior).">
+                    <option value="suffix" data-i18n="toolbar.conflict.suffix">Auto-number (2)</option>
+                    <option value="skip" data-i18n="toolbar.conflict.skip">Skip existing</option>
+                    <option value="fail" data-i18n="toolbar.conflict.fail">Fail</option>
+                </select>
+                <div class="fusion-nav">
+                    <button id="btn-library" class="glass-btn" title="Library — catalog stats &amp; duplicates">
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <ellipse cx="12" cy="5" rx="9" ry="3"/>
+                            <path d="M3 5v14a9 3 0 0 0 18 0V5"/>
+                            <path d="M3 12a9 3 0 0 0 18 0"/>
+                        </svg>
+                        <span data-i18n="nav.library">Library</span>
+                    </button>
+                    <button id="btn-history" class="glass-btn" title="View rename history">
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M3 3v5h5M3.05 13A9 9 0 1 0 6 5.3L3 8"/>
+                            <path d="M12 7v5l4 2"/>
+                        </svg>
+                        <span data-i18n="nav.history">History</span>
+                    </button>
+                    <button id="btn-settings" class="glass-btn" title="Settings">
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <circle cx="12" cy="12" r="3"/>
+                            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+                        </svg>
+                        <span data-i18n="nav.settings">Settings</span>
+                    </button>
                 </div>
             </div>
 
-            <div class="chips-row">
+            <div class="fusion-row chips-row">
+                <input type="text" id="template" class="glass-input mono"
+                       data-i18n-attr="title" data-i18n="toolbar.template"
+                       value="{site}/{performer}/{site}.{date}.{scene}.{quality}" spellcheck="false">
                 <div class="chips-cluster" id="insert-chips">
                     <span class="chips-key" data-i18n="toolbar.insert">Insert</span>
                     <button type="button" class="tvar-chip" data-var="site">site</button>
@@ -143,16 +123,8 @@
             <div id="template-preview" class="template-preview" aria-live="polite"></div>
             <div id="template-warning" class="template-warning" aria-live="polite"></div>
 
-            <div class="controls-options">
-                <label class="cb-label">
-                    <input type="checkbox" id="flat-rename" checked>
-                    <span data-i18n="toolbar.no_subfolders">No subfolders</span>
-                </label>
-            </div>
-        </section>
-
-        <!-- ═══ Scan Bar ═══ -->
-        <div class="glass-panel scanbar">
+            <!-- ═══ Scan row (fused; keeps .scanbar for the drag&drop hooks) ═══ -->
+            <div class="fusion-row scanbar">
             <svg class="scanbar-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
             </svg>
@@ -168,6 +140,7 @@
             <label class="cb-label" title="" data-i18n-attr="title" data-i18n="scan.skip_organized_hint"><input type="checkbox" id="skip-organized"><span data-i18n="scan.skip_organized">Skip organized</span></label>
             <label class="cb-label" title="" data-i18n-attr="title" data-i18n="scan.include_hidden_hint"><input type="checkbox" id="include-hidden"><span data-i18n="scan.include_hidden">Include hidden</span></label>
             <label class="cb-label" title="" data-i18n-attr="title" data-i18n="match.rematch_hint"><input type="checkbox" id="ignore-cache"><span data-i18n="match.rematch">Re-match</span></label>
+            <label class="cb-label"><input type="checkbox" id="flat-rename" checked><span data-i18n="toolbar.no_subfolders">No subfolders</span></label>
             <div class="scanbar-actions">
                 <button id="btn-scan" class="glass-btn btn-scan" data-i18n="nav.scan">Scan</button>
                 <button id="btn-stop-scan" class="glass-btn btn-stop-scan hidden" data-i18n="nav.stop_scan">Stop</button>
@@ -179,7 +152,8 @@
                     <span data-i18n="nav.rename">Rename</span>
                 </button>
             </div>
-        </div>
+            </div>
+        </section>
 
         <!-- ═══ Status ═══ -->
         <div id="status-bar" class="statusbar hidden">

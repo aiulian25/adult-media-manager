@@ -192,6 +192,32 @@ async function loadTemplateVars() {
     } catch (_) { /* offline / non-fatal — unknown-var warnings stay disabled */ }
 }
 
+/** Fusion bar (Option B): collapse a chip/preset cluster behind a "+N" toggle
+ *  so the dense single-row layout never wraps just because every option is
+ *  visible at once. Purely presentational — every button stays in the DOM and
+ *  wired; hidden ones are display:none until expanded. */
+function _collapseCluster(cluster, maxVisible) {
+    if (!cluster) return;
+    cluster.querySelector('.chips-more')?.remove();
+    const items = [...cluster.querySelectorAll('.tvar-chip, .preset-btn')];
+    items.forEach(el => el.classList.remove('chip-hidden'));
+    // No point collapsing to hide a single item — the toggle costs the same room.
+    if (items.length <= maxVisible + 1) return;
+    const extra = items.slice(maxVisible);
+    let expanded = false;
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'chips-more';
+    const apply = () => {
+        extra.forEach(el => el.classList.toggle('chip-hidden', !expanded));
+        btn.textContent = expanded ? '−' : `+${extra.length}`;
+        btn.title = expanded ? t('toolbar.chips_less') : t('toolbar.chips_more');
+    };
+    btn.addEventListener('click', () => { expanded = !expanded; apply(); });
+    cluster.appendChild(btn);
+    apply();
+}
+
 /** Build the preset buttons from the server's TEMPLATES dict (name → template). */
 function _renderPresetButtons(templates) {
     const cluster = document.querySelector('.template-presets');
@@ -217,6 +243,7 @@ function _renderPresetButtons(templates) {
         cluster.appendChild(btn);
     }
     cluster.hidden = false;
+    _collapseCluster(cluster, 3);   // fusion bar: first 3 presets + "+N"
 }
 
 /** Return the list of {placeholder} names in `tpl` not recognised by the formatter. */
@@ -452,6 +479,8 @@ document.addEventListener('DOMContentLoaded', async () => {
             updateTemplatePreview();
         });
     });
+    // Fusion bar: show the 4 most-used insert chips, rest behind "+N".
+    _collapseCluster(document.getElementById('insert-chips'), 4);
 
     // Live template preview: update as the user types / toggles flat mode.
     template.addEventListener('input', _scheduleTemplatePreview);
