@@ -2428,3 +2428,23 @@ input.input-error {
 @media (max-width: 900px) {
     .fusion-bar #template { min-width: 100%; order: -1; }
 }
+
+/* ═══ Desktop shell (Electron): merge the fusion bar with the window ═══
+   The OS window already provides the frame; a rounded, bordered panel
+   floating inside it reads as a border-within-a-border. In native mode the
+   bar bleeds to the viewport edges and squares off against the title bar;
+   its CONTENT stays aligned with the .app column (max-width 1600px) via the
+   padding calc. Web/Docker (no .is-native) keeps the inset panel. */
+html.is-native .app { padding-top: 0; }
+html.is-native .fusion-bar {
+    margin: 0 calc(50% - 50vw) 12px;               /* full-bleed regardless of .app width */
+    border-radius: 0;
+    border-top: 0;
+    border-left: 0;
+    border-right: 0;
+    padding-left:  max(14px, calc(50vw - 786px));  /* align content with the 1600px column */
+    padding-right: max(14px, calc(50vw - 786px));
+}
+
+/* Settings update card: manual "Check for updates" button */
+.up-check-btn { font-size: 11px; padding: 3px 10px; flex-shrink: 0; }

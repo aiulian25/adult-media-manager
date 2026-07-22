@@ -383,7 +383,9 @@ _GITHUB_REPO = "aiulian25/adult-media-manager"
 _RELEASES_URL = f"https://github.com/{_GITHUB_REPO}/releases"
 _UPDATE_TTL_OK = 24 * 3600      # successful check → re-ask GitHub once a day
 _UPDATE_TTL_FAIL = 3600         # failed check → retry hourly, don't hammer
+_UPDATE_REFRESH_FLOOR = 30.0    # manual "Check for updates" floor — anti-mash
 _update_cache: dict = {"checked_at": 0.0, "release": None, "ok": False}
+_update_refresh_at = 0.0        # last MANUAL refresh (separate from cache TTLs)
 _update_lock = asyncio.Lock()
 
 
@@ -447,6 +449,30 @@ async def _get_update_info() -> Optional[dict]:
             and str(a.get("browser_download_url", "")).startswith("https://")
         ],
     }
+
+
+async def _force_update_refresh() -> str:
+    """Manual "Check for updates" (Settings card). Bypasses the daily/hourly
+    cache TTLs so a stale or failed check is never a 24h lockout — with two
+    deliberate guards:
+      • AMM_UPDATE_CHECK=0 still wins ("disabled"): an admin who turned off
+        outbound update traffic cannot be overridden by a UI click.
+      • A 30s floor ("throttled"): button-mashing serves the cache instead of
+        spamming GitHub's API.
+    Returns "disabled" | "throttled" | "ok" | "unreachable"; on "ok"/
+    "unreachable" the shared cache is updated, so the banner and the periodic
+    checks see the same fresh answer."""
+    global _update_refresh_at
+    if not _AMM_UPDATE_CHECK:
+        return "disabled"
+    now = _time.time()
+    async with _update_lock:
+        if now - _update_refresh_at < _UPDATE_REFRESH_FLOOR:
+            return "throttled"
+        _update_refresh_at = now
+        release = await _fetch_latest_release()
+        _update_cache.update(checked_at=now, release=release, ok=release is not None)
+    return "ok" if release is not None else "unreachable"
 
 
 @app.on_event("startup")
@@ -4799,20 +4825,29 @@ async def serve_thumbnail(file_stem: str, filename: str):
 # ─── Version / update notifier (F17) ───────────────────────────────────
 
 @app.get("/api/version")
-async def get_version():
+async def get_version(refresh: int = Query(0, ge=0, le=1)):
     """Running version plus (cached) newer-release info from GitHub.
 
     ``update`` is null when: up to date, check disabled (AMM_UPDATE_CHECK=0),
-    or GitHub unreachable — failures are always silent. Read-only: downloading
-    and installing updates live in the desktop shell (electron/updater.js),
-    never behind an HTTP endpoint.
+    or GitHub unreachable — background failures are silent. Read-only:
+    downloading and installing updates live in the desktop shell
+    (electron/updater.js), never behind an HTTP endpoint.
+
+    ``?refresh=1`` (Settings "Check for updates" button) forces a fresh GitHub
+    query past the daily cache and reports the honest outcome in
+    ``refresh_state``: "ok" | "unreachable" | "throttled" (30s floor) |
+    "disabled" (AMM_UPDATE_CHECK=0 always wins). Still read-only, so exposing
+    it on a LAN Docker port adds no attack surface beyond a rate-floored
+    outbound GET to the GitHub API.
     """
+    refresh_state = await _force_update_refresh() if refresh else None
     return {
         "version": APP_VERSION,
         "native": _AMM_NATIVE,
         "update_check": _AMM_UPDATE_CHECK,
         "releases_url": _RELEASES_URL,
         "update": await _get_update_info(),
+        "refresh_state": refresh_state,
     }
 
 

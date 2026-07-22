@@ -1,5 +1,12 @@
 /* Adult Media Manager - Frontend Logic */
 
+// ─── Shell mode ───────────────────────────────────────────────────────────────
+// Desktop (Electron): the OS window already frames the app, so the fusion bar
+// merges with it edge-to-edge (html.is-native rules in style.css). Web/Docker
+// keeps the inset floating-panel look — there the browser chrome is not ours.
+// Applied at script load (before first paint) to avoid a layout flash.
+if (window.electronAPI?.isElectron) document.documentElement.classList.add('is-native');
+
 // ─── Custom confirm modal (replaces blocking window.confirm) ─────────────────
 function showConfirmModal(message, onConfirm) {
     const modal   = document.getElementById('confirm-modal');
@@ -879,6 +886,41 @@ function _updIsElectron() {
 }
 
 let _lastUpdCheck = 0;    // throttles visibility-driven rechecks to 1/hour (F11)
+let _updCheckBusy = false; // manual "Check for updates" in flight
+
+/** Settings "Check for updates" — forces a fresh GitHub query past the daily
+ *  cache (server enforces a 30s floor and the AMM_UPDATE_CHECK=0 kill-switch)
+ *  and reports the honest outcome as a toast: found / up to date / unreachable. */
+async function updManualCheck() {
+    if (_updCheckBusy) return;
+    _updCheckBusy = true;
+    renderUpdateCard();                       // button flips to "Checking…"
+    let state = 'unreachable';
+    try {
+        const resp = await fetch('/api/version?refresh=1');
+        if (resp.ok) {
+            updInfo = await resp.json();
+            _lastUpdCheck = Date.now();
+            state = updInfo.refresh_state || 'unreachable';
+        }
+    } catch (_) { /* local server unreachable — same honest message */ }
+    _updCheckBusy = false;
+    renderUpdateCard();
+    if (state === 'ok') {
+        if (updInfo && updInfo.update) {
+            showToast(t('update.check_title'), t('update.check_found', { version: updInfo.update.latest }), 'success');
+            _maybeShowUpdateBanner();         // found via button → banner logic too
+        } else {
+            showToast(t('update.check_title'), t('update.check_uptodate'), 'success');
+        }
+    } else if (state === 'throttled') {
+        showToast(t('update.check_title'), t('update.check_throttled'), 'info');
+    } else if (state === 'disabled') {
+        showToast(t('update.check_title'), t('update.checks_disabled'), 'info');
+    } else {
+        showToast(t('update.check_title'), t('update.check_unreachable'), 'error');
+    }
+}
 
 let _toolHealth = null;   // last /api/health "tools" dict (F2 system check)
 
@@ -913,14 +955,23 @@ function renderUpdateCard() {
     const relUrl = (upd && upd.url) || v.releases_url || 'https://github.com/aiulian25/adult-media-manager/releases';
 
     // Up to date — the quiet default. The F2 system-check line rides below.
+    // "Check for updates" bypasses the daily cache (server keeps a 30s floor);
+    // when the AMM_UPDATE_CHECK=0 kill-switch is on, the button is replaced by
+    // an honest note — a UI click must not override an admin's egress choice.
     if (!upd || !upd.latest) {
+        const checksDisabled = v.update_check === false;
+        const note = checksDisabled ? t('update.checks_disabled') : t('update.checks_daily');
+        const checkBtn = checksDisabled ? '' : `
+                <button class="glass-btn up-check-btn" id="btn-upd-check"${_updCheckBusy ? ' disabled' : ''}>${
+                    escapeHtml(_updCheckBusy ? t('update.check_checking') : t('update.check_btn'))}</button>`;
         slot.innerHTML = `
             <div class="update-card update-row">
                 <span class="update-chip ok">✓ ${escapeHtml(t('update.up_to_date'))}</span>
                 <span style="font-weight:650">AMM v${escapeHtml(v.version)}</span>
-                <span class="up-tiny" style="flex:1">${escapeHtml(t('update.checks_daily'))}</span>
+                <span class="up-tiny" style="flex:1">${escapeHtml(note)}</span>${checkBtn}
                 <a class="up-tiny" href="${escapeHtml(relUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(t('update.releases_link'))}</a>
             </div>${_toolsMissingHtml()}`;
+        document.getElementById('btn-upd-check')?.addEventListener('click', updManualCheck);
         return;
     }
 

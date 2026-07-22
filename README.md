@@ -55,7 +55,7 @@ Clean, flat interface with a live naming-template preview and three built-in the
 | Naming templates | 6 built-in + fully custom with a **live preview** and unknown-variable warnings |
 | Metadata write modes | **Remux + NFO** (default), **Remux only**, **Smart in-place** (`mkvpropedit`/`AtomicParsley`), **Embedded only**, or **NFO only** |
 | NFO sidecars | Kodi/Jellyfin/Plex-compatible `.nfo` with synopsis, provider link, fanart backdrop, actor thumbnails, runtime and stream details |
-| In-app updates | A dismissible banner announces new releases (even in long-lived tabs); desktop builds download, sha256-verify and install the update from inside the app |
+| In-app updates | A dismissible banner announces new releases (even in long-lived tabs); desktop builds download, sha256-verify and install the update from inside the app. A **Check for updates** button in Settings queries GitHub on demand (30s rate floor; honest found / up-to-date / unreachable feedback; respects `AMM_UPDATE_CHECK=0`) |
 | Drag & drop | Drop files or folders directly onto the browser window |
 | Themes | Three built-in themes — **Legacy**, **Dark**, **Light** — switchable in Settings |
 | Settings UI | Add API keys, pick language & theme in the browser — no config file editing required |
@@ -67,9 +67,10 @@ Clean, flat interface with a live naming-template preview and three built-in the
 
 ---
 
-## What's New in v1.12.2
+## What's New in v1.12.3
 
-- **Compact fusion toolbar** — the top of the app was rebuilt for density: brand, the four decision selects (Source / Action / Metadata / On conflict), the naming template and the scan bar now live in **one three-row panel** instead of three stacked bars — about **60% less chrome**, so your results start near the top of the window. Library/History/Settings became icon buttons; rarely-used template chips and presets tuck behind "+N" toggles; nothing moved off-screen and every control keeps its place and shortcut.
+- **Check for updates on demand** — a new button on the Settings update card queries GitHub immediately instead of waiting for the daily check, with honest feedback for every outcome: update found, you're up to date, or GitHub unreachable. A 30-second rate floor absorbs impatient clicking, and the `AMM_UPDATE_CHECK=0` zero-egress kill-switch still wins — the card says so instead of silently doing nothing.
+- **Desktop app: no more frame-within-a-frame** — on deb/rpm/AppImage the toolbar now merges edge-to-edge with the application window instead of floating as a bordered panel inside it. The web/Docker UI keeps its inset panel (there the browser owns the window).
 
 See the [releases page](https://github.com/aiulian25/adult-media-manager/releases) for full notes on every version.
 
@@ -155,10 +156,10 @@ No Docker required. Ships a self-contained Python 3.12 runtime — no system Pyt
 
 ### AppImage (recommended — no root required)
 
-1. Download `Adult.Media.Manager-1.12.2.AppImage`
+1. Download `Adult.Media.Manager-1.12.3.AppImage`
 2. Make it executable:
    ```bash
-   chmod +x Adult.Media.Manager-1.12.2.AppImage
+   chmod +x Adult.Media.Manager-1.12.3.AppImage
    ```
 3. Double-click it (or run it from the terminal)
 
@@ -174,7 +175,7 @@ From that point, launch it from your application menu. The original downloaded f
 ### .deb Package (Debian / Ubuntu / Mint)
 
 ```bash
-sudo apt install ./adult-media-manager_1.12.2_amd64.deb
+sudo apt install ./adult-media-manager_1.12.3_amd64.deb
 ```
 
 Launch **Adult Media Manager** from your application menu, or:
@@ -188,7 +189,7 @@ Launch **Adult Media Manager** from your application menu, or:
 Requires [RPM Fusion](https://rpmfusion.org/) enabled for the `ffmpeg` / `mkvtoolnix` media tools (used as fallback — the package also ships its own bundled copies):
 
 ```bash
-sudo dnf install ./adult-media-manager-1.12.2.x86_64.rpm
+sudo dnf install ./adult-media-manager-1.12.3.x86_64.rpm
 ```
 
 Remove with `sudo dnf remove adult-media-manager`.
