@@ -236,6 +236,8 @@
   "toolbar.metadata.sidecar": "Solo sidecar (.nfo)",
   "settings.metadata_mode": "Escritura de metadatos predeterminada",
   "settings.metadata_mode_hint": "Define cómo se guardan los metadatos al renombrar o guardar. \"Remux\" (predeterminado) reescribe el contenedor con las etiquetas incrustadas y crea un archivo .nfo — funciona con todos los formatos. \"Ambos\" edita las etiquetas en el archivo (más rápido, con remux de respaldo) + .nfo. Se conserva entre reinicios.",
+  "settings.clear_metadata": "Borrar los metadatos existentes del archivo antes de incrustar",
+  "settings.clear_metadata_hint": "Desactivado por defecto. Al activarlo, la incrustación parte de cero en lugar de combinar con las etiquetas actuales del archivo — útil cuando los archivos traen metadatos incrustados erróneos o anticuados. Solo se borran las etiquetas del contenedor; las etiquetas de idioma de audio/subtítulos se conservan. Se aplica a todos los modos de incrustación (los modos in-place pasan al remux completo, ya que solo un remux puede eliminar etiquetas antiguas desconocidas).",
   "app.subtitle": "Escanea, empareja y renombra tus medios",
   "nav.new_scan": "nuevo escaneo",
   "toolbar.insert": "Insertar",

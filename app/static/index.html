@@ -215,6 +215,14 @@
                     <p class="settings-pref-hint" data-i18n="settings.metadata_mode_hint">Sets how metadata is saved when you rename or save. "Both" (recommended) embeds tags in the file AND writes a .nfo sidecar for extra assurance. Persisted across restarts.</p>
                 </div>
 
+                <div class="settings-pref">
+                    <label class="cb-label" for="settings-clear-metadata" style="gap:8px;">
+                        <input type="checkbox" id="settings-clear-metadata">
+                        <span data-i18n="settings.clear_metadata">Clear existing file metadata before embedding</span>
+                    </label>
+                    <p class="settings-pref-hint" data-i18n="settings.clear_metadata_hint">Off by default. When enabled, embedding starts from a blank slate instead of merging over the file's current tags — use this when files carry wrong or outdated embedded metadata. Only container-level tags are cleared; audio/subtitle language tags are kept. Applies to every embedding mode (in-place modes switch to the full remux, since only a remux can strip unknown stale tags).</p>
+                </div>
+
                 <div class="settings-pref-row">
                     <label class="settings-pref-label" for="settings-performer-order" data-i18n="settings.performer_order">Performer order in names</label>
                     <select id="settings-performer-order" class="glass-input settings-select">

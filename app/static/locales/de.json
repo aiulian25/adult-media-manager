@@ -236,6 +236,8 @@
   "toolbar.metadata.sidecar": "Nur Sidecar (.nfo)",
   "settings.metadata_mode": "Standard-Metadatenschreibweise",
   "settings.metadata_mode_hint": "Legt fest, wie Metadaten beim Umbenennen oder Speichern geschrieben werden. „Remux“ (Standard) schreibt den Container mit eingebetteten Tags neu und erzeugt eine .nfo-Datei — funktioniert mit jedem Format. „Beides“ bearbeitet Tags direkt in der Datei (schneller, Remux-Fallback) + .nfo. Bleibt über Neustarts erhalten.",
+  "settings.clear_metadata": "Vorhandene Datei-Metadaten vor dem Einbetten löschen",
+  "settings.clear_metadata_hint": "Standardmäßig aus. Wenn aktiviert, beginnt das Einbetten mit einer leeren Basis, statt über die vorhandenen Tags der Datei zu schreiben — nützlich bei Dateien mit falschen oder veralteten eingebetteten Metadaten. Nur Container-Tags werden gelöscht; Sprach-Tags von Audio/Untertiteln bleiben erhalten. Gilt für alle Einbettungsmodi (In-Place-Modi wechseln zum vollständigen Remux, da nur ein Remux unbekannte alte Tags entfernen kann).",
   "app.subtitle": "Medien scannen, zuordnen & umbenennen",
   "nav.new_scan": "Neuer Scan",
   "toolbar.insert": "Einfügen",

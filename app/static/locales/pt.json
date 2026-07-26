@@ -236,6 +236,8 @@
   "toolbar.metadata.sidecar": "Apenas sidecar (.nfo)",
   "settings.metadata_mode": "Gravação de metadados predefinida",
   "settings.metadata_mode_hint": "Define como os metadados são salvos ao renomear ou salvar. \"Remux\" (padrão) reescreve o contêiner com as tags incorporadas e cria um arquivo .nfo — funciona com todos os formatos. \"Ambos\" edita as tags no próprio arquivo (mais rápido, com remux de reserva) + .nfo. Mantido entre reinicializações.",
+  "settings.clear_metadata": "Limpar os metadados existentes do ficheiro antes de incorporar",
+  "settings.clear_metadata_hint": "Desativado por predefinição. Quando ativado, a incorporação parte do zero em vez de fundir com as etiquetas atuais do ficheiro — útil quando os ficheiros trazem metadados incorporados errados ou desatualizados. Apenas as etiquetas do contentor são limpas; as etiquetas de idioma de áudio/legendas são mantidas. Aplica-se a todos os modos de incorporação (os modos in-place mudam para o remux completo, pois só um remux consegue remover etiquetas antigas desconhecidas).",
   "app.subtitle": "Digitalize, corresponda e renomeie sua mídia",
   "nav.new_scan": "novo scan",
   "toolbar.insert": "Inserir",

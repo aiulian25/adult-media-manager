@@ -239,6 +239,16 @@ def _effective_performer_order() -> str:
     return val if val in _ALLOWED_PERFORMER_ORDERS else _DEFAULT_PERFORMER_ORDER
 
 
+def _effective_clear_metadata() -> bool:
+    """Clear pre-existing container metadata before embedding (default OFF).
+
+    When True the remux starts from a blank slate (-map_metadata -1) instead of
+    merging over whatever tags the file arrived with — the fix for files that
+    carry wrong or dated embedded metadata. Global/container metadata only:
+    per-stream tags (audio language, subtitle language) are preserved."""
+    return _load_settings().get("clear_metadata") is True
+
+
 # Genders counted as "female" for the ♀-first sort. Sources use different
 # vocabularies (StashDB enum FEMALE/TRANSGENDER_FEMALE, TPDB "Female"/"Trans");
 # values arrive normalized to lowercase by the API clients.
@@ -2307,7 +2317,12 @@ async def rename_files(req: RenameRequest, background_tasks: BackgroundTasks):
         # Move the video AND its same-stem companions (subtitles / NFO / artwork)
         # with the same action, so a rename never orphans a `.srt`/`-poster.jpg`
         # next to the old name (F2). Companion results ride on result.companions.
-        result = execute_rename_with_companions(old_path, new_path, action)
+        # to_thread: a Copy — or a cross-device Move, which shutil silently
+        # degrades to copy+delete (local disk → NAS) — is a full multi-GB file
+        # copy; run inline it blocks the single event loop for the whole batch
+        # and /api/health (Docker HEALTHCHECK, 10s) times out.
+        result = await asyncio.to_thread(
+            execute_rename_with_companions, old_path, new_path, action)
         # F10: preflight flags for the modal summary — the suffix policy changed
         # this name / a component was byte-budget shortened.
         result.collision_resolved = collision_resolved
@@ -2756,6 +2771,7 @@ async def get_settings():
         "theme":   _effective_theme(),
         "embed_mode": _effective_embed_mode(),
         "performer_order": _effective_performer_order(),
+        "clear_metadata": _effective_clear_metadata(),
         # F5 — opt-in, DEFAULT OFF: only an explicit stored True enables it.
         "contribute_fingerprints": _load_settings().get("contribute_fingerprints") is True,
     }
@@ -2768,6 +2784,9 @@ class SaveSettingsRequest(BaseModel):
     theme:           Optional[str] = None
     embed_mode:      Optional[str] = None
     performer_order: Optional[str] = None
+    # Clear pre-existing container metadata before embedding. Tri-state like
+    # contribute_fingerprints: None = keep, True/False = set explicitly.
+    clear_metadata:  Optional[bool] = None
     # F5 — OPT-IN fingerprint contribution to StashDB. Tri-state on the wire:
     # None = leave unchanged, True/False = set explicitly (the generic truthy
     # prefs loop would treat False as "keep", silently making the opt-in
@@ -2895,6 +2914,12 @@ async def save_settings(req: SaveSettingsRequest):
         settings["contribute_fingerprints"] = req.contribute_fingerprints
         dirty = True
 
+    # Same tri-state handling for the clear-metadata toggle.
+    if (req.clear_metadata is not None
+            and settings.get("clear_metadata") != req.clear_metadata):
+        settings["clear_metadata"] = req.clear_metadata
+        dirty = True
+
     if dirty:
         _save_settings(settings)
 
@@ -2925,6 +2950,7 @@ async def save_settings(req: SaveSettingsRequest):
         "theme":   _effective_theme(),
         "embed_mode": _effective_embed_mode(),
         "performer_order": _effective_performer_order(),
+        "clear_metadata": _effective_clear_metadata(),
         "contribute_fingerprints": _load_settings().get("contribute_fingerprints") is True,
     }
 
@@ -3983,10 +4009,17 @@ def _thumbnail_dir_for(file_path: Path) -> Path:
 
 
 @app.post("/api/extract-thumbnails")
-async def extract_thumbnails(request: ThumbnailRequest):
+def extract_thumbnails(request: ThumbnailRequest):
     """
     Extract multiple thumbnails from a video file using ffmpeg.
     Returns base64-encoded images for preview.
+
+    Plain ``def`` on purpose: the body is one blocking ffprobe plus six
+    blocking ffmpeg frame extractions (up to ~3 min worst-case on a huge file
+    over NAS). As ``async def`` this ran ON the event loop and starved every
+    other request — including /api/health, which is how Docker's HEALTHCHECK
+    (10s timeout) flagged the container unhealthy during thumbnail extraction.
+    FastAPI runs plain-def endpoints in its anyio worker threadpool instead.
     """
     file_path = Path(request.file_path)
 
@@ -4337,7 +4370,12 @@ async def embed_metadata(file_path: Path, metadata: dict) -> tuple[bool, str]:
             "-map", "0:a?",
             "-map", "0:s?",
             "-codec", "copy",
-            "-map_metadata", "0",          # keep existing metadata as base
+            # "clear metadata" (Settings, default off): start from a blank
+            # slate instead of merging over the file's existing tags — for
+            # files that arrived with wrong/dated embedded metadata. -1 drops
+            # only GLOBAL container metadata; per-stream tags (audio/subtitle
+            # language) ride the mapped streams and are kept either way.
+            "-map_metadata", ("-1" if _effective_clear_metadata() else "0"),
         ]
 
         # Shared field→tag mapping (also used by the mkvpropedit / AtomicParsley
@@ -4435,13 +4473,16 @@ async def embed_metadata(file_path: Path, metadata: dict) -> tuple[bool, str]:
                 )
                 os.close(nas_fd)
                 nas_tmp = Path(nas_str)
+                # to_thread: this is the multi-GB remux output crossing back to
+                # the NAS — inline it blocks the event loop for the whole copy
+                # (health checks, progress polling, everything) per batch file.
                 try:
-                    _shutil.copy2(str(tmp_path), str(nas_tmp))
+                    await asyncio.to_thread(_shutil.copy2, str(tmp_path), str(nas_tmp))
                 except OSError:
                     try:
-                        _shutil.copy(str(tmp_path), str(nas_tmp))
+                        await asyncio.to_thread(_shutil.copy, str(tmp_path), str(nas_tmp))
                     except OSError:
-                        _shutil.copyfile(str(tmp_path), str(nas_tmp))
+                        await asyncio.to_thread(_shutil.copyfile, str(tmp_path), str(nas_tmp))
 
                 # Phase 3: atomic replace — original only changes at this instant.
                 os.replace(str(nas_tmp), str(file_path))
@@ -4455,12 +4496,12 @@ async def embed_metadata(file_path: Path, metadata: dict) -> tuple[bool, str]:
                 if nas_tmp and nas_tmp.exists():
                     nas_tmp.unlink(missing_ok=True)
                 try:
-                    _shutil.copy2(str(tmp_path), str(file_path))
+                    await asyncio.to_thread(_shutil.copy2, str(tmp_path), str(file_path))
                 except OSError:
                     try:
-                        _shutil.copy(str(tmp_path), str(file_path))
+                        await asyncio.to_thread(_shutil.copy, str(tmp_path), str(file_path))
                     except OSError:
-                        _shutil.copyfile(str(tmp_path), str(file_path))
+                        await asyncio.to_thread(_shutil.copyfile, str(tmp_path), str(file_path))
                 return True, ""
         finally:
             tmp_path.unlink(missing_ok=True)
@@ -4626,6 +4667,9 @@ async def _embed_for_mode(file_path: Path, metadata: dict, embed_mode: str) -> t
         embed_mode,
         has_mkvpropedit=bool(_mkvpropedit_path()),
         has_atomicparsley=bool(_atomicparsley_path()),
+        # In-place editors can't strip stale tags they don't know about, so
+        # the clear-metadata setting routes every embedding mode to the remux.
+        clear_metadata=_effective_clear_metadata(),
     )
     if not plan:
         return True, ""  # nothing to do (e.g. nfo_only) — safe no-op

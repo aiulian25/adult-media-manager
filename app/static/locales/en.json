@@ -236,6 +236,8 @@
   "toolbar.metadata.sidecar": "Sidecar only (.nfo)",
   "settings.metadata_mode": "Default metadata write",
   "settings.metadata_mode_hint": "Sets how metadata is saved when you rename or save. \"Remux\" (default) rewrites the container with the tags embedded and writes a .nfo sidecar — works for every format. \"Both\" edits tags in place (faster, remux fallback) + .nfo. Persisted across restarts.",
+  "settings.clear_metadata": "Clear existing file metadata before embedding",
+  "settings.clear_metadata_hint": "Off by default. When enabled, embedding starts from a blank slate instead of merging over the file's current tags — use this when files carry wrong or outdated embedded metadata. Only container-level tags are cleared; audio/subtitle language tags are kept. Applies to every embedding mode (in-place modes switch to the full remux, since only a remux can strip unknown stale tags).",
   "app.subtitle": "Scan, match & rename your media",
   "nav.new_scan": "new scan",
   "toolbar.insert": "Insert",

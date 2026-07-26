@@ -143,6 +143,7 @@ def plan_embed(
     *,
     has_mkvpropedit: bool = False,
     has_atomicparsley: bool = False,
+    clear_metadata: bool = False,
 ) -> list[str]:
     """
     Return the ordered list of embedding strategies to attempt for one file.
@@ -160,6 +161,10 @@ def plan_embed(
               by whether the app also writes a sidecar, which is decided
               outside this planner.
         has_mkvpropedit / has_atomicparsley: whether each in-place tool resolved.
+        clear_metadata: user wants pre-existing container metadata dropped
+            before writing. Only the remux can truly strip unknown/stale tags —
+            in-place editors overwrite the fields they know and leave the rest —
+            so this forces the remux path for every mode that embeds.
 
     Returns:
         e.g. ["mkvpropedit", "remux"], ["atomicparsley", "remux"], ["remux"], [].
@@ -168,6 +173,8 @@ def plan_embed(
 
     if mode == "nfo_only":
         return []
+    if clear_metadata:
+        return ["remux"]
     if mode in ("embed", "remux", "remux_only"):
         return ["remux"]
 

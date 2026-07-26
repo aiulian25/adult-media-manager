@@ -236,6 +236,8 @@
   "toolbar.metadata.sidecar": "Sidecar seulement (.nfo)",
   "settings.metadata_mode": "Écriture des métadonnées par défaut",
   "settings.metadata_mode_hint": "Définit comment les métadonnées sont enregistrées lors du renommage ou de la sauvegarde. « Remux » (par défaut) réécrit le conteneur avec les tags intégrés et crée un fichier .nfo — compatible avec tous les formats. « Les deux » modifie les tags sur place (plus rapide, remux en secours) + .nfo. Conservé après redémarrage.",
+  "settings.clear_metadata": "Effacer les métadonnées existantes du fichier avant l'intégration",
+  "settings.clear_metadata_hint": "Désactivé par défaut. Une fois activé, l'intégration repart de zéro au lieu de fusionner avec les tags actuels du fichier — utile quand les fichiers portent des métadonnées intégrées erronées ou obsolètes. Seuls les tags du conteneur sont effacés ; les tags de langue audio/sous-titres sont conservés. S'applique à tous les modes d'intégration (les modes in-place basculent vers le remux complet, seul un remux pouvant supprimer des tags obsolètes inconnus).",
   "app.subtitle": "Scannez, associez et renommez vos médias",
   "nav.new_scan": "nouveau scan",
   "toolbar.insert": "Insérer",

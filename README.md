@@ -54,6 +54,7 @@ Clean, flat interface with a live naming-template preview and three built-in the
 | Confidence bands & review queue | High / Medium / Low colour bands + filters to batch-confirm strong matches and focus on the ambiguous middle |
 | Naming templates | 6 built-in + fully custom with a **live preview** and unknown-variable warnings |
 | Metadata write modes | **Remux + NFO** (default), **Remux only**, **Smart in-place** (`mkvpropedit`/`AtomicParsley`), **Embedded only**, or **NFO only** |
+| Clear stale metadata | Optional Settings toggle: embedding starts from a blank slate instead of merging over the file's existing tags — for files that arrived with wrong or dated embedded metadata. Audio/subtitle language tags are always kept |
 | NFO sidecars | Kodi/Jellyfin/Plex-compatible `.nfo` with synopsis, provider link, fanart backdrop, actor thumbnails, runtime and stream details |
 | In-app updates | A dismissible banner announces new releases (even in long-lived tabs); desktop builds download, sha256-verify and install the update from inside the app. A **Check for updates** button in Settings queries GitHub on demand (30s rate floor; honest found / up-to-date / unreachable feedback; respects `AMM_UPDATE_CHECK=0`) |
 | Drag & drop | Drop files or folders directly onto the browser window |
@@ -67,10 +68,10 @@ Clean, flat interface with a live naming-template preview and three built-in the
 
 ---
 
-## What's New in v1.12.3
+## What's New in v1.12.4
 
-- **Check for updates on demand** — a new button on the Settings update card queries GitHub immediately instead of waiting for the daily check, with honest feedback for every outcome: update found, you're up to date, or GitHub unreachable. A 30-second rate floor absorbs impatient clicking, and the `AMM_UPDATE_CHECK=0` zero-egress kill-switch still wins — the card says so instead of silently doing nothing.
-- **Desktop app: no more frame-within-a-frame** — on deb/rpm/AppImage the toolbar now merges edge-to-edge with the application window instead of floating as a bordered panel inside it. The web/Docker UI keeps its inset panel (there the browser owns the window).
+- **No more "unhealthy" containers during big jobs** — large file copies (rename phase, remux commit) and thumbnail extraction used to run on the app's event loop, freezing every request — including `/api/health`, which is why Docker flagged the container unhealthy during batches. They now run in worker threads: the health endpoint answers in milliseconds even mid-batch, and progress polling stays live. Same fix benefits all variants.
+- **Clear stale metadata (optional)** — a new Settings toggle: when enabled, embedding starts from a blank slate instead of merging over the file's existing tags — for files that arrived with wrong or dated embedded metadata. Container-level tags only; audio/subtitle language tags are always kept. In-place modes automatically switch to the full remux while this is on, since only a remux can strip unknown stale tags.
 
 See the [releases page](https://github.com/aiulian25/adult-media-manager/releases) for full notes on every version.
 
@@ -156,10 +157,10 @@ No Docker required. Ships a self-contained Python 3.12 runtime — no system Pyt
 
 ### AppImage (recommended — no root required)
 
-1. Download `Adult.Media.Manager-1.12.3.AppImage`
+1. Download `Adult.Media.Manager-1.12.4.AppImage`
 2. Make it executable:
    ```bash
-   chmod +x Adult.Media.Manager-1.12.3.AppImage
+   chmod +x Adult.Media.Manager-1.12.4.AppImage
    ```
 3. Double-click it (or run it from the terminal)
 
@@ -175,7 +176,7 @@ From that point, launch it from your application menu. The original downloaded f
 ### .deb Package (Debian / Ubuntu / Mint)
 
 ```bash
-sudo apt install ./adult-media-manager_1.12.3_amd64.deb
+sudo apt install ./adult-media-manager_1.12.4_amd64.deb
 ```
 
 Launch **Adult Media Manager** from your application menu, or:
@@ -189,7 +190,7 @@ Launch **Adult Media Manager** from your application menu, or:
 Requires [RPM Fusion](https://rpmfusion.org/) enabled for the `ffmpeg` / `mkvtoolnix` media tools (used as fallback — the package also ships its own bundled copies):
 
 ```bash
-sudo dnf install ./adult-media-manager-1.12.3.x86_64.rpm
+sudo dnf install ./adult-media-manager-1.12.4.x86_64.rpm
 ```
 
 Remove with `sudo dnf remove adult-media-manager`.
@@ -373,6 +374,9 @@ Click **History** to see every action AMM has performed. Each move/copy/hardlink
 
 **Embedding seems stuck / "interrupted"**
 - Metadata is embedded in the background after files move. The progress banner re-attaches after a page refresh and survives brief server hiccups. If the server restarted mid-embed, the `.nfo` sidecars are already written; re-run the embed for any files that still need it.
+
+**Container reported unhealthy during big renames / embeds**
+- Fixed since v1.12.4: large file copies (rename phase, remux commit) and thumbnail extraction used to block the app's event loop, so `/api/health` couldn't answer within Docker's 10s HEALTHCHECK window. They now run in worker threads and the health endpoint answers in milliseconds even mid-batch.
 
 **UI looks unchanged after an update**
 - Fixed since v1.12: the server now sends `Cache-Control: no-cache` on all UI assets and the desktop app clears its renderer cache on the first launch after a version change, so the interface always matches the installed version. Coming from v1.12 or older, do one hard refresh (Ctrl+Shift+R in a browser tab; desktop fixes itself on restart) and it won't happen again.

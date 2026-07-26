@@ -853,6 +853,8 @@ async function openSettingsModal() {
             if (orderSel && data.performer_order) orderSel.value = data.performer_order;
             const fpCb = document.getElementById('settings-contribute-fp');
             if (fpCb) fpCb.checked = data.contribute_fingerprints === true;
+            const clearCb = document.getElementById('settings-clear-metadata');
+            if (clearCb) clearCb.checked = data.clear_metadata === true;
         }
     } catch (_) {
         // Non-fatal — badges stay in default state
@@ -1204,6 +1206,9 @@ async function saveSettings() {
                 theme:           themeVal,
                 embed_mode:      embedVal,
                 performer_order: orderVal,
+                // Explicit true/false — the server treats null as "keep".
+                clear_metadata:
+                    document.getElementById('settings-clear-metadata')?.checked === true,
                 // F5: explicit true/false — the server treats null as "keep".
                 contribute_fingerprints:
                     document.getElementById('settings-contribute-fp')?.checked === true,
