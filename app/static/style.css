@@ -2448,3 +2448,12 @@ html.is-native .fusion-bar {
 
 /* Settings update card: manual "Check for updates" button */
 .up-check-btn { font-size: 11px; padding: 3px 10px; flex-shrink: 0; }
+
+/* ═══ Sticky fusion bar: the toolbar stays visible while results scroll ═══
+   z-index 500: above cards/thumbnails, below every modal (1000+) and menu
+   (2000+). Solid --panel background, so content never shows through. */
+.fusion-bar {
+    position: sticky;
+    top: 0;
+    z-index: 500;
+}

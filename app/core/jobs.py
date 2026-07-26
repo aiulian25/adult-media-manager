@@ -105,6 +105,23 @@ class JobStore:
         except Exception as e:
             print(f"WARNING: job store progress failed: {e}")
 
+    def extend(self, job_id: str, extra_total: int) -> None:
+        """Grow a job's total (chunked rename: later chunks join the first
+        chunk's job so the UI shows ONE progress over the whole batch). Also
+        flips the status back to running — a fast first chunk may already have
+        finished before the next chunk arrived."""
+        if not self._conn or not job_id:
+            return
+        try:
+            with self._lock:
+                self._conn.execute(
+                    "UPDATE jobs SET total=total+?, status='running', updated_at=? WHERE id=?",
+                    (extra_total, time.time(), job_id),
+                )
+                self._conn.commit()
+        except Exception as e:
+            print(f"WARNING: job store extend failed: {e}")
+
     def finish(self, job_id: str, status: str = "complete") -> None:
         if not self._conn or not job_id:
             return

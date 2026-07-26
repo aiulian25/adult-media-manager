@@ -178,6 +178,19 @@ def _job_progress(job_id: str, warning: Optional[dict] = None) -> None:
     _job_store.progress(job_id, job["done"], job["warnings"])
 
 
+def _job_extend(job_id: str, extra_total: int) -> None:
+    """Grow an existing job (chunked rename: every chunk after the first joins
+    the first chunk's job, so the embed banner counts the WHOLE batch instead
+    of resetting to the last chunk's size). Resurrects a job that completed
+    between chunks — same batch, still in flight from the user's view."""
+    job = _embed_jobs.get(job_id)
+    if job is None:
+        return
+    job["total"] += extra_total
+    job["complete"] = job["done"] >= job["total"]
+    _job_store.extend(job_id, extra_total)
+
+
 def _job_finish(job_id: str) -> None:
     """Mark a job complete in memory AND in the durable store."""
     job = _embed_jobs.get(job_id)
@@ -692,6 +705,11 @@ class RenameRequest(BaseModel):
     operations: list[dict]
     action: str = "test"
     embed_mode: str = "embed"
+    # Chunked batches: the client passes the FIRST chunk's embed job id with
+    # every later chunk so all chunks report into one job — the progress banner
+    # then counts the whole batch ("7 of 23") instead of resetting to the last
+    # chunk's size ("0 of 5"). None/unknown/foreign ids simply start a new job.
+    embed_job_id: Optional[str] = None
     # Collision policy (F1): what to do when a target path already exists (on
     # disk, or claimed earlier in this batch). suffix = auto-number " (N)".
     on_conflict: str = "suffix"
@@ -702,6 +720,17 @@ class RenameRequest(BaseModel):
         if v not in ("suffix", "skip", "fail"):
             raise ValueError("on_conflict must be 'suffix', 'skip' or 'fail'")
         return v
+
+    @field_validator("embed_job_id", mode="before")
+    @classmethod
+    def validate_embed_job_id(cls, v) -> Optional[str]:
+        # Server-generated ids are uuid4().hex — anything else is discarded
+        # (treated as "start a new job"), never an error: the id is a UX hint,
+        # not a capability.
+        if v is None:
+            return None
+        v = str(v).strip().lower()
+        return v if re.fullmatch(r"[0-9a-f]{32}", v) else None
 
     @field_validator("action")
     @classmethod
@@ -851,6 +880,20 @@ def _probe_duration_seconds(path: Path) -> Optional[float]:
         return None
 
 
+# Natural ("human alphabetical") ordering: digit runs compare as numbers, the
+# rest case-insensitively — so "2 Alex" sorts before "10 Brandi" instead of the
+# lexicographic 1, 10, 11, 2 the file picker used to show. Tokens are tagged
+# tuples ((0,int) | (1,str)) so int/str never compare directly (TypeError-safe
+# for names like "10 Brandi" vs "Ann"). Shared by /api/browse and the scan
+# path resolution so every listing agrees, on every build target.
+_NAT_SPLIT_RE = re.compile(r"(\d+)")
+
+
+def _natural_key(name: str) -> list:
+    return [(0, int(tok)) if tok.isdigit() else (1, tok.casefold())
+            for tok in _NAT_SPLIT_RE.split(name) if tok]
+
+
 def _resolve_scan_paths_req(req: "ScanRequest") -> tuple[list[Path], Optional[str]]:
     """Resolve a scan request into a candidate file list, honouring ``recursive``.
 
@@ -872,7 +915,8 @@ def _resolve_scan_paths_req(req: "ScanRequest") -> tuple[list[Path], Optional[st
                 continue
             if p.is_dir():
                 try:
-                    out.extend(sorted(p.rglob("*")) if req.recursive else sorted(p.iterdir()))
+                    out.extend(sorted(p.rglob("*"), key=lambda q: _natural_key(str(q))) if req.recursive
+                                else sorted(p.iterdir(), key=lambda q: _natural_key(str(q))))
                 except (OSError, PermissionError):
                     continue
             else:
@@ -883,7 +927,8 @@ def _resolve_scan_paths_req(req: "ScanRequest") -> tuple[list[Path], Optional[st
         return [base], None
     if base.is_dir():
         try:
-            paths = sorted(base.rglob("*")) if req.recursive else sorted(base.iterdir())
+            paths = (sorted(base.rglob("*"), key=lambda q: _natural_key(str(q))) if req.recursive
+                     else sorted(base.iterdir(), key=lambda q: _natural_key(str(q))))
         except (OSError, PermissionError) as e:
             return [], f"Cannot access directory: {e}"
         return paths, None
@@ -2468,8 +2513,16 @@ async def rename_files(req: RenameRequest, background_tasks: BackgroundTasks):
 
     # ── Phase 2: metadata embedding + NFO — runs in background ──────────────
     embeddable = [(r, p, m, c) for r, p, m, c in phase1 if r.success and r.new_path]
-    job_id = uuid.uuid4().hex
-    _job_create(job_id, len(embeddable), kind="embed")
+    # Chunked batches share ONE job: later chunks pass the first chunk's id
+    # back and extend it, so the progress banner counts the whole batch. An
+    # unknown/expired id (e.g. server restarted mid-batch) starts a fresh job.
+    job_id = None
+    if req.embed_job_id and req.embed_job_id in _embed_jobs:
+        job_id = req.embed_job_id
+        _job_extend(job_id, len(embeddable))
+    if job_id is None:
+        job_id = uuid.uuid4().hex
+        _job_create(job_id, len(embeddable), kind="embed")
     background_tasks.add_task(_run_embed_phase, job_id, embeddable, req.embed_mode)
     return {"results": phase1_results, "embed_job_id": job_id}
 
@@ -2647,7 +2700,13 @@ async def _run_embed_phase(job_id: str, tasks: list, embed_mode: str = "embed") 
         )
 
     await asyncio.gather(*[_embed_one(r, p, m, c) for r, p, m, c in tasks])
-    _job_finish(job_id)
+    # Chunk-shared jobs (_job_extend): several background tasks report into one
+    # job, so completion belongs to whichever task drains the LAST unit — not
+    # to each task's own gather. Everything is loop-local (no threads), so this
+    # check can't race with a not-yet-counted unit.
+    job = _embed_jobs.get(job_id)
+    if job is None or job["done"] >= job["total"]:
+        _job_finish(job_id)
 
 
 async def _run_manual_embed_job(
@@ -3257,7 +3316,7 @@ def browse_directory(path: str = Query(None), show_hidden: bool = Query(False)):
         # and the process isn't root, or a dead NAS mount) — surface that as a
         # clean 403/503 instead of a generic 500 from the catch-all below.
         try:
-            entries = sorted(p.iterdir(), key=lambda x: (not x.is_dir(), x.name.lower()))
+            entries = sorted(p.iterdir(), key=lambda x: (not x.is_dir(), _natural_key(x.name)))
         except PermissionError:
             raise HTTPException(status_code=403, detail="Permission denied for this directory")
         except OSError as e:

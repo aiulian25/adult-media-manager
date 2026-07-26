@@ -251,13 +251,16 @@ function _loadRenameQueue() {
  * Send a single chunk to /api/rename and return the parsed response data.
  * Throws on HTTP errors so the caller can decide whether to continue.
  */
-async function _sendChunk(chunk, actionType, embedMode = 'embed') {
+async function _sendChunk(chunk, actionType, embedMode = 'embed', embedJobId = null) {
     const res = await fetch('/api/rename', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({
             operations: chunk, action: actionType, embed_mode: embedMode,
-            on_conflict: document.getElementById('conflict-policy')?.value || 'suffix'
+            on_conflict: document.getElementById('conflict-policy')?.value || 'suffix',
+            // Chunk 2+ reports into chunk 1's embed job so the progress banner
+            // counts the WHOLE batch, not just the last chunk (the "0 of 5" bug).
+            embed_job_id: embedJobId,
         })
     });
     if (!res.ok) {
@@ -312,7 +315,7 @@ async function _doRename(operations, actionType, embedMode = 'embed') {
 
     let allResults     = [];
     let processed      = 0;
-    let lastEmbedJobId = null;
+    let embedJobId     = null;   // chunk 1 creates it; later chunks extend it
 
     for (let ci = 0; ci < chunks.length; ci++) {
         const chunk = chunks[ci];
@@ -320,9 +323,9 @@ async function _doRename(operations, actionType, embedMode = 'embed') {
         progressFill.style.width = `${Math.round(((ci) / chunks.length) * 100)}%`;
 
         try {
-            const data = await _sendChunk(chunk, actionType, embedMode);
+            const data = await _sendChunk(chunk, actionType, embedMode, embedJobId);
             allResults = allResults.concat(data.results);
-            if (data.embed_job_id) lastEmbedJobId = data.embed_job_id;
+            if (data.embed_job_id) embedJobId = data.embed_job_id;
 
             // Prune the persisted queue after each successful chunk
             const remaining = operations.slice(processed + chunk.length);
@@ -350,7 +353,7 @@ async function _doRename(operations, actionType, embedMode = 'embed') {
     progressFill.style.width = '100%';
     showStatus(t('status.renamed_total', { success: successful, total }), 'success');
     displayRenameResults(allResults);
-    _applyRenameResults(allResults, lastEmbedJobId);
+    _applyRenameResults(allResults, embedJobId);
     btnRename.disabled = false;
 }
 
