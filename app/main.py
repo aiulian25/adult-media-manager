@@ -130,13 +130,40 @@ catalog = Catalog(DATA_DIR / "catalog.db")
 #   • The original is only atomically replaced in the final os.replace() step.
 #   • A container crash leaves stale files here, not in the library;
 #     they are purged on every startup (see loop below).
+# AMM_EMBED_STAGING (optional): override the staging directory — the big win
+# is pointing it at a tmpfs/RAM disk (e.g. docker-compose `tmpfs:`) so the
+# remux writes at memory speed and local disk I/O drops to zero; only the
+# final verified copy-back touches the NAS. Operator-controlled env (same
+# trust level as DATA_DIR itself); falls back to the default on any error.
 _EMBED_STAGING_DIR: Path = DATA_DIR / "embed-tmp"
-_EMBED_STAGING_DIR.mkdir(parents=True, exist_ok=True)
-for _f in list(_EMBED_STAGING_DIR.iterdir()):  # purge crash leftovers
+_staging_override = os.getenv("AMM_EMBED_STAGING", "").strip()
+if _staging_override:
     try:
-        _f.unlink(missing_ok=True)
-    except OSError:
-        pass
+        _cand = Path(_staging_override)
+        if not _cand.is_absolute():
+            raise ValueError("AMM_EMBED_STAGING must be an absolute path")
+        _cand.mkdir(parents=True, exist_ok=True)
+        # PROBE, don't assume: mkdir(exist_ok=True) succeeds on an existing
+        # dir we can't actually use (e.g. a root-owned tmpfs mounted 0770
+        # while the app runs as PUID) — which then crashed the purge loop at
+        # import. A real write+list probe catches that here and falls back.
+        _probe_fd, _probe_path = tempfile.mkstemp(prefix=".amm-probe-", dir=_cand)
+        os.close(_probe_fd)
+        os.unlink(_probe_path)
+        list(_cand.iterdir())
+        _EMBED_STAGING_DIR = _cand
+    except Exception as _stage_e:
+        print(f"WARNING: AMM_EMBED_STAGING unusable ({_stage_e}); "
+              f"falling back to {_EMBED_STAGING_DIR}")
+_EMBED_STAGING_DIR.mkdir(parents=True, exist_ok=True)
+try:  # purge crash leftovers — never fatal (a hostile dir must not stop boot)
+    for _f in list(_EMBED_STAGING_DIR.iterdir()):
+        try:
+            _f.unlink(missing_ok=True)
+        except OSError:
+            pass
+except OSError as _purge_e:
+    print(f"WARNING: could not purge embed staging {_EMBED_STAGING_DIR}: {_purge_e}")
 
 # In-memory store for Phase-2 (embed) background jobs.
 # Keyed by job_id (hex uuid4). Each value:
@@ -2290,6 +2317,52 @@ class PreviewPathsRequest(BaseModel):
     operations: list[dict]
 
 
+class PreviewNamesRequest(BaseModel):
+    """Request body for /api/preview-names (match-card output chips)."""
+    operations: list[dict]          # {old_path, scene_data, file_data} each
+    template: str
+    flat: bool = False
+    performer_limit: Optional[int] = None
+
+    @field_validator("template", mode="before")
+    @classmethod
+    def _cap_template(cls, v) -> str:
+        return str(v or "")[:500]
+
+
+@app.post("/api/preview-names")
+async def preview_names(req: PreviewNamesRequest):
+    """Batch name preview for the match cards' Output chips.
+
+    Pure string work — extract_template_vars + build_new_path, NO filesystem
+    I/O — so the whole visible match list previews in one request (capped at
+    500 rows; /api/preview-paths keeps its 5-row diagnostic role). Rows whose
+    path fails the allowlist, or that blow up in the formatter, yield null
+    instead of failing the batch. Read-only; nothing is written or probed.
+    """
+    names: list[Optional[str]] = []
+    for operation in req.operations[:500]:
+        try:
+            old_path = Path(str(operation.get("old_path", "")))
+            if not old_path.is_absolute() or not _is_allowed_path(old_path):
+                names.append(None)
+                continue
+            bindings = extract_template_vars(
+                operation.get("scene_data", {}) or {},
+                operation.get("file_data", {}) or {},
+                req.performer_limit)
+            new_path = build_new_path(old_path, req.template, bindings)
+            if req.flat:
+                new_path = old_path.parent / new_path.name
+            try:
+                names.append(str(new_path.relative_to(old_path.parent)))
+            except ValueError:
+                names.append(new_path.name)
+        except Exception:
+            names.append(None)
+    return {"names": names}
+
+
 @app.post("/api/preview-paths")
 async def preview_paths(req: PreviewPathsRequest):
     """
@@ -2584,9 +2657,15 @@ _embed_sem: Optional[asyncio.Semaphore] = None
 def _get_embed_sem() -> asyncio.Semaphore:
     global _embed_sem
     if _embed_sem is None:
-        # 3 concurrent: FFmpeg now writes to local disk (_EMBED_STAGING_DIR),
-        # so parallel jobs don't saturate NAS bandwidth during the encode pass.
-        _embed_sem = asyncio.Semaphore(3)
+        # Default 3 concurrent: FFmpeg writes to local staging, so parallel
+        # jobs don't saturate NAS bandwidth. AMM_EMBED_CONCURRENCY (1–8) lets
+        # well-resourced deployments raise it — remux is I/O-bound, so the
+        # right value tracks your storage bandwidth, not your core count.
+        try:
+            n = int(os.getenv("AMM_EMBED_CONCURRENCY", "3"))
+        except ValueError:
+            n = 3
+        _embed_sem = asyncio.Semaphore(max(1, min(8, n)))
     return _embed_sem
 
 
@@ -2694,9 +2773,19 @@ async def _run_embed_phase(job_id: str, tasks: list, embed_mode: str = "embed") 
 
     # Register this chunk's files on the (possibly shared) job so the embed
     # queue panel can show live per-file states. Entry dicts are mutated in
-    # place by _embed_one — loop-local, no locking needed.
-    entries = [{"name": t[0].new_path.name, "status": "pending", "detail": None}
-               for t in tasks]
+    # place by _embed_one — loop-local, no locking needed. Sizes are stat'ed
+    # in a worker thread (N stats on a NAS mount must not block the loop).
+    def _build_entries():
+        out = []
+        for t in tasks:
+            try:
+                size = t[0].new_path.stat().st_size
+            except OSError:
+                size = None
+            out.append({"name": t[0].new_path.name, "status": "pending",
+                        "detail": None, "size": size, "progress": None})
+        return out
+    entries = await asyncio.to_thread(_build_entries)
     job.setdefault("files", []).extend(entries)
 
     embed_sem = _get_embed_sem()
@@ -2714,7 +2803,11 @@ async def _run_embed_phase(job_id: str, tasks: list, embed_mode: str = "embed") 
             async with embed_sem:
                 if entry is not None:
                     entry["status"] = "embedding"
-                ok, err = await _embed_for_mode(result.new_path, meta, embed_mode)
+                # Live per-file progress for the queue-panel underline bar.
+                _pcb = ((lambda p, _e=entry: _e.__setitem__("progress", round(p * 100, 1)))
+                        if entry is not None else None)
+                ok, err = await _embed_for_mode(result.new_path, meta, embed_mode,
+                                                progress_cb=_pcb)
                 if not ok:
                     warning = f"Metadata embedding warning: {err}"
                     embed_failed = True
@@ -2808,11 +2901,31 @@ async def _run_manual_embed_job(
         return
 
     warning = None
+    # Queue-panel entry for the manual save too ("port it everywhere") — one
+    # file, same live states + size as the batch path.
+    entry = None
+    _mjob = _embed_jobs.get(job_id)
+    if _mjob is not None:
+        try:
+            _msize = file_path.stat().st_size
+        except OSError:
+            _msize = None
+        entry = {"name": file_path.name, "status": "embedding",
+                 "detail": None, "size": _msize, "progress": None}
+        _mjob.setdefault("files", []).append(entry)
+
+    embed_failed = False
     try:
         async with _get_embed_sem():
-            ok, err = await _embed_for_mode(file_path, metadata, embed_mode)
+            _pcb = ((lambda p, _e=entry: _e.__setitem__("progress", round(p * 100, 1)))
+                    if entry is not None else None)
+            ok, err = await _embed_for_mode(file_path, metadata, embed_mode,
+                                            progress_cb=_pcb)
             if not ok:
                 warning = f"Metadata embedding warning: {err}"
+                embed_failed = True
+                if entry is not None:
+                    entry["detail"] = str(err)[:200]
             else:
                 # F6: the embed changed the file's bytes — re-key the confirm
                 # the request handler stored under the pre-embed hash. Old key
@@ -2822,7 +2935,13 @@ async def _run_manual_embed_job(
                     file_path, old_oshash, delete_old=False)
     except Exception as e:  # never let a background crash leave the job stuck
         warning = f"Metadata embedding warning: {e}"
+        embed_failed = True
+        if entry is not None and entry.get("detail") is None:
+            entry["detail"] = str(e)[:200]
 
+    if entry is not None:
+        entry["status"] = ("error" if embed_failed
+                           else "warning" if warning else "done")
     _job_progress(
         job_id, {"path": str(file_path), "warning": warning} if warning else None
     )
@@ -4461,7 +4580,73 @@ _FFMPEG_OUT_SUFFIX: dict[str, str] = {
     ".qt":   ".mov",
 }
 
-async def embed_metadata(file_path: Path, metadata: dict) -> tuple[bool, str]:
+async def _run_ffmpeg_with_progress(cmd: list, timeout: float,
+                                    on_pct=None, duration: Optional[float] = None
+                                    ) -> tuple[Optional[int], str]:
+    """Run an ffmpeg command, streaming its ``-progress pipe:1`` feed.
+
+    Returns (returncode, stderr_text); returncode None means timeout (process
+    killed). ``on_pct`` receives 0..1 fractions computed from ffmpeg's live
+    ``out_time`` against ``duration`` — REAL progress from the muxer itself,
+    not a timer. stdout (progress lines) and stderr (errors) are read
+    concurrently so neither pipe can fill up and deadlock the process.
+    """
+    proc = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+
+    async def _read_progress():
+        while True:
+            line = await proc.stdout.readline()
+            if not line:
+                return
+            if on_pct and duration and line.startswith(b"out_time_us="):
+                try:
+                    us = int(line.split(b"=", 1)[1])
+                    on_pct(max(0.0, min(1.0, (us / 1_000_000) / duration)))
+                except ValueError:
+                    pass
+
+    async def _read_stderr():
+        return await proc.stderr.read()
+
+    try:
+        _, stderr_data, _ = await asyncio.wait_for(
+            asyncio.gather(_read_progress(), _read_stderr(), proc.wait()),
+            timeout=timeout)
+    except asyncio.TimeoutError:
+        proc.kill()
+        await proc.wait()
+        return None, ""
+    return proc.returncode, stderr_data.decode(errors="replace").strip()
+
+
+async def _copy_with_progress(src: Path, dst: Path, on_pct=None) -> None:
+    """shutil.copy2 in a worker thread while the async side polls the
+    destination's byte count — REAL copy-back progress (the phase that
+    dominates wall time on NAS libraries). Poll stats run in the threadpool
+    too, so a slow mount can't block the event loop. Raises on copy failure."""
+    total = await asyncio.to_thread(lambda: src.stat().st_size)
+    task = asyncio.create_task(asyncio.to_thread(shutil.copy2, str(src), str(dst)))
+    try:
+        while not task.done():
+            await asyncio.sleep(0.5)
+            if on_pct and total:
+                try:
+                    done_b = await asyncio.to_thread(lambda: dst.stat().st_size)
+                except OSError:
+                    done_b = 0
+                on_pct(max(0.0, min(1.0, done_b / total)))
+    finally:
+        await task   # propagate copy errors to the caller
+    if on_pct:
+        on_pct(1.0)
+
+
+async def embed_metadata(file_path: Path, metadata: dict,
+                         progress_cb=None) -> tuple[bool, str]:
     """
     Embed metadata into a video file using FFmpeg -codec copy (fast, no re-encode).
     Uses a temp file to avoid corrupting the original on failure.
@@ -4499,9 +4684,25 @@ async def embed_metadata(file_path: Path, metadata: dict) -> tuple[bool, str]:
     os.close(tmp_fd)
     tmp_path = Path(tmp_str)
 
+    # Two-phase accurate progress (queue-panel underline bar): remux 0–50%,
+    # NAS copy-back 50–100%. Without a probeable duration the remux phase
+    # can't report, so the copy phase takes the full 0–100 range instead of
+    # lying at 50% — the bar only ever shows measured numbers.
+    duration = None
+    if progress_cb:
+        duration = await asyncio.to_thread(_probe_duration_seconds, file_path)
+    _w_remux = 0.5 if duration else 0.0
+    def _remux_pct(p):
+        if progress_cb and duration:
+            progress_cb(p * _w_remux)
+    def _copy_pct(p):
+        if progress_cb:
+            progress_cb(_w_remux + p * (1.0 - _w_remux))
+
     try:
         cmd = [
             ffmpeg_path(), "-hide_banner", "-loglevel", "error", "-y",
+            "-progress", "pipe:1", "-nostats",
             "-i", str(file_path),
             # Map only video, audio, and subtitle streams (? = skip if absent).
             # Deliberately excludes data/timecode streams (codec=none) that
@@ -4533,21 +4734,13 @@ async def embed_metadata(file_path: Path, metadata: dict) -> tuple[bool, str]:
         except OSError:
             timeout = 600
 
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        try:
-            _, stderr_data = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-        except asyncio.TimeoutError:
-            proc.kill()
-            await proc.wait()
+        returncode, stderr_text = await _run_ffmpeg_with_progress(
+            cmd, timeout, on_pct=_remux_pct, duration=duration)
+        if returncode is None:
             tmp_path.unlink(missing_ok=True)
             return False, f"FFmpeg timed out after {timeout}s during metadata embedding"
 
-        if proc.returncode != 0:
-            stderr_text = stderr_data.decode(errors="replace").strip()
+        if returncode != 0:
             # If a subtitle codec is also unsupported in the container, retry
             # with only video + audio streams (most permissive fallback).
             if "not currently supported in container" in stderr_text or \
@@ -4572,21 +4765,14 @@ async def embed_metadata(file_path: Path, metadata: dict) -> tuple[bool, str]:
                 os.close(tmp_fd2)
                 tmp_path = Path(tmp_str2)
                 cmd_va[-1] = str(tmp_path)
-                proc2 = await asyncio.create_subprocess_exec(
-                    *cmd_va,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                )
-                try:
-                    _, stderr_data2 = await asyncio.wait_for(proc2.communicate(), timeout=timeout)
-                except asyncio.TimeoutError:
-                    proc2.kill()
-                    await proc2.wait()
+                returncode2, stderr_text2 = await _run_ffmpeg_with_progress(
+                    cmd_va, timeout, on_pct=_remux_pct, duration=duration)
+                if returncode2 is None:
                     tmp_path.unlink(missing_ok=True)
                     return False, f"FFmpeg timed out after {timeout}s during metadata embedding"
-                if proc2.returncode != 0:
+                if returncode2 != 0:
                     tmp_path.unlink(missing_ok=True)
-                    return False, stderr_data2.decode(errors="replace").strip()
+                    return False, stderr_text2
             else:
                 tmp_path.unlink(missing_ok=True)
                 return False, stderr_text
@@ -4613,11 +4799,10 @@ async def embed_metadata(file_path: Path, metadata: dict) -> tuple[bool, str]:
                 )
                 os.close(nas_fd)
                 nas_tmp = Path(nas_str)
-                # to_thread: this is the multi-GB remux output crossing back to
-                # the NAS — inline it blocks the event loop for the whole copy
-                # (health checks, progress polling, everything) per batch file.
+                # Threaded copy with live byte-count progress (50–100% of the
+                # underline bar) — the loop stays free, the bar stays honest.
                 try:
-                    await asyncio.to_thread(_shutil.copy2, str(tmp_path), str(nas_tmp))
+                    await _copy_with_progress(tmp_path, nas_tmp, on_pct=_copy_pct)
                 except OSError:
                     try:
                         await asyncio.to_thread(_shutil.copy, str(tmp_path), str(nas_tmp))
@@ -4786,13 +4971,16 @@ async def embed_metadata_mp4(file_path: Path, metadata: dict) -> tuple[bool, str
 # fallback. Adding a new strategy = one executor + one registry entry + one
 # branch in plan_embed.
 _EMBED_EXECUTORS = {
-    "mkvpropedit":   lambda fp, md: embed_metadata_mkv(fp, md),
-    "atomicparsley": lambda fp, md: embed_metadata_mp4(fp, md),
-    "remux":         lambda fp, md: embed_metadata(fp, md),
+    # Only the remux reports progress — the in-place editors finish in
+    # milliseconds and keep the spinner-only treatment in the queue panel.
+    "mkvpropedit":   lambda fp, md, cb=None: embed_metadata_mkv(fp, md),
+    "atomicparsley": lambda fp, md, cb=None: embed_metadata_mp4(fp, md),
+    "remux":         lambda fp, md, cb=None: embed_metadata(fp, md, progress_cb=cb),
 }
 
 
-async def _embed_for_mode(file_path: Path, metadata: dict, embed_mode: str) -> tuple[bool, str]:
+async def _embed_for_mode(file_path: Path, metadata: dict, embed_mode: str,
+                          progress_cb=None) -> tuple[bool, str]:
     """
     Write embedded metadata according to embed_mode (never called for nfo_only).
 
@@ -4816,7 +5004,7 @@ async def _embed_for_mode(file_path: Path, metadata: dict, embed_mode: str) -> t
 
     errors: list[str] = []
     for strategy in plan:
-        ok, err = await _EMBED_EXECUTORS[strategy](file_path, metadata)
+        ok, err = await _EMBED_EXECUTORS[strategy](file_path, metadata, progress_cb)
         if ok:
             return True, ""
         errors.append(f"{strategy}: {err}")

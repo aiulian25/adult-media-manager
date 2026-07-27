@@ -429,5 +429,6 @@
   "template.flat_drops_performer": "„Keine Unterordner“ behält nur den letzten Teil dieser Vorlage — {performer} steht in den Ordnern, daher erscheint der Darsteller NICHT im Dateinamen. Nutzen Sie das Performer-Preset oder fügen Sie {performer} dem Namen hinzu.",
   "manual.rename_with_template": "Datei nach Namensvorlage umbenennen",
   "manual.rename_with_template_hint": "Beim Speichern wird die Datei mit der aktuellen Vorlage/dem Preset umbenannt (Verschieben an Ort und Stelle, gleiche Kollisionsregel wie bei Batch-Umbenennungen), sodass NFO, Poster und eingebettete Tags beim endgültigen Namen landen.",
-  "manual.rename_skipped": "Umbenennen übersprungen"
+  "manual.rename_skipped": "Umbenennen übersprungen",
+  "match.output_label": "Ausgabe"
 }

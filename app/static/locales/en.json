@@ -429,5 +429,6 @@
   "template.flat_drops_performer": "“No subfolders” keeps only the last part of this template — {performer} is in the folders, so the performer will NOT appear in the file name. Try the Performer preset or add {performer} to the name.",
   "manual.rename_with_template": "Rename file using the naming template",
   "manual.rename_with_template_hint": "On save, the file is renamed with the current template/preset (in-place move, same collision policy as batch renames) so NFO, poster and embedded tags land next to the final name.",
-  "manual.rename_skipped": "Rename skipped"
+  "manual.rename_skipped": "Rename skipped",
+  "match.output_label": "Output"
 }

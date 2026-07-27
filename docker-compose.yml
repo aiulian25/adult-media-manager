@@ -24,9 +24,32 @@ services:
       # you actually mount here (below) that fall within an allowed root; set this
       # to also permit mounts outside them. Example: AMM_EXTRA_ROOTS=/library:/tank
       - AMM_EXTRA_ROOTS=${AMM_EXTRA_ROOTS:-}
+      # Update checks (zero-egress option): 0 disables ALL outbound update
+      # traffic — the Settings card says so instead of showing the button.
+      - AMM_UPDATE_CHECK=${AMM_UPDATE_CHECK:-1}
+      - AMM_MATCH_CACHE_MAX=${AMM_MATCH_CACHE_MAX:-50000}
       # Run a SINGLE worker only. Match sessions and embed-job progress live in
       # process-local memory, so matching and embed progress break with >1
       # worker. Do not set WEB_CONCURRENCY / AMM_WORKERS above 1.
+      #
+      # ── Performance tuning (optional, for well-resourced hosts) ────────────
+      # Remux is I/O-bound (-codec copy, no transcoding) — tune to your STORAGE,
+      # not your CPU cores. Two knobs, both also honored by deb/rpm/AppImage:
+      #
+      # 1) Parallel embeds (default 3, clamped 1–8). Raise only if your NAS/disk
+      #    bandwidth isn't already saturated at 3 — more parallelism on a
+      #    saturated link just makes every file slower:
+      # - AMM_EMBED_CONCURRENCY=${AMM_EMBED_CONCURRENCY:-3}
+      #
+      # 2) RAM-disk staging: remux writes go to memory instead of disk; only the
+      #    final verified copy-back touches the NAS. On a 62 GB host a 24 GB
+      #    tmpfs comfortably covers 4× ~5 GB files in flight. Uncomment BOTH the
+      #    env line and the tmpfs block below. Size it ≥ (largest file ×
+      #    concurrency) + headroom — a too-small tmpfs fails embeds with a clear
+      #    "no space left" in the embed queue, originals stay untouched.
+      # - AMM_EMBED_STAGING=/embed-ram
+    # tmpfs:
+    #   - /embed-ram:size=24g,mode=1777
     volumes:
       # Persistent data: history, settings, API keys saved via UI, embed staging
       - adult-media-manager-data:/data

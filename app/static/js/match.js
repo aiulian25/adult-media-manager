@@ -409,6 +409,15 @@ function _buildMatchRow({ result, index }) {
         tag.hidden = false;
     }
 
+    // Output chip: paint the cached preview immediately (the batch fetch
+    // refreshes it); hidden until a name is known.
+    if (result._preview_name) {
+        const outEl = node.querySelector('[data-output-name]');
+        outEl.textContent = result._preview_name;
+        outEl.title = result._preview_name;
+        node.querySelector('[data-output]').hidden = false;
+    }
+
     // Meta: site / performers / date
     node.querySelector('[data-site]').textContent = m.site || '';
     if (m.performers && m.performers.length) {
@@ -568,6 +577,64 @@ function useAlternative(index, altIdx) {
     displayMatches(false);   // preserve selection + filter, re-render the rows
 }
 
+// ── Output-name preview (label chip, option B) ────────────────────────────────
+// Every matched card shows the FINAL name the active template/preset would
+// produce — visible BEFORE the user chooses to rename, for any preset or
+// hand-typed template. One debounced batch request to /api/preview-names
+// (server-side formatter — single source of truth, no client reimplementation);
+// results are cached on the row (r._preview_name) so re-renders paint
+// instantly and the fetch only fills what changed.
+let _npTimer = null;
+
+function _refreshNamePreviews() {
+    clearTimeout(_npTimer);
+    _npTimer = setTimeout(_fetchNamePreviews, 300);
+}
+
+async function _fetchNamePreviews() {
+    const rows = matchedResults
+        .map((r, i) => ({ r, i }))
+        .filter(({ r }) => r && r.match && r.original && r.original.path);
+    if (!rows.length) return;
+    try {
+        const resp = await fetch('/api/preview-names', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                operations: rows.map(({ r }) => ({
+                    old_path: r.original.path,
+                    scene_data: r.match,
+                    file_data: r.original,
+                })),
+                template: template.value,
+                flat: flatRename.checked,
+                performer_limit: _performerLimit(),
+            }),
+        });
+        if (!resp.ok) return;
+        const { names } = await resp.json();
+        rows.forEach(({ r, i }, k) => {
+            r._preview_name = names[k] || null;
+            _paintOutputName(i, r._preview_name);
+        });
+    } catch (_) { /* preview is best-effort — cards simply keep the last name */ }
+}
+
+// Update one row's chip in place (no re-render). textContent only.
+function _paintOutputName(index, name) {
+    const cb = document.querySelector(`.match-cb[data-index="${index}"]`);
+    const slot = cb && cb.closest('.match-item')?.querySelector('[data-output]');
+    if (!slot) return;
+    const el = slot.querySelector('[data-output-name]');
+    if (name) {
+        el.textContent = name;
+        el.title = name;
+        slot.hidden = false;
+    } else {
+        slot.hidden = true;
+    }
+}
+
 // ── Performer ordering: ladies first + per-file ◀ ▶ fallback ──────────────────
 // The server sorts female performers to the front at match time (setting
 // `performer_order`, default female_first). These helpers add the per-file
@@ -665,10 +732,9 @@ function _renderOrderNote(noteEl, result, index) {
         reset.textContent = t('match.order_reset');
         reset.addEventListener('click', (e) => { e.stopPropagation(); _resetPerformerOrder(index); });
         noteEl.appendChild(reset);
-        const pv = document.createElement('span');
-        pv.className = 'perf-order-preview';
-        pv.dataset.orderPreview = '';
-        noteEl.appendChild(pv);
+        // (The former per-reorder "Will rename to:" span is gone — the always-on
+        // Output chip below the Original line shows the same server-computed
+        // name for every card, reorder or not.)
     }
     noteEl.hidden = false;
 }
@@ -688,8 +754,7 @@ function _movePerformer(index, i, d) {
     }
     r.performer_order_manual = true;
     r._flash_performer = m.performers[j];   // the moved name, now at position j
-    displayMatches(false);
-    _updateOrderPreview(index);
+    displayMatches(false);   // Output chips refresh via updateTemplatePreview
 }
 
 function _resetPerformerOrder(index) {
@@ -700,34 +765,6 @@ function _resetPerformerOrder(index) {
     if (r._orig_genders) m.performer_genders = r._orig_genders.slice();
     r.performer_order_manual = false;
     displayMatches(false);
-}
-
-// Live "will rename to" line for a manually reordered file — the SAME server
-// formatter the rename will use (/api/preview-paths), so it can't drift.
-function _updateOrderPreview(index) {
-    const r = matchedResults[index];
-    if (!r || !r.match || !r.original || !r.original.path) return;
-    fetch('/api/preview-paths', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ operations: [{
-            old_path: r.original.path,
-            scene_data: r.match,
-            file_data: r.original,
-            template: template.value,
-            flat: flatRename.checked,
-            performer_limit: _performerLimit(),
-        }] }),
-    })
-        .then(resp => resp.ok ? resp.json() : null)
-        .then(data => {
-            const p = data && data.previews && data.previews[0];
-            if (!p || p.degenerate) return;
-            const cb = document.querySelector(`.match-cb[data-index="${index}"]`);
-            const slot = cb && cb.closest('.match-item')?.querySelector('[data-order-preview]');
-            if (slot) slot.textContent = t('match.order_preview', { path: p.new_path });
-        })
-        .catch(() => { /* preview is best-effort — the reorder itself already applied */ });
 }
 
 // Wire the per-row "Remove" button. Removing a file hides it from the app for

@@ -472,26 +472,144 @@ function _eqReset() {
     _eqUserToggled = false;
 }
 
+// Build ONE queue row (factory shared by full renders and the reconciler).
+function _eqBuildRow(f) {
+    const row = document.createElement('div');
+    row.className = 'eq-row' + (f.status === 'embedding' ? ' is-active' : '');
+    row.dataset.name = f.name;
+    row.dataset.status = f.status;
+    const st = document.createElement('span');
+    if (f.status === 'embedding') {
+        st.className = 'eq-spin eq-spin-sm';
+    } else {
+        st.className = 'eq-st eq-' + f.status;
+        st.textContent = _EQ_GLYPH[f.status] || '';
+    }
+    st.title = t('embed.queue_st_' + f.status);
+    row.appendChild(st);
+    if (f.status === 'embedding') {
+        // Underline bar (option A): 2px under the name, driven by REAL
+        // two-phase progress (ffmpeg out_time, then copy-back bytes). When
+        // the server can't measure (no duration yet), spinner only — the bar
+        // never shows an invented number.
+        const wrap = document.createElement('span');
+        wrap.className = 'eq-fnwrap';
+        const fn = document.createElement('span');
+        fn.className = 'eq-fn';
+        fn.textContent = f.name;
+        wrap.appendChild(fn);
+        if (Number.isFinite(f.progress)) {
+            const bar = document.createElement('span');
+            bar.className = 'eq-ubar';
+            const fill = document.createElement('i');
+            fill.style.width = f.progress + '%';
+            bar.appendChild(fill);
+            wrap.appendChild(bar);
+            row.dataset.hasbar = '1';
+        }
+        row.appendChild(wrap);
+    } else {
+        const fn = document.createElement('span');
+        fn.className = 'eq-fn';
+        fn.textContent = f.name;
+        row.appendChild(fn);
+    }
+    if (Number.isFinite(f.size)) {
+        const sz = document.createElement('span');
+        sz.className = 'eq-size';
+        sz.textContent = formatFileSize(f.size);
+        row.appendChild(sz);
+    }
+    if (f.detail && f.status !== 'pending' && f.status !== 'embedding') {
+        const d = document.createElement('span');
+        d.className = 'eq-detail';
+        d.textContent = f.detail;
+        d.title = f.detail;
+        row.appendChild(d);
+    }
+    return row;
+}
+
 function _renderEmbedQueue(job) {
     const files = Array.isArray(job.files) ? job.files : null;
     if (!files || !files.length) return;   // restart-resumed job — no per-file data
     let panel = document.getElementById('embed-queue-panel');
+    const issues = files.filter(f => f.status === 'warning' || f.status === 'error' || f.status === 'duplicate');
+    const open = _eqUserToggled ? _eqOpen : (job.complete ? issues.length > 0 : true);
+    _eqOpen = open;
+    const ordered = job.complete && issues.length
+        ? [...issues, ...files.filter(f => !issues.includes(f))]
+        : files;
+
+    // ── Fast path: same rows in the same order → update in place, so the
+    // underline bar's CSS width transition animates smoothly between polls
+    // instead of being reset by a rebuild. Any structural change falls
+    // through to the full rebuild below.
+    if (panel && panel.dataset.open === String(open) && open) {
+        const list = panel.querySelector('.eq-list');
+        const rows = list ? [...list.children] : [];
+        const sameShape = rows.length === ordered.length &&
+            rows.every((r, i) => r.dataset.name === ordered[i].name);
+        if (sameShape) {
+            _eqUpdateHead(panel, job, issues);
+            ordered.forEach((f, i) => {
+                const row = rows[i];
+                const barState = Number.isFinite(f.progress) && f.status === 'embedding' ? '1' : '';
+                if (row.dataset.status !== f.status ||
+                        (row.dataset.hasbar || '') !== barState) {
+                    const nr = _eqBuildRow(f);
+                    // finishing flash: embedding → terminal state
+                    if (row.dataset.status === 'embedding' && f.status !== 'embedding') {
+                        nr.classList.add('eq-row-flash');
+                    }
+                    row.replaceWith(nr);
+                } else if (f.status === 'embedding' && barState) {
+                    row.querySelector('.eq-ubar > i').style.width = f.progress + '%';
+                }
+            });
+            const active = list.querySelector('.eq-row.is-active');
+            if (active) queueMicrotask(() => active.scrollIntoView({ block: 'nearest' }));
+            return;
+        }
+    }
+
+    // ── Full rebuild (first render, collapse toggle, order change) ──
     if (!panel) {
         panel = document.createElement('div');
         panel.id = 'embed-queue-panel';
         panel.className = 'glass-panel embed-queue';
         resultsContainer.prepend(panel);
     }
-    const issues = files.filter(f => f.status === 'warning' || f.status === 'error' || f.status === 'duplicate');
-    // Auto policy until the user takes over: open while running; on completion
-    // stay open only when something needs attention.
-    const open = _eqUserToggled ? _eqOpen : (job.complete ? issues.length > 0 : true);
-    _eqOpen = open;
-
+    panel.dataset.open = String(open);
     panel.textContent = '';
-    // Header: state icon · count · bar · chevron
     const head = document.createElement('div');
     head.className = 'eq-head';
+    panel.appendChild(head);
+    _eqUpdateHead(panel, job, issues);
+    const fold = head.querySelector('.eq-fold');
+    fold.addEventListener('click', () => {
+        _eqUserToggled = true;
+        _eqOpen = !_eqOpen;
+        _renderEmbedQueue(job);
+    });
+    if (!open) return;
+
+    const list = document.createElement('div');
+    list.className = 'eq-list';
+    let activeRow = null;
+    ordered.forEach(f => {
+        const row = _eqBuildRow(f);
+        list.appendChild(row);
+        if (f.status === 'embedding' && !activeRow) activeRow = row;
+    });
+    panel.appendChild(list);
+    if (activeRow) queueMicrotask(() => activeRow.scrollIntoView({ block: 'nearest' }));
+}
+
+// (Re)paint the queue header: state icon, count, job bar, summary, chevron.
+function _eqUpdateHead(panel, job, issues) {
+    const head = panel.querySelector('.eq-head');
+    head.textContent = '';
     const icon = document.createElement('span');
     if (job.complete) {
         icon.className = 'eq-st ' + (issues.length ? 'eq-warning' : 'eq-done');
@@ -509,7 +627,8 @@ function _renderEmbedQueue(job) {
     fill.style.width = job.total > 0 ? `${Math.round((job.done / job.total) * 100)}%` : '100%';
     bar.appendChild(fill);
     head.appendChild(bar);
-    if (job.complete && !open) {
+    if (job.complete && !_eqOpen) {
+        const files = Array.isArray(job.files) ? job.files : [];
         const sum = document.createElement('span');
         sum.className = 'eq-summary';
         sum.textContent = t('embed.queue_summary', { n: files.filter(f => f.status === 'done').length })
@@ -519,53 +638,9 @@ function _renderEmbedQueue(job) {
     const fold = document.createElement('button');
     fold.type = 'button';
     fold.className = 'eq-fold';
-    fold.textContent = open ? '▾' : '▸';
-    fold.title = t(open ? 'embed.queue_hide' : 'embed.queue_show');
-    fold.addEventListener('click', () => {
-        _eqUserToggled = true;
-        _eqOpen = !_eqOpen;
-        _renderEmbedQueue(job);
-    });
+    fold.textContent = _eqOpen ? '▾' : '▸';
+    fold.title = t(_eqOpen ? 'embed.queue_hide' : 'embed.queue_show');
     head.appendChild(fold);
-    panel.appendChild(head);
-
-    if (!open) return;
-
-    // File list — issues pinned first once complete; processing order otherwise.
-    const list = document.createElement('div');
-    list.className = 'eq-list';
-    const ordered = job.complete && issues.length
-        ? [...issues, ...files.filter(f => !issues.includes(f))]
-        : files;
-    let activeRow = null;
-    ordered.forEach(f => {
-        const row = document.createElement('div');
-        row.className = 'eq-row' + (f.status === 'embedding' ? ' is-active' : '');
-        const st = document.createElement('span');
-        if (f.status === 'embedding') {
-            st.className = 'eq-spin eq-spin-sm';
-        } else {
-            st.className = 'eq-st eq-' + f.status;
-            st.textContent = _EQ_GLYPH[f.status] || '';
-        }
-        st.title = t('embed.queue_st_' + f.status);
-        row.appendChild(st);
-        const fn = document.createElement('span');
-        fn.className = 'eq-fn';
-        fn.textContent = f.name;
-        row.appendChild(fn);
-        if (f.detail && f.status !== 'pending' && f.status !== 'embedding') {
-            const d = document.createElement('span');
-            d.className = 'eq-detail';
-            d.textContent = f.detail;
-            d.title = f.detail;
-            row.appendChild(d);
-        }
-        list.appendChild(row);
-        if (f.status === 'embedding' && !activeRow) activeRow = row;
-    });
-    panel.appendChild(list);
-    if (activeRow) queueMicrotask(() => activeRow.scrollIntoView({ block: 'nearest' }));
 }
 
 async function _pollEmbedStatus(jobId, total) {
@@ -684,34 +759,76 @@ function _finishEmbedPolling(warnings) {
     resultsContainer.appendChild(extra);
 }
 
+// Rename Results in the embed-queue idiom (thin mono rows, glyph state, muted
+// detail on the right) — one visual system with the panel above it instead of
+// the old bordered-card look. Full paths live in tooltips; rows show basenames.
 function displayRenameResults(results) {
-    resultsContainer.innerHTML = `
-        <div class="glass-panel" style="padding: 20px;">
-            <h3 style="margin-bottom: 15px;">${escapeHtml(t('rename.results_title'))}</h3>
-            <div class="file-list">
-                ${results.map(result => {
-                    // Collision-policy skip (F1): neutral row, never red.
-                    const skipped = !!result.skipped;
-                    const border = skipped ? 'var(--border-soft)'
-                        : (result.success ? 'rgba(0, 255, 136, 0.3)' : 'rgba(255, 71, 87, 0.3)');
-                    const icon = skipped ? '⏭' : (result.success ? '✅' : '❌');
-                    return `
-                    <div class="file-item glass-panel" style="border: 1px solid ${border}; padding: 12px;">
-                        <div class="file-info">
-                            <div style="font-size: 12px; color: var(--text-muted); margin-bottom: 4px;">
-                                ${icon} ${escapeHtml(result.action.toUpperCase())}
-                            </div>
-                            <div class="file-name" style="color: var(--text-muted);">From: ${escapeHtml(result.old_path)}</div>
-                            ${result.new_path && !skipped ? `<div class="file-name">To: ${escapeHtml(result.new_path)}</div>` : ''}
-                            ${skipped ? `<div style="color: var(--text-muted); font-size: 12px; margin-top: 4px;">${escapeHtml(t('rename.skipped_exists'))}</div>` : ''}
-                            ${result.companions_moved ? `<div style="color: var(--text-secondary); font-size: 11px; margin-top: 4px;">${escapeHtml(t('rename.companions_moved', { n: result.companions_moved }))}</div>` : ''}
-                            ${result.error ? `<div style="color: var(--error); font-size: 12px; margin-top: 4px;">${escapeHtml(result.error)}</div>` : ''}
-                            ${result.embed_warning ? `<div style="color: var(--warning, #f0a500); font-size: 11px; margin-top: 4px;">⚠️ ${escapeHtml(result.embed_warning)}</div>` : ''}
-                        </div>
-                    </div>
-                `;}).join('')}
-            </div>
-        </div>
-    `;
+    const ok      = results.filter(r => r.success && !r.skipped).length;
+    const skipped = results.filter(r => r.skipped).length;
+    const failed  = results.filter(r => !r.success && !r.skipped).length;
+
+    const panel = document.createElement('div');
+    panel.className = 'glass-panel rename-results';
+
+    const head = document.createElement('div');
+    head.className = 'rr-head';
+    const title = document.createElement('b');
+    title.textContent = t('rename.results_title');
+    head.appendChild(title);
+    const sum = document.createElement('span');
+    sum.className = 'rr-sum';
+    sum.textContent = [`✓ ${ok}`, skipped ? `⏭ ${skipped}` : '', failed ? `✕ ${failed}` : '']
+        .filter(Boolean).join(' · ');
+    sum.classList.toggle('has-fail', failed > 0);
+    head.appendChild(sum);
+    panel.appendChild(head);
+
+    const list = document.createElement('div');
+    list.className = 'eq-list rename-results-list';
+    const base = p => (p || '').split('/').pop();
+    results.forEach(result => {
+        const skip = !!result.skipped;
+        const row = document.createElement('div');
+        row.className = 'eq-row';
+        const st = document.createElement('span');
+        st.className = 'eq-st ' + (skip ? 'eq-pending' : result.success ? 'eq-done' : 'eq-error');
+        st.textContent = skip ? '⏭' : (result.success ? '✓' : '✕');
+        st.title = result.action ? result.action.toUpperCase() : '';
+        row.appendChild(st);
+        const paths = document.createElement('span');
+        paths.className = 'rr-paths';
+        const from = document.createElement('span');
+        from.className = 'rr-from';
+        from.textContent = base(result.old_path);
+        from.title = result.old_path || '';
+        paths.appendChild(from);
+        if (result.new_path && !skip) {
+            const to = document.createElement('span');
+            to.className = 'rr-to';
+            to.textContent = base(result.new_path);
+            to.title = result.new_path;
+            paths.appendChild(to);
+        }
+        row.appendChild(paths);
+        // One muted detail slot, priority: error > skip reason > embed warning
+        // > companions — same right-aligned treatment as the queue's details.
+        const detailText = result.error ? result.error
+            : skip ? t('rename.skipped_exists')
+            : result.embed_warning ? `⚠ ${result.embed_warning}`
+            : result.companions_moved ? t('rename.companions_moved', { n: result.companions_moved })
+            : '';
+        if (detailText) {
+            const d = document.createElement('span');
+            d.className = 'eq-detail' + (result.error ? ' rr-err' : '');
+            d.textContent = detailText;
+            d.title = detailText;
+            row.appendChild(d);
+        }
+        list.appendChild(row);
+    });
+    panel.appendChild(list);
+
+    resultsContainer.innerHTML = '';
+    resultsContainer.appendChild(panel);
 }
 

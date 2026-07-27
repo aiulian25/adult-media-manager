@@ -429,5 +429,6 @@
   "template.flat_drops_performer": "“Sem subpastas” mantém apenas a última parte deste modelo — {performer} está nas pastas, pelo que o intérprete NÃO aparecerá no nome do ficheiro. Use o preset Performer ou adicione {performer} ao nome.",
   "manual.rename_with_template": "Renomear o ficheiro com o modelo de nomes",
   "manual.rename_with_template_hint": "Ao guardar, o ficheiro é renomeado com o modelo/preset atual (movimento no local, mesma política de colisões dos lotes), para que o NFO, o póster e as etiquetas incorporadas fiquem junto ao nome final.",
-  "manual.rename_skipped": "Renomeação ignorada"
+  "manual.rename_skipped": "Renomeação ignorada",
+  "match.output_label": "Saída"
 }

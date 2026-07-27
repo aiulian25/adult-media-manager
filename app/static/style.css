@@ -2468,7 +2468,7 @@ html.is-native .fusion-bar {
 .eq-fold { background: none; border: none; color: var(--accent-light); font: inherit; font-size: 0.8rem; cursor: pointer; padding: 0 2px; }
 .eq-list {
     display: flex; flex-direction: column;
-    margin-top: 8px; max-height: 200px; overflow-y: auto;
+    margin-top: 8px; max-height: 340px; overflow-y: auto;
     border: 1px solid var(--border-soft); border-radius: 9px; background: var(--raised);
 }
 .eq-row { display: flex; align-items: center; gap: 9px; padding: 5px 10px; font-size: 0.8rem; }
@@ -2509,3 +2509,85 @@ html.is-native .fusion-bar {
 .chip-arrow:hover { color: var(--text-primary); background: var(--accent-soft); }
 .manual-footer { align-items: center; }
 .manual-rename-cb { margin-right: auto; font-size: 12.5px; }
+
+/* Brand icon fills the toolbar row (30px = control height) instead of the
+   barely-visible 22px dot; no bar growth, just full use of the row. */
+.fusion-bar .logo-icon { width: 30px; height: 30px; }
+
+/* Rename Results: own scroll region sized to ~3 entry cards — the batch
+   outcome stays compact and the embed queue above keeps the spotlight. */
+.rename-results-list {
+    max-height: 330px;
+    overflow-y: auto;
+    padding-right: 4px;   /* room for the scrollbar, keeps card borders clear */
+}
+
+/* Rename Results, embed-queue idiom: one design system with the panel above */
+.rename-results { padding: 12px 14px; }
+.rr-head { display: flex; align-items: baseline; gap: 10px; }
+.rr-head b { font-size: 0.9rem; flex: 1; }
+.rr-sum { font-size: 0.78rem; color: var(--success); font-variant-numeric: tabular-nums; }
+.rr-sum.has-fail { color: var(--warning); }
+.rr-paths { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.rr-from {
+    font-family: var(--mono); font-size: 0.7rem; color: var(--faint);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.rr-to {
+    font-family: var(--mono); font-size: 0.8rem; color: var(--text-primary);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.rr-err { color: var(--error); }
+
+/* Match card: final-name Output chip (option B) — visible before renaming */
+.match-output { display: flex; align-items: center; gap: 8px; margin-top: 4px; min-width: 0; }
+.match-output-label {
+    flex: none;
+    font-size: 0.62rem; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase;
+    color: var(--accent-light); background: var(--accent-soft);
+    border-radius: 5px; padding: 2px 7px;
+}
+.match-output-name {
+    font-family: var(--mono); font-size: 0.8rem; color: var(--text-primary);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0;
+}
+
+/* Embed queue: per-file size (all states) */
+.eq-size {
+    flex: none;
+    font-size: 0.72rem;
+    color: var(--muted);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+
+/* Embed queue: per-file underline progress bar (option A). Token-driven —
+   --primary/--accent-soft re-resolve under all three themes. */
+.eq-fnwrap { flex: 1; min-width: 0; }
+.eq-fnwrap .eq-fn { display: block; }
+.eq-ubar {
+    display: block;
+    height: 2px;
+    border-radius: 2px;
+    background: var(--accent-soft);
+    margin-top: 2px;
+    overflow: hidden;
+}
+.eq-ubar > i {
+    display: block;
+    height: 100%;
+    width: 0;
+    border-radius: 2px;
+    background: var(--primary);
+    /* slightly longer than the 2s poll so motion never visibly stalls */
+    transition: width 2.2s linear;
+}
+@keyframes eq-row-flash {
+    0%   { background: var(--accent-soft); }
+    100% { background: transparent; }
+}
+.eq-row-flash { animation: eq-row-flash 0.7s ease-out; }
+@media (prefers-reduced-motion: reduce) {
+    .eq-ubar > i { transition: none; }
+    .eq-row-flash { animation: none; }
+}

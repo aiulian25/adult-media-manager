@@ -298,6 +298,11 @@ function _flatDropsPerformer(tmpl, flat) {
 }
 
 function updateTemplatePreview() {
+    // Match-card Output chips track the same inputs as this preview — every
+    // template-affecting path (typing, presets, insert chips, flat mode,
+    // max performers, displayMatches re-renders) funnels through here, so one
+    // hook keeps every card's final-name preview current for ANY preset.
+    if (typeof _refreshNamePreviews === 'function') _refreshNamePreviews();
     if (!templatePreviewEl) return;
 
     // Unknown-variable detection needs no sample data — validate the raw template
