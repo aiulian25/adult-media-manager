@@ -430,5 +430,8 @@
   "manual.rename_with_template": "Datei nach Namensvorlage umbenennen",
   "manual.rename_with_template_hint": "Beim Speichern wird die Datei mit der aktuellen Vorlage/dem Preset umbenannt (Verschieben an Ort und Stelle, gleiche Kollisionsregel wie bei Batch-Umbenennungen), sodass NFO, Poster und eingebettete Tags beim endgültigen Namen landen.",
   "manual.rename_skipped": "Umbenennen übersprungen",
-  "match.output_label": "Ausgabe"
+  "match.output_label": "Ausgabe",
+  "embed.queue_elapsed": "Laufzeit der Einbettung",
+  "match.will_skip": "⚠ Ausgabe = Original — wird übersprungen",
+  "match.will_skip_hint": "Diese Datei ist der Grund für „Ausgabe entspricht dem Originalpfad“ in der Werkzeugleiste. Beim Umbenennen wird sie übersprungen — abwählen oder Vorlage/Preset/Reihenfolge ändern, falls sie umbenannt werden sollte."
 }

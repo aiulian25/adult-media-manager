@@ -91,7 +91,7 @@
             <div class="fusion-row chips-row">
                 <input type="text" id="template" class="glass-input mono"
                        data-i18n-attr="title" data-i18n="toolbar.template"
-                       value="{site}/{performer}/{site}.{date}.{scene}.{quality}" spellcheck="false">
+                       value="{performer} - {scene} ({site})" spellcheck="false">
                 <div class="chips-cluster" id="insert-chips">
                     <span class="chips-key" data-i18n="toolbar.insert">Insert</span>
                     <button type="button" class="tvar-chip" data-var="site">site</button>
@@ -589,14 +589,18 @@
                 <div class="match-alts" data-alts hidden></div>
             </div>
             <div class="match-confidence">
-                <span class="conf-badge-slot" data-badge hidden></span>
-                <span class="conf-band" data-band></span>
+                <div class="conf-top">
+                    <span class="conf-badge-slot" data-badge hidden></span>
+                    <span class="conf-band" data-band></span>
+                </div>
                 <div class="confidence-bar" data-bar></div>
                 <span class="conf-evidence-slot" data-evidence hidden></span>
                 <button class="glass-btn match-action-btn" data-alts-toggle hidden></button>
-                <button class="glass-btn match-action-btn match-edit-btn" data-edit></button>
-                <button class="glass-btn match-action-btn" data-nfo></button>
-                <button class="glass-btn match-action-btn match-remove-btn" data-remove></button>
+                <div class="match-icon-actions">
+                    <button class="glass-btn icon-act match-edit-btn" data-edit></button>
+                    <button class="glass-btn icon-act" data-nfo></button>
+                    <button class="glass-btn icon-act icon-act-danger match-remove-btn" data-remove></button>
+                </div>
             </div>
         </div>
     </template>

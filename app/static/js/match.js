@@ -301,14 +301,18 @@ function _confidenceBand(pct) {
  * Returns an HTML string (possibly empty).
  */
 function _matchBadge(result) {
+    // Compact rail: icon-only pills; the label + hint live in the tooltip
+    // (and aria-label) so nothing is lost for screen readers.
+    const mk = (cls, icon, label, hint) =>
+        `<span class="${cls}" role="img" aria-label="${escapeHtml(label)}" title="${escapeHtml(label)} — ${escapeHtml(hint)}">${icon}</span>`;
     if (result.user_confirmed) {
-        return `<span class="conf-verified" title="${escapeHtml(t('match.confirmed_hint'))}">★ ${escapeHtml(t('match.confirmed'))}</span>`;
+        return mk('conf-verified', '★', t('match.confirmed'), t('match.confirmed_hint'));
     }
     if (result.cached || result.match_method === 'cache') {
-        return `<span class="conf-cached" title="${escapeHtml(t('match.cached_hint'))}">⚡ ${escapeHtml(t('match.cached'))}</span>`;
+        return mk('conf-cached', '⚡', t('match.cached'), t('match.cached_hint'));
     }
     if (result.match_method === 'fingerprint') {
-        return `<span class="conf-verified" title="${escapeHtml(t('match.fingerprint_hint'))}">✓ ${escapeHtml(t('match.fingerprint'))}</span>`;
+        return mk('conf-verified', '✓', t('match.fingerprint'), t('match.fingerprint_hint'));
     }
     return '';
 }
@@ -425,6 +429,9 @@ function _buildMatchRow({ result, index }) {
         _renderPerformerStrip(el, node.querySelector('[data-order-note]'), result, index);
         el.hidden = false;
     }
+    // Order-note line (skip pill + order pills) — for EVERY matched card,
+    // performer count no longer gates it.
+    _renderOrderNote(node.querySelector('[data-order-note]'), result, index);
     if (m.release_date) {
         const el = node.querySelector('[data-date]');
         el.textContent = m.release_date;
@@ -474,13 +481,17 @@ function _buildMatchRow({ result, index }) {
 
     // Actions: edit + write-NFO (keep #nfo-btn-${index} id — writeNfo/writeAllNfos use it)
     const editBtn = node.querySelector('[data-edit]');
-    editBtn.textContent = `✏️ ${t('match.edit_btn')}`;
+    editBtn.textContent = '✏️';
+    editBtn.title = t('match.edit_btn');
+    editBtn.setAttribute('aria-label', t('match.edit_btn'));
     editBtn.addEventListener('click', () => openManualEditModal(orig));
     const nfoBtn = node.querySelector('[data-nfo]');
     nfoBtn.id = `nfo-btn-${index}`;
-    nfoBtn.textContent = `📄 ${t('match.write_nfo')}`;
+    nfoBtn.textContent = '📄';
+    nfoBtn.title = t('match.write_nfo');
+    nfoBtn.setAttribute('aria-label', t('match.write_nfo'));
     nfoBtn.addEventListener('click', () => writeNfo(index));
-    _wireRemoveButton(node, orig);
+    _wireRemoveButton(node, orig, true);
 
     // Alternatives (F3): the server returns up to 5 deduped candidates per
     // match — surface them behind a toggle so a wrong best-match is one click
@@ -612,12 +623,22 @@ async function _fetchNamePreviews() {
             }),
         });
         if (!resp.ok) return;
-        const { names } = await resp.json();
+        const { names, same } = await resp.json();
         rows.forEach(({ r, i }, k) => {
             r._preview_name = names[k] || null;
+            r._preview_same = Array.isArray(same) ? same[k] : null;
             _paintOutputName(i, r._preview_name);
+            _refreshOrderNote(i);
         });
     } catch (_) { /* preview is best-effort — cards simply keep the last name */ }
+}
+
+// Re-render one row's order-note line (skip pill + order pills) in place.
+function _refreshOrderNote(index) {
+    const r = matchedResults[index];
+    const cb = document.querySelector(`.match-cb[data-index="${index}"]`);
+    const noteEl = cb && cb.closest('.match-item')?.querySelector('[data-order-note]');
+    if (r && noteEl) _renderOrderNote(noteEl, r, index);
 }
 
 // Update one row's chip in place (no re-render). textContent only.
@@ -662,8 +683,7 @@ function _renderPerformerStrip(el, noteEl, result, index) {
     el.classList.toggle('perf-strip', perfs.length >= 2);
     if (perfs.length < 2) {          // nothing to reorder — plain text as before
         el.textContent = perfs.join(', ');
-        if (noteEl) noteEl.hidden = true;
-        return;
+        return;                      // the order note renders independently
     }
     // Snapshot the server-given order once so "Reset to automatic" is exact
     // regardless of how many manual moves happened since.
@@ -712,15 +732,29 @@ function _renderPerformerStrip(el, noteEl, result, index) {
                 .forEach(c => c.classList.remove('just-moved'));
         }, 450);
     }
-    _renderOrderNote(noteEl, result, index);
 }
 
 function _renderOrderNote(noteEl, result, index) {
     if (!noteEl) return;
-    const manual = result.performer_order_manual === true;
-    const autoSort = (localStorage.getItem('amm_performer_order') || 'female_first') === 'female_first';
-    if (!manual && !autoSort) { noteEl.hidden = true; return; }
+    // Order pills only make sense when the ◀ ▶ strip is active (2+ performers).
+    const strip = Array.isArray(result._orig_performers) ||
+        (result.match && Array.isArray(result.match.performers) && result.match.performers.length >= 2);
+    const manual = strip && result.performer_order_manual === true;
+    const autoSort = strip && (localStorage.getItem('amm_performer_order') || 'female_first') === 'female_first';
+    // Per-file answer to the toolbar's "Output matches the original path":
+    // amber pill on exactly the cards whose rename would be a no-op, so the
+    // user can untick them (or change template/preset/order) and move on.
+    const willSkip = result._preview_same === true;
+    if (!manual && !autoSort && !willSkip) { noteEl.hidden = true; noteEl.textContent = ''; return; }
     noteEl.textContent = '';
+    if (willSkip) {
+        const skip = document.createElement('span');
+        skip.className = 'perf-order-pill is-skip';
+        skip.textContent = t('match.will_skip');
+        skip.title = t('match.will_skip_hint');
+        noteEl.appendChild(skip);
+    }
+    if (!manual && !autoSort) { noteEl.hidden = false; return; }
     const pill = document.createElement('span');
     pill.className = 'perf-order-pill ' + (manual ? 'is-manual' : 'is-auto');
     pill.textContent = manual ? t('match.order_manual') : t('match.order_auto');
@@ -770,11 +804,12 @@ function _resetPerformerOrder(index) {
 // Wire the per-row "Remove" button. Removing a file hides it from the app for
 // this session — it is NOT deleted from disk — so it is no longer matched,
 // renamed, or available for manual edit. Shared by the matched and no-match rows.
-function _wireRemoveButton(node, orig) {
+function _wireRemoveButton(node, orig, iconOnly = false) {
     const removeBtn = node.querySelector('[data-remove]');
     if (!removeBtn) return;
-    removeBtn.textContent = `✕ ${t('match.remove')}`;
-    removeBtn.title = t('match.remove_hint');
+    removeBtn.textContent = iconOnly ? '✕' : `✕ ${t('match.remove')}`;
+    removeBtn.title = iconOnly ? `${t('match.remove')} — ${t('match.remove_hint')}` : t('match.remove_hint');
+    removeBtn.setAttribute('aria-label', t('match.remove'));
     removeBtn.addEventListener('click', () => removeMatchedFile(orig && orig.path));
 }
 

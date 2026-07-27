@@ -430,5 +430,8 @@
   "manual.rename_with_template": "命名テンプレートでファイル名を変更",
   "manual.rename_with_template_hint": "保存時に現在のテンプレート／プリセットでファイル名を変更します（その場での移動、バッチ改名と同じ競合ポリシー）。NFO・ポスター・埋め込みタグは最終的な名前の隣に保存されます。",
   "manual.rename_skipped": "名前の変更をスキップ",
-  "match.output_label": "出力"
+  "match.output_label": "出力",
+  "embed.queue_elapsed": "埋め込みの実行時間",
+  "match.will_skip": "⚠ 出力が元の名前と同じ — スキップされます",
+  "match.will_skip_hint": "ツールバーの「出力が元のパスと一致」の原因はこのファイルです。リネームではスキップされます。チェックを外すか、テンプレート・プリセット・出演者の順序を変更してください。"
 }

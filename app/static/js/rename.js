@@ -472,6 +472,17 @@ function _eqReset() {
     _eqUserToggled = false;
 }
 
+// Compact duration: 42s · 3m 12s · 1h 04m — shown in the queue header while
+// running (ticking) and frozen on completion ("how long did that take?").
+function _fmtEqDuration(sec) {
+    sec = Math.max(0, Math.round(sec));
+    if (sec < 60) return sec + 's';
+    const m = Math.floor(sec / 60), r = sec % 60;
+    if (m < 60) return m + 'm ' + String(r).padStart(2, '0') + 's';
+    const h = Math.floor(m / 60);
+    return h + 'h ' + String(m % 60).padStart(2, '0') + 'm';
+}
+
 // Build ONE queue row (factory shared by full renders and the reconciler).
 function _eqBuildRow(f) {
     const row = document.createElement('div');
@@ -621,6 +632,13 @@ function _eqUpdateHead(panel, job, issues) {
     const count = document.createElement('b');
     count.textContent = `${job.done} / ${job.total}`;
     head.appendChild(count);
+    if (Number.isFinite(job.elapsed)) {
+        const el = document.createElement('span');
+        el.className = 'eq-elapsed';
+        el.textContent = _fmtEqDuration(job.elapsed);
+        el.title = t('embed.queue_elapsed');
+        head.appendChild(el);
+    }
     const bar = document.createElement('div');
     bar.className = 'eq-bar';
     const fill = document.createElement('i');

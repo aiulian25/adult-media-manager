@@ -430,5 +430,8 @@
   "manual.rename_with_template": "Renomear o ficheiro com o modelo de nomes",
   "manual.rename_with_template_hint": "Ao guardar, o ficheiro é renomeado com o modelo/preset atual (movimento no local, mesma política de colisões dos lotes), para que o NFO, o póster e as etiquetas incorporadas fiquem junto ao nome final.",
   "manual.rename_skipped": "Renomeação ignorada",
-  "match.output_label": "Saída"
+  "match.output_label": "Saída",
+  "embed.queue_elapsed": "Tempo de incorporação",
+  "match.will_skip": "⚠ Saída igual ao original — será ignorado",
+  "match.will_skip_hint": "Este ficheiro é a causa do aviso «A saída corresponde ao caminho original». A renomeação vai ignorá-lo — desmarque-o, ou altere o modelo, o preset ou a ordem dos intérpretes se pretendia renomeá-lo."
 }

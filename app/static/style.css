@@ -2591,3 +2591,31 @@ html.is-native .fusion-bar {
     .eq-ubar > i { transition: none; }
     .eq-row-flash { animation: none; }
 }
+
+/* Embed queue header: elapsed wall time (ticking while running, frozen done) */
+.eq-elapsed { font-size: 0.74rem; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+/* ═══ Match card: compact right rail + per-file skip pill ═════════════════ */
+.match-confidence { min-width: 140px; max-width: 150px; gap: 5px; }
+.conf-top { display: flex; align-items: center; justify-content: flex-end; gap: 6px; flex-wrap: wrap; }
+.match-confidence .conf-band { font-size: 0.72rem; font-weight: 700; }
+.match-confidence .confidence-bar { height: 4px; width: 100%; }
+.match-confidence .conf-verified,
+.match-confidence .conf-cached { font-size: 0.72rem; padding: 1px 8px; }
+.match-icon-actions { display: flex; gap: 6px; }
+.icon-act {
+    width: 30px; height: 30px; padding: 0;
+    display: inline-flex; align-items: center; justify-content: center;
+    font-size: 0.82rem;
+}
+.icon-act-danger:hover { border-color: var(--error); color: var(--error); }
+/* alts toggle stays text (needs its count) but slims down */
+.match-confidence .match-action-btn { font-size: 0.72rem; padding: 4px 8px; }
+/* per-file "will be skipped" pill (order-note line) */
+.perf-order-pill.is-skip { color: var(--warning); background: var(--warn-soft); }
+
+/* The [hidden] attribute must ALWAYS win: display rules on .glass-btn etc.
+   were overriding the UA's [hidden]{display:none}, which rendered hidden
+   elements as ghost bars (the phantom gray strip under every match card's
+   confidence bar was the hidden alts-toggle button). */
+[hidden] { display: none !important; }

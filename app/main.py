@@ -221,6 +221,8 @@ def _job_extend(job_id: str, extra_total: int) -> None:
         return
     job["total"] += extra_total
     job["complete"] = job["done"] >= job["total"]
+    if not job["complete"]:
+        job["finished"] = None    # batch continues — the clock keeps running
     _job_store.extend(job_id, extra_total)
 
 
@@ -229,6 +231,7 @@ def _job_finish(job_id: str) -> None:
     job = _embed_jobs.get(job_id)
     if job is not None:
         job["complete"] = True
+        job["finished"] = _time.monotonic()   # total wall time = finished-created
     _job_store.finish(job_id, "complete")
 
 # ── Persistent user settings (API keys saved via the UI) ──────────────────────
@@ -2341,11 +2344,13 @@ async def preview_names(req: PreviewNamesRequest):
     instead of failing the batch. Read-only; nothing is written or probed.
     """
     names: list[Optional[str]] = []
+    same: list[Optional[bool]] = []
     for operation in req.operations[:500]:
         try:
             old_path = Path(str(operation.get("old_path", "")))
             if not old_path.is_absolute() or not _is_allowed_path(old_path):
                 names.append(None)
+                same.append(None)
                 continue
             bindings = extract_template_vars(
                 operation.get("scene_data", {}) or {},
@@ -2358,9 +2363,15 @@ async def preview_names(req: PreviewNamesRequest):
                 names.append(str(new_path.relative_to(old_path.parent)))
             except ValueError:
                 names.append(new_path.name)
+            # Per-file same-as-source flag — the card-level answer to the
+            # toolbar's generic "Output matches the original path" warning:
+            # renaming this file would be a no-op, so the card shows the amber
+            # "will be skipped" pill and the user can simply untick it.
+            same.append(new_path == old_path)
         except Exception:
             names.append(None)
-    return {"names": names}
+            same.append(None)
+    return {"names": names, "same": same}
 
 
 @app.post("/api/preview-paths")
@@ -2385,7 +2396,7 @@ async def preview_paths(req: PreviewPathsRequest):
 
         scene_data = operation.get("scene_data", {})
         file_data  = operation.get("file_data", {})
-        tmpl       = operation.get("template", TEMPLATES["site_date"])
+        tmpl       = operation.get("template", TEMPLATES["simple"])
         flat       = operation.get("flat", False)
 
         bindings = extract_template_vars(
@@ -2445,7 +2456,7 @@ async def rename_files(req: RenameRequest, background_tasks: BackgroundTasks):
         old_path   = Path(operation["old_path"])
         scene_data = operation.get("scene_data", {})
         file_data  = operation.get("file_data", {})
-        tmpl       = operation.get("template", TEMPLATES["site_date"])
+        tmpl       = operation.get("template", TEMPLATES["simple"])
         flat       = operation.get("flat", False)
 
         bindings = extract_template_vars(
@@ -2988,6 +2999,10 @@ async def embed_status(job_id: str):
             # Per-file live states for the embed queue panel (memory-only —
             # absent after a restart, and the client simply skips the panel).
             "files":    job.get("files", []),
+            # Wall-clock duration of the whole embed phase: still ticking while
+            # running, frozen at completion. Monotonic-based — immune to NTP.
+            "elapsed":  round((job.get("finished") or _time.monotonic())
+                              - job["created"], 1),
         }
 
     # Fallback (review item R2): not in memory — either the page was refreshed and

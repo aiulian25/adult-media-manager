@@ -53,14 +53,14 @@ Clean, flat interface with a live naming-template preview and three built-in the
 | Incremental rescan & duplicates | A catalog tracks organised files so re-scans skip them; same-content duplicates are detected |
 | Output name on every card | Each matched card shows the final file name your active template/preset would produce — labeled **Output**, updating live as you change the template, presets, flat mode or performer order — so you see exactly what Rename will do before clicking it |
 | Confidence bands & review queue | High / Medium / Low colour bands + filters to batch-confirm strong matches and focus on the ambiguous middle |
-| Naming templates | 6 built-in + fully custom with a **live preview** and unknown-variable warnings; the Performer preset leads the *file name* with the performer, and the preview warns when "No subfolders" would drop `{performer}` from the name |
+| Naming templates | 6 built-in + fully custom (default: Simple — `{performer} - {scene} ({site})`) with a **live preview** and unknown-variable warnings; the Performer preset leads the *file name* with the performer, and the preview warns when "No subfolders" would drop `{performer}` from the name |
 | Metadata write modes | **Remux + NFO** (default), **Remux only**, **Smart in-place** (`mkvpropedit`/`AtomicParsley`), **Embedded only**, or **NFO only** |
 | Clear stale metadata | Optional Settings toggle: embedding starts from a blank slate instead of merging over the file's existing tags — for files that arrived with wrong or dated embedded metadata. Audio/subtitle language tags are always kept |
 | NFO sidecars | Kodi/Jellyfin/Plex-compatible `.nfo` with synopsis, provider link, fanart backdrop, actor thumbnails, runtime and stream details |
 | In-app updates | A dismissible banner announces new releases (even in long-lived tabs); desktop builds download, sha256-verify and install the update from inside the app. A **Check for updates** button in Settings queries GitHub on demand (30s rate floor; honest found / up-to-date / unreachable feedback; respects `AMM_UPDATE_CHECK=0`) |
 | Drag & drop | Drop files or folders directly onto the browser window |
 | Natural sorting | The file browser and scan lists sort the way humans read: `2 Alex` before `10 Brandi`, case-insensitive — not the raw ASCII order. Renames and embeds process in the same order |
-| Embed queue panel | During metadata embedding, a self-managing queue above the Rename Results shows every file's live state (queued → embedding → ✓/⚠/✕) with its size, a real per-file progress bar (ffmpeg's own progress feed + copy-back byte counting — never a fake timer) and the failure reason inline — for batch renames and Manual Edit saves alike; it appears and collapses by itself — open only when something needs attention |
+| Embed queue panel | During metadata embedding, a self-managing queue above the Rename Results shows every file's live state (queued → embedding → ✓/⚠/✕) with its size, the job's running time, a real per-file progress bar (ffmpeg's own progress feed + copy-back byte counting — never a fake timer) and the failure reason inline — for batch renames and Manual Edit saves alike; it appears and collapses by itself — open only when something needs attention |
 | Themes | Three built-in themes — **Legacy**, **Dark**, **Light** — switchable in Settings |
 | Settings UI | Add API keys, pick language & theme in the browser — no config file editing required |
 | Compact fusion toolbar | Brand, source/action/metadata/conflict, naming template and the scan bar live in one dense three-row panel (~60% less chrome than before) — rarely-used template chips and presets tuck behind "+N" toggles |
@@ -71,14 +71,12 @@ Clean, flat interface with a live naming-template preview and three built-in the
 
 ---
 
-## What's New in v1.12.7
+## What's New in v1.12.8
 
-- **Real per-file progress bars** — actively-embedding files in the queue show a subtle underline bar driven by *measured* progress: ffmpeg's own progress feed for the remux phase, byte-counting for the NAS copy-back. Smoothly animated, honest to the last second, adapted to all three themes.
-- **Output name on every match card** — a soft "Output" chip under the Original line shows the exact final file name your active template/preset would produce, updating live as you change the template, presets, flat mode or performer order — you see what Rename will do before clicking it.
-- **File sizes in the embed queue** — every row (queued, embedding, finished) shows its size; Manual Edit saves now appear in the queue panel too, with the same live states.
-- **Rename Results restyled** — same minimal design language as the embed queue: thin mono rows, status glyphs instead of colored card borders, one muted detail slot, compact summary header. Both lists got sized scroll regions (queue ~12 rows, results ~7).
-- **Performance tuning for well-resourced hosts** — two new env knobs honored by every variant: `AMM_EMBED_CONCURRENCY` (parallel embeds, 1–8) and `AMM_EMBED_STAGING` (point remux staging at a tmpfs/RAM disk; ready-to-uncomment block in docker-compose). Remux is I/O-bound — tune to your storage, not your cores.
-- Toolbar brand icon sized to the row (30px) — no more barely-visible dot.
+- **Per-file "will be skipped" pill** — the generic "Output matches the original path — no change" toolbar warning now has a per-card answer: an amber pill on exactly the file(s) whose output equals their current name. Spot it, untick the file (or change the template/preset/order), continue.
+- **Compact match cards** — the right rail shrank ~45%: provenance as an icon badge (★/⚡/✓ with tooltips), one-line confidence, slim bar, and Edit / Write NFO / Remove as 30px icon buttons matching the toolbar. Also fixed the phantom gray bar under every card's confidence bar (a hidden button that rendered anyway).
+- **Factory defaults: Simple preset** — fresh starts now begin with `{performer} - {scene} ({site})` (ladies-first name leading every file) and Remux + .nfo metadata (default since 1.12.0). Saved preferences always win — only the starting point changed.
+- **Embedding running time** — the embed queue header shows the job's wall-clock time, ticking while running and frozen at completion.
 
 See the [releases page](https://github.com/aiulian25/adult-media-manager/releases) for full notes on every version.
 
@@ -164,10 +162,10 @@ No Docker required. Ships a self-contained Python 3.12 runtime — no system Pyt
 
 ### AppImage (recommended — no root required)
 
-1. Download `Adult.Media.Manager-1.12.7.AppImage`
+1. Download `Adult.Media.Manager-1.12.8.AppImage`
 2. Make it executable:
    ```bash
-   chmod +x Adult.Media.Manager-1.12.7.AppImage
+   chmod +x Adult.Media.Manager-1.12.8.AppImage
    ```
 3. Double-click it (or run it from the terminal)
 
@@ -183,7 +181,7 @@ From that point, launch it from your application menu. The original downloaded f
 ### .deb Package (Debian / Ubuntu / Mint)
 
 ```bash
-sudo apt install ./adult-media-manager_1.12.7_amd64.deb
+sudo apt install ./adult-media-manager_1.12.8_amd64.deb
 ```
 
 Launch **Adult Media Manager** from your application menu, or:
@@ -197,7 +195,7 @@ Launch **Adult Media Manager** from your application menu, or:
 Requires [RPM Fusion](https://rpmfusion.org/) enabled for the `ffmpeg` / `mkvtoolnix` media tools (used as fallback — the package also ships its own bundled copies):
 
 ```bash
-sudo dnf install ./adult-media-manager-1.12.7.x86_64.rpm
+sudo dnf install ./adult-media-manager-1.12.8.x86_64.rpm
 ```
 
 Remove with `sudo dnf remove adult-media-manager`.
@@ -385,7 +383,7 @@ Click **History** to see every action AMM has performed. Each move/copy/hardlink
 - Metadata is embedded in the background after files move. The progress banner re-attaches after a page refresh and survives brief server hiccups. If the server restarted mid-embed, the `.nfo` sidecars are already written; re-run the embed for any files that still need it.
 
 **Container reported unhealthy during big renames / embeds**
-- Fixed since v1.12.7: large file copies (rename phase, remux commit) and thumbnail extraction used to block the app's event loop, so `/api/health` couldn't answer within Docker's 10s HEALTHCHECK window. They now run in worker threads and the health endpoint answers in milliseconds even mid-batch.
+- Fixed since v1.12.8: large file copies (rename phase, remux commit) and thumbnail extraction used to block the app's event loop, so `/api/health` couldn't answer within Docker's 10s HEALTHCHECK window. They now run in worker threads and the health endpoint answers in milliseconds even mid-batch.
 
 **UI looks unchanged after an update**
 - Fixed since v1.12: the server now sends `Cache-Control: no-cache` on all UI assets and the desktop app clears its renderer cache on the first launch after a version change, so the interface always matches the installed version. Coming from v1.12 or older, do one hard refresh (Ctrl+Shift+R in a browser tab; desktop fixes itself on restart) and it won't happen again.

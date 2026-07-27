@@ -430,5 +430,8 @@
   "manual.rename_with_template": "Renombrar el archivo con la plantilla de nombres",
   "manual.rename_with_template_hint": "Al guardar, el archivo se renombra con la plantilla/preset actual (movimiento in situ, misma política de colisiones que en lote), de modo que el NFO, el póster y las etiquetas incrustadas quedan junto al nombre final.",
   "manual.rename_skipped": "Renombrado omitido",
-  "match.output_label": "Salida"
+  "match.output_label": "Salida",
+  "embed.queue_elapsed": "Tiempo de incrustación",
+  "match.will_skip": "⚠ La salida coincide con el original — se omitirá",
+  "match.will_skip_hint": "Este archivo es la causa del aviso «La salida coincide con la ruta original». El renombrado lo omitirá — desmárcalo, o cambia la plantilla, el preset o el orden de intérpretes si querías renombrarlo."
 }

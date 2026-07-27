@@ -430,5 +430,8 @@
   "manual.rename_with_template": "Renommer le fichier selon le modèle de nommage",
   "manual.rename_with_template_hint": "À l'enregistrement, le fichier est renommé avec le modèle/preset actuel (déplacement sur place, même politique de collision que les renommages par lot), afin que le NFO, l'affiche et les tags intégrés accompagnent le nom final.",
   "manual.rename_skipped": "Renommage ignoré",
-  "match.output_label": "Sortie"
+  "match.output_label": "Sortie",
+  "embed.queue_elapsed": "Durée de l'intégration",
+  "match.will_skip": "⚠ Sortie identique à l'original — sera ignoré",
+  "match.will_skip_hint": "Ce fichier est la cause de l'avertissement « La sortie correspond au chemin d'origine ». Le renommage l'ignorera — décochez-le, ou changez le modèle, le preset ou l'ordre des interprètes si vous vouliez le renommer."
 }

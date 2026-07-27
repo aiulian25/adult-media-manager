@@ -430,5 +430,8 @@
   "manual.rename_with_template": "Rename file using the naming template",
   "manual.rename_with_template_hint": "On save, the file is renamed with the current template/preset (in-place move, same collision policy as batch renames) so NFO, poster and embedded tags land next to the final name.",
   "manual.rename_skipped": "Rename skipped",
-  "match.output_label": "Output"
+  "match.output_label": "Output",
+  "embed.queue_elapsed": "Embedding running time",
+  "match.will_skip": "⚠ Output matches original — will be skipped",
+  "match.will_skip_hint": "This file is why the toolbar says “Output matches the original path”. Rename will skip it — untick it, or change the template, preset or performer order if you meant to rename it."
 }
