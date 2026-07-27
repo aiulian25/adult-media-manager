@@ -415,5 +415,19 @@
   "settings.contribute_fp_hint": "⚠ Off by default. When enabled, confirming a StashDB match UPLOADS that file's content hashes (OSHash/pHash) and duration to stashdb.org under your StashDB account — improving fingerprint matching for everyone. No file names, paths, or other personal data are ever sent.",
   "settings.tools_missing": "Missing tools: {tools} — duration probing, thumbnails and embedding need them",
   "toolbar.chips_more": "Show all",
-  "toolbar.chips_less": "Show fewer"
+  "toolbar.chips_less": "Show fewer",
+  "embed.queue_summary": "✓ {n} embedded",
+  "embed.queue_issues": "issues: {n}",
+  "embed.queue_hide": "Hide file list",
+  "embed.queue_show": "Show file list",
+  "embed.queue_st_pending": "queued",
+  "embed.queue_st_embedding": "embedding",
+  "embed.queue_st_done": "embedded",
+  "embed.queue_st_warning": "warning",
+  "embed.queue_st_error": "failed",
+  "embed.queue_st_duplicate": "duplicate",
+  "template.flat_drops_performer": "“No subfolders” keeps only the last part of this template — {performer} is in the folders, so the performer will NOT appear in the file name. Try the Performer preset or add {performer} to the name.",
+  "manual.rename_with_template": "Rename file using the naming template",
+  "manual.rename_with_template_hint": "On save, the file is renamed with the current template/preset (in-place move, same collision policy as batch renames) so NFO, poster and embedded tags land next to the final name.",
+  "manual.rename_skipped": "Rename skipped"
 }

@@ -415,5 +415,19 @@
   "settings.contribute_fp_hint": "⚠ 既定でオフ。有効にすると、StashDB のマッチを確認した際にそのファイルのコンテンツハッシュ（OSHash/pHash）と再生時間が、お使いの StashDB アカウントで stashdb.org にアップロードされます — 全員のフィンガープリント照合が向上します。ファイル名・パス・その他の個人データは一切送信されません。",
   "settings.tools_missing": "不足しているツール: {tools} — 再生時間の取得・サムネイル・埋め込みに必要です",
   "toolbar.chips_more": "すべて表示",
-  "toolbar.chips_less": "表示を減らす"
+  "toolbar.chips_less": "表示を減らす",
+  "embed.queue_summary": "✓ {n} 件埋め込み済み",
+  "embed.queue_issues": "問題: {n}",
+  "embed.queue_hide": "ファイル一覧を隠す",
+  "embed.queue_show": "ファイル一覧を表示",
+  "embed.queue_st_pending": "待機中",
+  "embed.queue_st_embedding": "埋め込み中",
+  "embed.queue_st_done": "埋め込み済み",
+  "embed.queue_st_warning": "警告",
+  "embed.queue_st_error": "失敗",
+  "embed.queue_st_duplicate": "重複",
+  "template.flat_drops_performer": "「サブフォルダなし」はテンプレートの最後の部分だけを使用します。{performer} はフォルダ側にあるため、出演者名はファイル名に含まれません。Performer プリセットを使うか、名前に {performer} を追加してください。",
+  "manual.rename_with_template": "命名テンプレートでファイル名を変更",
+  "manual.rename_with_template_hint": "保存時に現在のテンプレート／プリセットでファイル名を変更します（その場での移動、バッチ改名と同じ競合ポリシー）。NFO・ポスター・埋め込みタグは最終的な名前の隣に保存されます。",
+  "manual.rename_skipped": "名前の変更をスキップ"
 }

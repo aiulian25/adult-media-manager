@@ -49,6 +49,11 @@ function _refreshManualDateError() {
 // provider linkage. Stays null for hand-typed entries → id remains "manual".
 let manualSceneId = null;
 let manualSceneSource = null;
+// Cover art + provider page from a Fetch — sent with Save so the manual path
+// gets the same NFO art/poster the batch rename path has (F3/F7 parity).
+let manualPosterUrl = null;
+let manualFanartUrl = null;
+let manualSceneUrl = null;
 function openManualEditModal(fileData) {
     currentManualFile = fileData;
     manualPerformers = [];
@@ -57,6 +62,9 @@ function openManualEditModal(fileData) {
     selectedThumbnailIndex = null;
     manualSceneId = null;        // provider identity never leaks between files (F7)
     manualSceneSource = null;
+    manualPosterUrl = null;      // art never leaks between files either
+    manualFanartUrl = null;
+    manualSceneUrl = null;
     
     // Populate form
     document.getElementById('manual-edit-filename').textContent = fileData.filename;
@@ -164,6 +172,9 @@ async function _fetchSceneFromUrl(cfg) {
         if (descEl) descEl.value = scene.description || '';
         manualSceneId = scene.id || null;
         manualSceneSource = scene.source || null;
+        manualPosterUrl = scene.poster_url || null;
+        manualFanartUrl = scene.fanart_url || null;
+        manualSceneUrl = scene.url || null;
 
         // Replace performer + tag chips with the fetched values
         manualPerformers = Array.isArray(scene.performers) ? [...scene.performers] : [];
@@ -348,6 +359,19 @@ function addChipToList(type, text) {
     chip.className = 'chip';
     chip.appendChild(document.createTextNode(text));
 
+    // Performers are ORDERED (the first is {performer} and leads names/NFO) —
+    // ◀ ▶ arrows let the user swap positions, mirroring the match-card UI.
+    if (type === 'performers') {
+        [[-1, '◀'], [1, '▶']].forEach(([d, sym]) => {
+            const b = document.createElement('span');
+            b.className = 'chip-arrow';
+            b.textContent = sym;
+            b.title = t(d < 0 ? 'match.move_left' : 'match.move_right', { name: text });
+            b.addEventListener('click', () => _moveManualPerformer(text, d));
+            chip.appendChild(b);
+        });
+    }
+
     const removeBtn = document.createElement('span');
     removeBtn.className = 'chip-remove';
     removeBtn.textContent = '×';
@@ -356,6 +380,14 @@ function addChipToList(type, text) {
     chip.appendChild(removeBtn);
 
     list.appendChild(chip);
+}
+
+function _moveManualPerformer(name, d) {
+    const i = manualPerformers.indexOf(name);
+    const j = i + d;
+    if (i < 0 || j < 0 || j >= manualPerformers.length) return;
+    [manualPerformers[i], manualPerformers[j]] = [manualPerformers[j], manualPerformers[i]];
+    renderChips('performers', manualPerformers);
 }
 
 function removeChip(type, text) {
@@ -453,7 +485,16 @@ async function saveManualMetadata() {
         // the backend then keeps id="manual" and writes no <uniqueid>).
         description: document.getElementById('manual-description')?.value.trim() || null,
         scene_id: manualSceneId,
-        source: manualSceneSource
+        source: manualSceneSource,
+        // Art + provider page from the Fetch (null for hand-typed entries).
+        poster_url: manualPosterUrl,
+        fanart_url: manualFanartUrl,
+        url: manualSceneUrl,
+        // Honor the active naming template/preset on save (checkbox, default on).
+        rename: document.getElementById('manual-rename-template')?.checked === true,
+        template: template.value,
+        flat: flatRename.checked,
+        on_conflict: document.getElementById('conflict-policy')?.value || 'suffix'
     };
 
     // Capture display name before closing modal
@@ -487,7 +528,20 @@ async function saveManualMetadata() {
         }
 
         const data = await response.json();
-        
+
+        // Template rename happened server-side — track the file under its NEW
+        // path (matchedResults, catalog states, any later rename all key on it).
+        const oldPath = currentManualFile.path;
+        if (data.new_path && data.new_path !== currentManualFile.path) {
+            currentManualFile = { ...currentManualFile,
+                path: data.new_path,
+                filename: data.new_path.split('/').pop(),
+                name: data.new_path.split('/').pop() };
+        }
+        if (data.rename_note) {
+            showToast(t('manual.rename_skipped'), data.rename_note, 'info', 5000);
+        }
+
         // Create a manual match result and add it to matchedResults
         const manualMatch = {
             original: currentManualFile,
@@ -504,8 +558,10 @@ async function saveManualMetadata() {
             confidence: 100
         };
         
-        // Update or add to matchedResults
-        const existingIndex = matchedResults.findIndex(r => r.original.path === currentManualFile.path);
+        // Update or add to matchedResults (match by the PRE-rename path too, so
+        // a template-renamed file replaces its old row instead of duplicating).
+        const existingIndex = matchedResults.findIndex(
+            r => r.original.path === currentManualFile.path || r.original.path === oldPath);
         if (existingIndex >= 0) {
             matchedResults[existingIndex] = manualMatch;
         } else {

@@ -27,7 +27,11 @@ TEMPLATE_VARS: frozenset[str] = frozenset({
 # carry no template, and matches the shipped default of the #template input.
 TEMPLATES = {
     "site_date":        "{site}/{performer}/{site}.{date}.{scene}.{quality}",
-    "performer_focus":  "{performer}/{site} - {scene}",
+    # Performer leads the FILENAME (not just the folder): with "No subfolders"
+    # the old "{performer}/{site} - {scene}" collapsed to "{site} - {scene}"
+    # and the performer vanished from the name entirely — defeating the whole
+    # ladies-first ordering. The directory keeps the performer grouping.
+    "performer_focus":  "{performer}/{performer} - {scene} ({site})",
     "studio_organized": "{site}/{year}/{scene}",
     "simple":           "{performer} - {scene} ({site})",
     "multi_performer":  "{site}/{performers}/{scene}",

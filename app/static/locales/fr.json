@@ -415,5 +415,19 @@
   "settings.contribute_fp_hint": "⚠ Désactivé par défaut. Si activé, confirmer une correspondance StashDB ENVOIE les empreintes de contenu (OSHash/pHash) et la durée du fichier à stashdb.org via votre compte StashDB — améliorant l'appariement par empreinte pour tous. Aucun nom de fichier, chemin ni autre donnée personnelle n'est jamais envoyé.",
   "settings.tools_missing": "Outils manquants : {tools} — l'analyse de durée, les miniatures et l'intégration en ont besoin",
   "toolbar.chips_more": "Tout afficher",
-  "toolbar.chips_less": "Afficher moins"
+  "toolbar.chips_less": "Afficher moins",
+  "embed.queue_summary": "✓ {n} intégrés",
+  "embed.queue_issues": "problèmes : {n}",
+  "embed.queue_hide": "Masquer la liste des fichiers",
+  "embed.queue_show": "Afficher la liste des fichiers",
+  "embed.queue_st_pending": "en attente",
+  "embed.queue_st_embedding": "intégration",
+  "embed.queue_st_done": "intégré",
+  "embed.queue_st_warning": "avertissement",
+  "embed.queue_st_error": "échec",
+  "embed.queue_st_duplicate": "doublon",
+  "template.flat_drops_performer": "« Sans sous-dossiers » ne garde que la dernière partie de ce modèle — {performer} est dans les dossiers, l'interprète n'apparaîtra donc PAS dans le nom du fichier. Utilisez le preset Performer ou ajoutez {performer} au nom.",
+  "manual.rename_with_template": "Renommer le fichier selon le modèle de nommage",
+  "manual.rename_with_template_hint": "À l'enregistrement, le fichier est renommé avec le modèle/preset actuel (déplacement sur place, même politique de collision que les renommages par lot), afin que le NFO, l'affiche et les tags intégrés accompagnent le nom final.",
+  "manual.rename_skipped": "Renommage ignoré"
 }

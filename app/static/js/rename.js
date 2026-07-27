@@ -18,6 +18,12 @@ async function renameFiles() {
             flat: flatRename.checked,
             performer_limit: _performerLimit()
         }));
+
+    // Natural/alphabetical processing order ("2 Alex" before "10 Brandi"),
+    // regardless of scan or selection order — the preview modal, the results
+    // list, and the embed queue (server re-sorts per phase) all follow it.
+    const _natCmp = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
+    operations.sort((a, b) => _natCmp.compare(a.old_path, b.old_path));
     
     if (operations.length === 0) {
         showStatus(t('status.no_rename'), 'error');
@@ -280,6 +286,7 @@ async function _sendChunk(chunk, actionType, embedMode = 'embed', embedJobId = n
  */
 async function _doRename(operations, actionType, embedMode = 'embed') {
     btnRename.disabled = true;
+    _eqReset();   // a new batch gets a fresh queue panel + auto-collapse policy
 
     // ── Test mode or small batch: single request, original behaviour ──────────
     if (actionType === 'test' || operations.length <= LARGE_BATCH) {
@@ -448,6 +455,119 @@ let EMBED_POLL_INTERVAL_MS = 2000;
 let EMBED_POLL_FAST_LIMIT  = 300;    // ticks at fast pace (300 × 2 s = 10 min)
 let EMBED_POLL_SLOW_MS     = 30000;
 
+// ── Embed queue panel ─────────────────────────────────────────────────────────
+// Self-managing per-file progress view (mockup B): appears above the Rename
+// Results the moment embedding starts, highlights + auto-scrolls to the active
+// file, and on completion collapses itself to a one-line summary — unless
+// there are issues, in which case it stays open with them pinned first.
+// Zero required clicks; the chevron only exists for manual peeking.
+let _eqOpen = true;          // current expanded state
+let _eqUserToggled = false;  // once the user touches the chevron, we obey them
+
+const _EQ_GLYPH = { pending: '⏳', done: '✓', warning: '⚠', error: '✕', duplicate: '⧉' };
+
+function _eqReset() {
+    document.getElementById('embed-queue-panel')?.remove();
+    _eqOpen = true;
+    _eqUserToggled = false;
+}
+
+function _renderEmbedQueue(job) {
+    const files = Array.isArray(job.files) ? job.files : null;
+    if (!files || !files.length) return;   // restart-resumed job — no per-file data
+    let panel = document.getElementById('embed-queue-panel');
+    if (!panel) {
+        panel = document.createElement('div');
+        panel.id = 'embed-queue-panel';
+        panel.className = 'glass-panel embed-queue';
+        resultsContainer.prepend(panel);
+    }
+    const issues = files.filter(f => f.status === 'warning' || f.status === 'error' || f.status === 'duplicate');
+    // Auto policy until the user takes over: open while running; on completion
+    // stay open only when something needs attention.
+    const open = _eqUserToggled ? _eqOpen : (job.complete ? issues.length > 0 : true);
+    _eqOpen = open;
+
+    panel.textContent = '';
+    // Header: state icon · count · bar · chevron
+    const head = document.createElement('div');
+    head.className = 'eq-head';
+    const icon = document.createElement('span');
+    if (job.complete) {
+        icon.className = 'eq-st ' + (issues.length ? 'eq-warning' : 'eq-done');
+        icon.textContent = issues.length ? '⚠' : '✓';
+    } else {
+        icon.className = 'eq-spin';
+    }
+    head.appendChild(icon);
+    const count = document.createElement('b');
+    count.textContent = `${job.done} / ${job.total}`;
+    head.appendChild(count);
+    const bar = document.createElement('div');
+    bar.className = 'eq-bar';
+    const fill = document.createElement('i');
+    fill.style.width = job.total > 0 ? `${Math.round((job.done / job.total) * 100)}%` : '100%';
+    bar.appendChild(fill);
+    head.appendChild(bar);
+    if (job.complete && !open) {
+        const sum = document.createElement('span');
+        sum.className = 'eq-summary';
+        sum.textContent = t('embed.queue_summary', { n: files.filter(f => f.status === 'done').length })
+            + (issues.length ? ` · ${t('embed.queue_issues', { n: issues.length })}` : '');
+        head.appendChild(sum);
+    }
+    const fold = document.createElement('button');
+    fold.type = 'button';
+    fold.className = 'eq-fold';
+    fold.textContent = open ? '▾' : '▸';
+    fold.title = t(open ? 'embed.queue_hide' : 'embed.queue_show');
+    fold.addEventListener('click', () => {
+        _eqUserToggled = true;
+        _eqOpen = !_eqOpen;
+        _renderEmbedQueue(job);
+    });
+    head.appendChild(fold);
+    panel.appendChild(head);
+
+    if (!open) return;
+
+    // File list — issues pinned first once complete; processing order otherwise.
+    const list = document.createElement('div');
+    list.className = 'eq-list';
+    const ordered = job.complete && issues.length
+        ? [...issues, ...files.filter(f => !issues.includes(f))]
+        : files;
+    let activeRow = null;
+    ordered.forEach(f => {
+        const row = document.createElement('div');
+        row.className = 'eq-row' + (f.status === 'embedding' ? ' is-active' : '');
+        const st = document.createElement('span');
+        if (f.status === 'embedding') {
+            st.className = 'eq-spin eq-spin-sm';
+        } else {
+            st.className = 'eq-st eq-' + f.status;
+            st.textContent = _EQ_GLYPH[f.status] || '';
+        }
+        st.title = t('embed.queue_st_' + f.status);
+        row.appendChild(st);
+        const fn = document.createElement('span');
+        fn.className = 'eq-fn';
+        fn.textContent = f.name;
+        row.appendChild(fn);
+        if (f.detail && f.status !== 'pending' && f.status !== 'embedding') {
+            const d = document.createElement('span');
+            d.className = 'eq-detail';
+            d.textContent = f.detail;
+            d.title = f.detail;
+            row.appendChild(d);
+        }
+        list.appendChild(row);
+        if (f.status === 'embedding' && !activeRow) activeRow = row;
+    });
+    panel.appendChild(list);
+    if (activeRow) queueMicrotask(() => activeRow.scrollIntoView({ block: 'nearest' }));
+}
+
 async function _pollEmbedStatus(jobId, total) {
     // Tolerate transient connection failures (e.g. the server restarting
     // mid-embed → ERR_CONNECTION_REFUSED). The backend persists the job
@@ -484,6 +604,7 @@ async function _pollEmbedStatus(jobId, total) {
             // Keep the banner and title in sync with progress
             _setEmbedBanner(t('embed.banner', { done: job.done, total: job.total }));
             document.title = `⏳ ${t('embed.title_progress', { done: job.done, total: job.total })}`;
+            _renderEmbedQueue(job);   // per-file queue panel (self-managing)
 
             if (job.complete) {
                 // R2: a job the server flipped to "interrupted" (restart killed

@@ -285,6 +285,18 @@ function _samplePreviewOp() {
     return null;
 }
 
+// "No subfolders" keeps only the template's last path segment — if {performer}/
+// {performers} appear ONLY in the folder segments, flat mode silently drops the
+// performer from the final name ("Bad MILFs.2022-07-06.Scene" with no name in
+// sight). Detect that so the preview can say so BEFORE the rename.
+function _flatDropsPerformer(tmpl, flat) {
+    if (!flat) return false;
+    const cut = tmpl.lastIndexOf('/');
+    if (cut < 0) return false;
+    const hasPerf = s => /\{performers?\}/.test(s);
+    return hasPerf(tmpl.slice(0, cut)) && !hasPerf(tmpl.slice(cut + 1));
+}
+
 function updateTemplatePreview() {
     if (!templatePreviewEl) return;
 
@@ -295,12 +307,16 @@ function updateTemplatePreview() {
     const unknownMsg = unknown.length
         ? t('template.unknown_vars', { vars: unknown.map(v => '{' + v + '}').join(', ') })
         : '';
+    // Second priority: flat mode about to erase the performer from the name.
+    const flatPerfMsg = _flatDropsPerformer(template.value, flatRename.checked)
+        ? t('template.flat_drops_performer')
+        : '';
 
     const op = _samplePreviewOp();
     if (!op) {
         templatePreviewEl.textContent = t('template.preview_none');
         templatePreviewEl.className = 'template-preview is-hint';
-        _setTemplateWarning(unknownMsg);
+        _setTemplateWarning(unknownMsg || flatPerfMsg);
         return;
     }
     const body = {
@@ -323,6 +339,7 @@ function updateTemplatePreview() {
 
             // Warning line: unknown vars first, then "no change" (same as source).
             if (unknownMsg)               _setTemplateWarning(unknownMsg);
+            else if (flatPerfMsg)         _setTemplateWarning(flatPerfMsg);
             else if (p && p.same_as_source) _setTemplateWarning(t('template.same_as_source'));
             else                          _setTemplateWarning('');
 
@@ -339,7 +356,7 @@ function updateTemplatePreview() {
         .catch(() => {
             templatePreviewEl.textContent = '';
             templatePreviewEl.className = 'template-preview';
-            _setTemplateWarning(unknownMsg);
+            _setTemplateWarning(unknownMsg || flatPerfMsg);
         });
 }
 

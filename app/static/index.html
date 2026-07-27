@@ -511,7 +511,11 @@
                     <div id="manual-thumbnails-grid" style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px;"></div>
                 </div>
             </div>
-            <div class="modal-footer">
+            <div class="modal-footer manual-footer">
+                <label class="cb-label manual-rename-cb" title="" data-i18n-attr="title" data-i18n="manual.rename_with_template_hint">
+                    <input type="checkbox" id="manual-rename-template" checked>
+                    <span data-i18n="manual.rename_with_template">Rename file using the naming template</span>
+                </label>
                 <button id="manual-edit-cancel" class="glass-btn" data-i18n="modal.manual_edit_cancel">Cancel</button>
                 <button id="manual-edit-save" class="glass-btn btn-primary" data-i18n="modal.manual_edit_save">Save Metadata</button>
             </div>

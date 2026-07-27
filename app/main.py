@@ -161,6 +161,12 @@ def _job_create(job_id: str, total: int, kind: str = "embed") -> dict:
     job = {
         "total": total, "done": 0, "warnings": [],
         "complete": complete, "created": _time.monotonic(),
+        # Per-file live states for the embed queue panel: [{name, status,
+        # detail}] in processing (natural) order. status: pending | embedding |
+        # done | warning | error. Memory-only — after a server restart the
+        # durable store restores totals but not per-file detail (acceptable:
+        # the queue panel simply doesn't render for resumed jobs).
+        "files": [],
     }
     _embed_jobs[job_id] = job
     _job_store.create(job_id, kind, total, complete=complete)
@@ -761,11 +767,47 @@ class ManualMetadataRequest(BaseModel):
     description: Optional[str] = None
     scene_id: Optional[str] = None
     source: Optional[str] = None
+    # Cover art + provider page from a Fetch — previously LOST on the manual
+    # path (the batch rename pipeline had them since F3/F7, manual saves not).
+    poster_url: Optional[str] = None
+    fanart_url: Optional[str] = None
+    url: Optional[str] = None
+    # Honor the active naming template on save (in-place MOVE rename before
+    # the NFO/embed so everything lands next to the final name).
+    rename: bool = False
+    template: Optional[str] = None
+    flat: bool = False
+    on_conflict: str = "suffix"
 
     @field_validator("embed_mode")
     @classmethod
     def validate_embed_mode(cls, v: str) -> str:
         return _validate_embed_mode(v)
+
+    @field_validator("poster_url", "fanart_url", "url", mode="before")
+    @classmethod
+    def _validate_art_urls(cls, v) -> Optional[str]:
+        if v is None:
+            return None
+        v = str(v).strip()
+        if not v or len(v) > 500 or not v.startswith(("http://", "https://")):
+            return None   # silently drop junk — art is best-effort, never fatal
+        return v
+
+    @field_validator("on_conflict")
+    @classmethod
+    def _validate_manual_conflict(cls, v: str) -> str:
+        if v not in ("suffix", "skip", "fail"):
+            raise ValueError("on_conflict must be 'suffix', 'skip' or 'fail'")
+        return v
+
+    @field_validator("template", mode="before")
+    @classmethod
+    def _validate_manual_template(cls, v) -> Optional[str]:
+        if v is None:
+            return None
+        v = str(v).strip()
+        return v[:500] or None
 
     @field_validator("source")
     @classmethod
@@ -2321,7 +2363,12 @@ async def rename_files(req: RenameRequest, background_tasks: BackgroundTasks):
     alias_learn_jobs = []  # (file_performers, api_performers) per confirm (F12)
     fp_submissions = 0     # per-request cap on opt-in StashDB contributions (F5)
     reserved: set[str] = set()  # targets claimed by THIS batch (collision policy, F1)
-    for operation in req.operations:
+    # Deterministic natural order server-side too (the UI already sorts before
+    # sending — this covers scripted API callers and keeps collision numbering
+    # reproducible for identical batches). Same _natural_key as browse/scan.
+    ordered_ops = sorted(req.operations,
+                         key=lambda op: _natural_key(str(op.get("old_path", ""))))
+    for operation in ordered_ops:
         old_path   = Path(operation["old_path"])
         scene_data = operation.get("scene_data", {})
         file_data  = operation.get("file_data", {})
@@ -2639,21 +2686,40 @@ async def _run_embed_phase(job_id: str, tasks: list, embed_mode: str = "embed") 
     if job is None:
         return
 
+    # Embed in natural/alphabetical order of the FINAL names. gather() starts
+    # coroutines in list order and asyncio.Semaphore wakes waiters FIFO, so
+    # with the 3-slot cap files ENTER the embed pipeline in this order (small
+    # completion interleave aside — a big file may outlast its successors).
+    tasks = sorted(tasks, key=lambda t: _natural_key(str(t[0].new_path)))
+
+    # Register this chunk's files on the (possibly shared) job so the embed
+    # queue panel can show live per-file states. Entry dicts are mutated in
+    # place by _embed_one — loop-local, no locking needed.
+    entries = [{"name": t[0].new_path.name, "status": "pending", "detail": None}
+               for t in tasks]
+    job.setdefault("files", []).extend(entries)
+
     embed_sem = _get_embed_sem()
     nfo_only   = embed_mode == "nfo_only"     # sidecar, no container
     # Container-only modes (no sidecar): in-place strategy or pure remux.
     embed_only = embed_mode in ("embed_only", "remux_only")
 
-    async def _embed_one(result, new_path, meta, cat):
+    async def _embed_one(result, new_path, meta, cat, entry=None):
         warning = None
         new_oshash = None
+        embed_failed = False
         # Container write for embed/smart/embed_only (skipped for nfo_only). The
         # concurrency cap matters for the FFmpeg remux; nfo_only skips it entirely.
         if not nfo_only:
             async with embed_sem:
+                if entry is not None:
+                    entry["status"] = "embedding"
                 ok, err = await _embed_for_mode(result.new_path, meta, embed_mode)
                 if not ok:
                     warning = f"Metadata embedding warning: {err}"
+                    embed_failed = True
+                    if entry is not None:
+                        entry["detail"] = str(err)[:200]
                 else:
                     # F6: the write changed the file's bytes — re-key the match
                     # cache + catalog to the post-embed hash so the confirmation
@@ -2665,6 +2731,8 @@ async def _run_embed_phase(job_id: str, tasks: list, embed_mode: str = "embed") 
                     )
         nfo_written = False
         if not embed_only:  # write the sidecar for nfo_only/smart/embed
+            if entry is not None and entry["status"] != "embedding":
+                entry["status"] = "embedding"   # nfo_only path: mark active here
             # Poster (F3): only meaningful alongside the NFO that references it.
             if _FETCH_POSTERS and meta.get("poster_url"):
                 poster_dest = result.new_path.with_name(result.new_path.stem + "-poster.jpg")
@@ -2676,6 +2744,8 @@ async def _run_embed_phase(job_id: str, tasks: list, embed_mode: str = "embed") 
             except Exception as nfo_err:
                 if not warning:
                     warning = f"NFO write warning: {nfo_err}"
+                if entry is not None and entry.get("detail") is None:
+                    entry["detail"] = f"NFO: {str(nfo_err)[:200]}"
         # Catalog (R1): "organised" is the NFO-on-disk signal (the scan self-heals
         # against it), so only mark it once the NFO is actually written. embed_only
         # writes container tags but no NFO, so it is intentionally NOT tracked as
@@ -2694,12 +2764,20 @@ async def _run_embed_phase(job_id: str, tasks: list, embed_mode: str = "embed") 
                 )
             except Exception as e:
                 print(f"WARNING: catalog mark_organized (phase 2) failed: {e}")
+        # Final per-file state for the queue panel: container-write failure is
+        # an "error" (red ✕), sidecar-only trouble a "warning" (amber ⚠).
+        if entry is not None:
+            entry["status"] = ("error" if embed_failed
+                               else "warning" if warning else "done")
         _job_progress(
             job_id,
             {"path": str(result.new_path), "warning": warning} if warning else None,
         )
 
-    await asyncio.gather(*[_embed_one(r, p, m, c) for r, p, m, c in tasks])
+    await asyncio.gather(*[
+        _embed_one(r, p, m, c, entry)
+        for (r, p, m, c), entry in zip(tasks, entries)
+    ])
     # Chunk-shared jobs (_job_extend): several background tasks report into one
     # job, so completion belongs to whichever task drains the LAST unit — not
     # to each task's own gather. Everything is loop-local (no threads), so this
@@ -2788,6 +2866,9 @@ async def embed_status(job_id: str):
             "complete": job["complete"],
             "warnings": job["warnings"],
             "status":   "complete" if job["complete"] else "running",
+            # Per-file live states for the embed queue panel (memory-only —
+            # absent after a restart, and the client simply skips the panel).
+            "files":    job.get("files", []),
         }
 
     # Fallback (review item R2): not in memory — either the page was refreshed and
@@ -4769,6 +4850,48 @@ async def save_manual_metadata(req: ManualMetadataRequest, background_tasks: Bac
     if not file_path.exists():
         raise HTTPException(status_code=404, detail="File not found")
 
+    # Thumbnails were generated for the ORIGINAL path — resolve their folder
+    # before any rename below changes file_path.
+    orig_thumb_dir = _thumbnail_dir_for(file_path)
+
+    # ── Honor the naming template (optional in-place MOVE rename) ───────────
+    # Runs FIRST so the NFO, poster and container embed all land next to the
+    # final name — identical semantics to the batch pipeline (same collision
+    # policy, same companion handling, same history entry for undo).
+    renamed = False
+    rename_note = None
+    if req.rename and req.template:
+        scene_for_tmpl = {
+            "title": req.title, "site": req.site or "", "performers": req.performers,
+            "release_date": req.release_date or "", "tags": req.tags,
+            "quality": req.quality or "",
+        }
+        bindings = extract_template_vars(
+            scene_for_tmpl, {"path": str(file_path), "filename": file_path.name}, None)
+        target = build_new_path(file_path, req.template, bindings)
+        if req.flat:
+            target = file_path.parent / target.name
+        if not _is_allowed_path(target):
+            raise HTTPException(status_code=403,
+                                detail="Rename target not in an allowed media directory")
+        if target != file_path:
+            resolved, skip_code, _coll = resolve_collision(
+                file_path, target, req.on_conflict, set())
+            if resolved is None:
+                rename_note = skip_code or "target exists — rename skipped"
+            else:
+                result = await asyncio.to_thread(
+                    execute_rename_with_companions, file_path, resolved, RenameAction.MOVE)
+                if result.success:
+                    try:
+                        history.add_entries([(file_path, resolved, "move", True)])
+                    except Exception:
+                        pass
+                    file_path = resolved
+                    renamed = True
+                else:
+                    rename_note = result.error or "rename failed"
+
     metadata = {
         "title":        req.title,
         "site":         req.site or "",
@@ -4786,6 +4909,11 @@ async def save_manual_metadata(req: ManualMetadataRequest, background_tasks: Bac
         "description":  req.description or "",
         "id":           req.scene_id or "manual",
         "source":       req.source or "manual",
+        # F7 parity with the batch path: provider page → NFO <url>, fanart →
+        # NFO <fanart><thumb>; poster handled below (local frame or URL fetch).
+        "url":          req.url or "",
+        "poster_url":   req.poster_url or "",
+        "fanart_url":   req.fanart_url or "",
     }
 
     # Container-only modes ("embed_only", "remux_only") write tags but NO
@@ -4799,7 +4927,7 @@ async def save_manual_metadata(req: ManualMetadataRequest, background_tasks: Bac
     # written when write_sidecar. Purely local (ffmpeg frame) — no network.
     thumbnail_url = None
     if req.thumbnail_index is not None:
-        thumbnail_dir = _thumbnail_dir_for(file_path)
+        thumbnail_dir = orig_thumb_dir   # generated under the PRE-rename path
         source_thumb = thumbnail_dir / f"thumb_{req.thumbnail_index}.jpg"
         if source_thumb.exists():
             dest_thumb = thumbnail_dir / "selected.jpg"
@@ -4814,6 +4942,17 @@ async def save_manual_metadata(req: ManualMetadataRequest, background_tasks: Bac
                     # Never fail the save because the poster copy failed (e.g. a
                     # read-only media mount) — the NFO/metadata still lands.
                     print(f"WARNING: poster copy failed for {file_path}: {poster_err}")
+
+    # ── Cover art from the provider (F3 parity) ─────────────────────────────
+    # When no local frame was chosen, fetch the scene's poster next to the file
+    # so the NFO can reference it — the batch rename path has done this since
+    # F3; manual saves previously dropped the art on the floor. _download_poster
+    # is SSRF-hardened (scheme allowlist, no redirects, image/*, size cap).
+    if (write_sidecar and _FETCH_POSTERS and req.poster_url
+            and "poster_path" not in metadata):
+        poster_dest = file_path.with_name(file_path.stem + "-poster.jpg")
+        if await _download_poster(req.poster_url, poster_dest):
+            metadata["poster_path"] = poster_dest.name
 
     # ── Fast path: NFO sidecar (tiny local XML) ─────────────────────────────
     # This is the durable, player-visible result and must not be gated on the
@@ -4868,6 +5007,11 @@ async def save_manual_metadata(req: ManualMetadataRequest, background_tasks: Bac
             "quality": metadata["quality"],
             "manual_entry": True,
             "thumbnail_url": thumbnail_url,
+            # Art + provider page survive into the confirm cache so a LATER
+            # batch rename of this file writes the same NFO art references.
+            "poster_url": metadata["poster_url"],
+            "fanart_url": metadata["fanart_url"],
+            "url": metadata["url"],
         }
         # Hash computed once above (F6) — the same value the background embed
         # job receives, so its rekey provably targets this entry.
@@ -4888,6 +5032,11 @@ async def save_manual_metadata(req: ManualMetadataRequest, background_tasks: Bac
         "thumbnail_url":  thumbnail_url,
         "metadata":       metadata,
         "embed_job_id":   embed_job_id,   # null when nfo_only — nothing to poll
+        # Template-rename outcome: the (possibly new) on-disk path, whether a
+        # rename happened, and an honest note when it was skipped/failed.
+        "new_path":      str(file_path),
+        "renamed":       renamed,
+        "rename_note":   rename_note,
     }
 
 

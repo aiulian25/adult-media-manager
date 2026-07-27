@@ -415,5 +415,19 @@
   "settings.contribute_fp_hint": "⚠ Desactivado por defecto. Si se activa, confirmar una coincidencia de StashDB SUBE los hashes de contenido (OSHash/pHash) y la duración del archivo a stashdb.org con su cuenta de StashDB — mejorando el emparejamiento por huella para todos. Nunca se envían nombres de archivo, rutas ni otros datos personales.",
   "settings.tools_missing": "Herramientas faltantes: {tools} — la duración, las miniaturas y la incrustación las necesitan",
   "toolbar.chips_more": "Mostrar todo",
-  "toolbar.chips_less": "Mostrar menos"
+  "toolbar.chips_less": "Mostrar menos",
+  "embed.queue_summary": "✓ {n} incrustados",
+  "embed.queue_issues": "problemas: {n}",
+  "embed.queue_hide": "Ocultar lista de archivos",
+  "embed.queue_show": "Mostrar lista de archivos",
+  "embed.queue_st_pending": "en cola",
+  "embed.queue_st_embedding": "incrustando",
+  "embed.queue_st_done": "incrustado",
+  "embed.queue_st_warning": "aviso",
+  "embed.queue_st_error": "falló",
+  "embed.queue_st_duplicate": "duplicado",
+  "template.flat_drops_performer": "«Sin subcarpetas» conserva solo la última parte de esta plantilla — {performer} está en las carpetas, por lo que el intérprete NO aparecerá en el nombre del archivo. Usa el preset Performer o añade {performer} al nombre.",
+  "manual.rename_with_template": "Renombrar el archivo con la plantilla de nombres",
+  "manual.rename_with_template_hint": "Al guardar, el archivo se renombra con la plantilla/preset actual (movimiento in situ, misma política de colisiones que en lote), de modo que el NFO, el póster y las etiquetas incrustadas quedan junto al nombre final.",
+  "manual.rename_skipped": "Renombrado omitido"
 }

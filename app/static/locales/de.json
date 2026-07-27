@@ -415,5 +415,19 @@
   "settings.contribute_fp_hint": "⚠ Standardmäßig aus. Wenn aktiviert, LÄDT das Bestätigen eines StashDB-Treffers die Inhalts-Hashes (OSHash/pHash) und die Laufzeit der Datei zu stashdb.org HOCH — unter Ihrem StashDB-Konto; das verbessert das Fingerprint-Matching für alle. Dateinamen, Pfade oder andere persönliche Daten werden niemals gesendet.",
   "settings.tools_missing": "Fehlende Werkzeuge: {tools} — Laufzeit-Analyse, Vorschaubilder und Einbettung benötigen sie",
   "toolbar.chips_more": "Alle anzeigen",
-  "toolbar.chips_less": "Weniger anzeigen"
+  "toolbar.chips_less": "Weniger anzeigen",
+  "embed.queue_summary": "✓ {n} eingebettet",
+  "embed.queue_issues": "Probleme: {n}",
+  "embed.queue_hide": "Dateiliste ausblenden",
+  "embed.queue_show": "Dateiliste anzeigen",
+  "embed.queue_st_pending": "wartend",
+  "embed.queue_st_embedding": "wird eingebettet",
+  "embed.queue_st_done": "eingebettet",
+  "embed.queue_st_warning": "Warnung",
+  "embed.queue_st_error": "fehlgeschlagen",
+  "embed.queue_st_duplicate": "Duplikat",
+  "template.flat_drops_performer": "„Keine Unterordner“ behält nur den letzten Teil dieser Vorlage — {performer} steht in den Ordnern, daher erscheint der Darsteller NICHT im Dateinamen. Nutzen Sie das Performer-Preset oder fügen Sie {performer} dem Namen hinzu.",
+  "manual.rename_with_template": "Datei nach Namensvorlage umbenennen",
+  "manual.rename_with_template_hint": "Beim Speichern wird die Datei mit der aktuellen Vorlage/dem Preset umbenannt (Verschieben an Ort und Stelle, gleiche Kollisionsregel wie bei Batch-Umbenennungen), sodass NFO, Poster und eingebettete Tags beim endgültigen Namen landen.",
+  "manual.rename_skipped": "Umbenennen übersprungen"
 }

@@ -415,5 +415,19 @@
   "settings.contribute_fp_hint": "⚠ Desligado por padrão. Quando ativado, confirmar uma correspondência do StashDB ENVIA os hashes de conteúdo (OSHash/pHash) e a duração do arquivo para stashdb.org com a sua conta StashDB — melhorando a correspondência por impressão digital para todos. Nomes de arquivos, caminhos ou outros dados pessoais nunca são enviados.",
   "settings.tools_missing": "Ferramentas ausentes: {tools} — duração, miniaturas e incorporação precisam delas",
   "toolbar.chips_more": "Mostrar tudo",
-  "toolbar.chips_less": "Mostrar menos"
+  "toolbar.chips_less": "Mostrar menos",
+  "embed.queue_summary": "✓ {n} incorporados",
+  "embed.queue_issues": "problemas: {n}",
+  "embed.queue_hide": "Ocultar lista de ficheiros",
+  "embed.queue_show": "Mostrar lista de ficheiros",
+  "embed.queue_st_pending": "em fila",
+  "embed.queue_st_embedding": "a incorporar",
+  "embed.queue_st_done": "incorporado",
+  "embed.queue_st_warning": "aviso",
+  "embed.queue_st_error": "falhou",
+  "embed.queue_st_duplicate": "duplicado",
+  "template.flat_drops_performer": "“Sem subpastas” mantém apenas a última parte deste modelo — {performer} está nas pastas, pelo que o intérprete NÃO aparecerá no nome do ficheiro. Use o preset Performer ou adicione {performer} ao nome.",
+  "manual.rename_with_template": "Renomear o ficheiro com o modelo de nomes",
+  "manual.rename_with_template_hint": "Ao guardar, o ficheiro é renomeado com o modelo/preset atual (movimento no local, mesma política de colisões dos lotes), para que o NFO, o póster e as etiquetas incorporadas fiquem junto ao nome final.",
+  "manual.rename_skipped": "Renomeação ignorada"
 }
