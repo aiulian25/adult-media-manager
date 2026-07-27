@@ -71,12 +71,11 @@ Clean, flat interface with a live naming-template preview and three built-in the
 
 ---
 
-## What's New in v1.12.8
+## What's New in v1.12.9
 
-- **Per-file "will be skipped" pill** — the generic "Output matches the original path — no change" toolbar warning now has a per-card answer: an amber pill on exactly the file(s) whose output equals their current name. Spot it, untick the file (or change the template/preset/order), continue.
-- **Compact match cards** — the right rail shrank ~45%: provenance as an icon badge (★/⚡/✓ with tooltips), one-line confidence, slim bar, and Edit / Write NFO / Remove as 30px icon buttons matching the toolbar. Also fixed the phantom gray bar under every card's confidence bar (a hidden button that rendered anyway).
-- **Factory defaults: Simple preset** — fresh starts now begin with `{performer} - {scene} ({site})` (ladies-first name leading every file) and Remux + .nfo metadata (default since 1.12.0). Saved preferences always win — only the starting point changed.
-- **Embedding running time** — the embed queue header shows the job's wall-clock time, ticking while running and frozen at completion.
+- **Progress bars that never stall** — fixed a NAS bug where the per-file progress froze at ~50% for the whole copy phase: on SMB/CIFS mounts the metadata step of the copy routinely fails *after* the data landed, which silently threw the file into a progress-less re-copy. The copy path is now data-first with unconditional byte-count progress, metadata best-effort — and NAS embeds got faster (the accidental double-copy is gone).
+- **One surface, no app-in-an-app** — the embed queue and Rename Results are now full-bleed sections of one continuous surface spanning the entire app width, separated by a single prominent hairline. No more bordered boxes floating inside bordered boxes.
+- **Nav icons fill their buttons** — Library / History / Settings glyphs grew from 15px to 20px in the same 30px buttons; you can finally tell the cylinder, clock and gear apart at a glance.
 
 See the [releases page](https://github.com/aiulian25/adult-media-manager/releases) for full notes on every version.
 
@@ -162,10 +161,10 @@ No Docker required. Ships a self-contained Python 3.12 runtime — no system Pyt
 
 ### AppImage (recommended — no root required)
 
-1. Download `Adult.Media.Manager-1.12.8.AppImage`
+1. Download `Adult.Media.Manager-1.12.9.AppImage`
 2. Make it executable:
    ```bash
-   chmod +x Adult.Media.Manager-1.12.8.AppImage
+   chmod +x Adult.Media.Manager-1.12.9.AppImage
    ```
 3. Double-click it (or run it from the terminal)
 
@@ -181,7 +180,7 @@ From that point, launch it from your application menu. The original downloaded f
 ### .deb Package (Debian / Ubuntu / Mint)
 
 ```bash
-sudo apt install ./adult-media-manager_1.12.8_amd64.deb
+sudo apt install ./adult-media-manager_1.12.9_amd64.deb
 ```
 
 Launch **Adult Media Manager** from your application menu, or:
@@ -195,7 +194,7 @@ Launch **Adult Media Manager** from your application menu, or:
 Requires [RPM Fusion](https://rpmfusion.org/) enabled for the `ffmpeg` / `mkvtoolnix` media tools (used as fallback — the package also ships its own bundled copies):
 
 ```bash
-sudo dnf install ./adult-media-manager-1.12.8.x86_64.rpm
+sudo dnf install ./adult-media-manager-1.12.9.x86_64.rpm
 ```
 
 Remove with `sudo dnf remove adult-media-manager`.
@@ -383,7 +382,7 @@ Click **History** to see every action AMM has performed. Each move/copy/hardlink
 - Metadata is embedded in the background after files move. The progress banner re-attaches after a page refresh and survives brief server hiccups. If the server restarted mid-embed, the `.nfo` sidecars are already written; re-run the embed for any files that still need it.
 
 **Container reported unhealthy during big renames / embeds**
-- Fixed since v1.12.8: large file copies (rename phase, remux commit) and thumbnail extraction used to block the app's event loop, so `/api/health` couldn't answer within Docker's 10s HEALTHCHECK window. They now run in worker threads and the health endpoint answers in milliseconds even mid-batch.
+- Fixed since v1.12.9: large file copies (rename phase, remux commit) and thumbnail extraction used to block the app's event loop, so `/api/health` couldn't answer within Docker's 10s HEALTHCHECK window. They now run in worker threads and the health endpoint answers in milliseconds even mid-batch.
 
 **UI looks unchanged after an update**
 - Fixed since v1.12: the server now sends `Cache-Control: no-cache` on all UI assets and the desktop app clears its renderer cache on the first launch after a version change, so the interface always matches the installed version. Coming from v1.12 or older, do one hard refresh (Ctrl+Shift+R in a browser tab; desktop fixes itself on restart) and it won't happen again.

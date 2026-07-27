@@ -2619,3 +2619,31 @@ html.is-native .fusion-bar {
    elements as ghost bars (the phantom gray strip under every match card's
    confidence bar was the hidden alts-toggle button). */
 [hidden] { display: none !important; }
+
+/* ═══ Full-bleed job surface (approved): the embed queue and Rename Results
+   are sections of ONE continuous surface spanning the entire app width —
+   no bordered boxes floating inside the app. A single prominent hairline
+   divides the two sections. Same bleed technique as the native toolbar. ═══ */
+#embed-queue-panel,
+.rename-results {
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+    margin-left: calc(50% - 50vw);
+    margin-right: calc(50% - 50vw);
+    padding-left: max(14px, calc(50vw - 786px));
+    padding-right: max(14px, calc(50vw - 786px));
+}
+#embed-queue-panel { margin-bottom: 0; }
+.rename-results { margin-top: 0; padding-bottom: 48px; }
+/* the ONE divider between the sections — deliberately more prominent than
+   the row hairlines (2px, full border token) */
+#embed-queue-panel + .rename-results { border-top: 2px solid var(--border); }
+/* inner list boxes flatten onto the surface: soft hairlines between rows only */
+.eq-list,
+.rename-results-list {
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    padding-right: 0;
+}

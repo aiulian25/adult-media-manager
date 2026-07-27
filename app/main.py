@@ -4639,12 +4639,16 @@ async def _run_ffmpeg_with_progress(cmd: list, timeout: float,
 
 
 async def _copy_with_progress(src: Path, dst: Path, on_pct=None) -> None:
-    """shutil.copy2 in a worker thread while the async side polls the
-    destination's byte count — REAL copy-back progress (the phase that
-    dominates wall time on NAS libraries). Poll stats run in the threadpool
-    too, so a slow mount can't block the event loop. Raises on copy failure."""
+    """DATA copy (shutil.copyfile) in a worker thread while the async side
+    polls the destination's byte count — REAL copy-back progress. Metadata
+    (times/mode) is copied best-effort AFTERWARDS: shutil.copy2's copystat
+    step routinely fails on SMB/CIFS mounts — after the bytes had already
+    landed — which used to throw the whole copy into a progress-less
+    re-copy fallback (bars frozen at ~50%, double I/O). copyfile-first makes
+    progress unconditional and metadata failure a non-event. Raises only on
+    DATA copy failure."""
     total = await asyncio.to_thread(lambda: src.stat().st_size)
-    task = asyncio.create_task(asyncio.to_thread(shutil.copy2, str(src), str(dst)))
+    task = asyncio.create_task(asyncio.to_thread(shutil.copyfile, str(src), str(dst)))
     try:
         while not task.done():
             await asyncio.sleep(0.5)
@@ -4655,7 +4659,11 @@ async def _copy_with_progress(src: Path, dst: Path, on_pct=None) -> None:
                     done_b = 0
                 on_pct(max(0.0, min(1.0, done_b / total)))
     finally:
-        await task   # propagate copy errors to the caller
+        await task   # propagate DATA copy errors to the caller
+    try:
+        await asyncio.to_thread(shutil.copystat, str(src), str(dst))
+    except OSError:
+        pass         # NAS without metadata support — bytes are what matter
     if on_pct:
         on_pct(1.0)
 
@@ -4815,14 +4823,10 @@ async def embed_metadata(file_path: Path, metadata: dict,
                 os.close(nas_fd)
                 nas_tmp = Path(nas_str)
                 # Threaded copy with live byte-count progress (50–100% of the
-                # underline bar) — the loop stays free, the bar stays honest.
-                try:
-                    await _copy_with_progress(tmp_path, nas_tmp, on_pct=_copy_pct)
-                except OSError:
-                    try:
-                        await asyncio.to_thread(_shutil.copy, str(tmp_path), str(nas_tmp))
-                    except OSError:
-                        await asyncio.to_thread(_shutil.copyfile, str(tmp_path), str(nas_tmp))
+                # underline bar). _copy_with_progress is copyfile-based, so the
+                # old copy/copyfile fallback chain (which reported NO progress
+                # and re-copied gigabytes after an SMB copystat failure) is gone.
+                await _copy_with_progress(tmp_path, nas_tmp, on_pct=_copy_pct)
 
                 # Phase 3: atomic replace — original only changes at this instant.
                 os.replace(str(nas_tmp), str(file_path))
@@ -4835,13 +4839,7 @@ async def embed_metadata(file_path: Path, metadata: dict,
                 # the copy window, but we must not silently discard the result.
                 if nas_tmp and nas_tmp.exists():
                     nas_tmp.unlink(missing_ok=True)
-                try:
-                    await asyncio.to_thread(_shutil.copy2, str(tmp_path), str(file_path))
-                except OSError:
-                    try:
-                        await asyncio.to_thread(_shutil.copy, str(tmp_path), str(file_path))
-                    except OSError:
-                        await asyncio.to_thread(_shutil.copyfile, str(tmp_path), str(file_path))
+                await _copy_with_progress(tmp_path, file_path, on_pct=_copy_pct)
                 return True, ""
         finally:
             tmp_path.unlink(missing_ok=True)
