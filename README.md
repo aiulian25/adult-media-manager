@@ -71,11 +71,13 @@ Clean, flat interface with a live naming-template preview and three built-in the
 
 ---
 
-## What's New in v1.12.10
+## What's New in v1.12.11
 
-- **Embed bookkeeping no longer blocks the server** — after each file is embedded, the match-cache rewrite, catalog updates and NFO write now run in worker threads instead of on the app's single event loop. Progress polls answer in milliseconds during a batch, and the queue repaints every second (was every two).
-- **Durable embed history** — every embed (batch *and* Manual Edit) now records a row in the catalog: mode, outcome, the exact ffmpeg/NFO reason, file size and how long it took. Previously all of that vanished 10 minutes after the job finished. A new **Embeds logged** tile in the Library shows the count; `GET /api/catalog/embed-log?path=…` returns a file's history.
-- **Reproducible, hash-pinned dependencies** — `requirements.lock` pins every Python dependency (full transitive tree) to an exact version plus sha256 hashes, installed with `pip --require-hashes` by the Docker image *and* the deb/rpm/AppImage bundle. Two builds of the same commit now contain a byte-identical dependency set, and a new or compromised upstream release can never enter a build silently. No dependency versions changed — this freezes the set that was already shipping.
+- **The embed queue can no longer freeze on a spinner** — if a file's post-embed bookkeeping raised, the exception escaped the gather and the job never reached its finish handler, so the client stopped polling with rows still spinning, forever. Every file now finishes under a crash guard, and any row still marked pending when a job ends is reconciled to a warning with an explicit reason instead of spinning silently.
+- **One visual language across the whole app** — the unmatched-files notice, the rename preview, the scanned-files list, the update banner, Rename History and Settings were each built with their own borders, fonts and spacing. They now share one: hairline rows, monospace filenames, a 16px status column, and a single rule between sections. Nothing is a card floating inside another card.
+- **Scanning and reviewing are far denser** — scanned files drop from ~80px cards to ~28px rows (a 23-file scan is one screen, not three), and the rename preview and history print the folder every path shares once instead of on every line, so the part that actually changes is what you read.
+- **Toolbar icons are legible again** — the Library, History and Settings glyphs were rendering 8px wide by 20px tall, squashed by a CSS rule that outranked their own sizing. They are now 24px and square, and `npm run check:ui` asserts the rendered geometry so the regression can't ship again.
+- **Removing a saved API key is visible** — the Remove control next to each key is amber instead of muted grey; several people never noticed the option existed.
 
 See the [releases page](https://github.com/aiulian25/adult-media-manager/releases) for full notes on every version.
 
@@ -161,10 +163,10 @@ No Docker required. Ships a self-contained Python 3.12 runtime — no system Pyt
 
 ### AppImage (recommended — no root required)
 
-1. Download `Adult.Media.Manager-1.12.10.AppImage`
+1. Download `Adult.Media.Manager-1.12.11.AppImage`
 2. Make it executable:
    ```bash
-   chmod +x Adult.Media.Manager-1.12.10.AppImage
+   chmod +x Adult.Media.Manager-1.12.11.AppImage
    ```
 3. Double-click it (or run it from the terminal)
 
@@ -180,7 +182,7 @@ From that point, launch it from your application menu. The original downloaded f
 ### .deb Package (Debian / Ubuntu / Mint)
 
 ```bash
-sudo apt install ./adult-media-manager_1.12.10_amd64.deb
+sudo apt install ./adult-media-manager_1.12.11_amd64.deb
 ```
 
 Launch **Adult Media Manager** from your application menu, or:
@@ -194,7 +196,7 @@ Launch **Adult Media Manager** from your application menu, or:
 Requires [RPM Fusion](https://rpmfusion.org/) enabled for the `ffmpeg` / `mkvtoolnix` media tools (used as fallback — the package also ships its own bundled copies):
 
 ```bash
-sudo dnf install ./adult-media-manager-1.12.10.x86_64.rpm
+sudo dnf install ./adult-media-manager-1.12.11.x86_64.rpm
 ```
 
 Remove with `sudo dnf remove adult-media-manager`.

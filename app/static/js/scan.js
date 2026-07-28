@@ -214,70 +214,120 @@ const SCAN_RENDER_CAP = 300;
 // Row markup builders — defined once and reused for the initial render and the
 // "Show all" expansion. Checkbox state is derived from the selection Set so
 // rows rendered later stay correct after Select-All / deselect actions.
-function _scannedNewRowHtml(i, file) {
-    const checked = selectedScannedIndices.has(i) ? 'checked' : '';
-    return `
-        <div class="file-item glass-panel selectable" id="scanned-item-${i}">
-            <label class="file-checkbox-wrap">
-                <input type="checkbox" class="file-cb" data-index="${i}" ${checked}
-                       onchange="toggleScannedFile(${i}, this.checked)">
-            </label>
-            <div class="file-info">
-                <div class="file-name">${escapeHtml(file.filename)}</div>
-                <div class="file-meta">
-                    ${file.site ? `<span class="badge site-badge">${escapeHtml(file.site)}</span>` : ''}
-                    ${file.context_source === 'folder' ? `<span class="badge" title="${escapeHtml(t('scan.from_folder_hint'))}">📁</span>` : ''}
-                    ${file.performers && file.performers.length > 0 ? `<span>${file.performers.map(escapeHtml).join(', ')}</span>` : ''}
-                    ${file.quality ? `<span class="badge quality-badge">${escapeHtml(file.quality)}</span>` : ''}
-                    ${file.release_date ? `<span>${escapeHtml(file.release_date)}</span>` : ''}
-                </div>
-            </div>
-        </div>`;
+/** Small DOM helper — rows are built as nodes, never as HTML strings. */
+function _sfEl(tag, cls, text) {
+    const node = document.createElement(tag);
+    if (cls) node.className = cls;
+    if (text != null) node.textContent = text;
+    return node;
 }
 
-function _scannedOrgRowHtml(i, file) {
+/**
+ * The quiet right-hand column: what the detector (or the .nfo) found, in the
+ * order the rename template reads it. An almost-empty column is a signal —
+ * it means this file will probably need a manual match.
+ */
+function _sfMeta(bits) {
+    const meta = _sfEl('span', 'sf-meta');
+    if (bits.organized) {
+        const tick = _sfEl('span', 'sf-tick', '✓');
+        tick.title = t('scan.has_nfo');
+        meta.appendChild(tick);
+    }
+    if (bits.folder) {
+        const mark = _sfEl('span', 'sf-folder', '📁');
+        mark.title = t('scan.from_folder_hint');
+        meta.appendChild(mark);
+    }
+    if (bits.site)       meta.appendChild(_sfEl('span', 'sf-site', bits.site));
+    if (bits.performers) meta.appendChild(_sfEl('span', 'sf-perf', bits.performers));
+    if (bits.date)       meta.appendChild(_sfEl('span', 'sf-date', bits.date));
+    if (bits.quality)    meta.appendChild(_sfEl('span', 'sf-q', bits.quality));
+    if (bits.title)      meta.appendChild(_sfEl('span', 'sf-title', bits.title));
+    return meta;
+}
+
+/** Checkbox column — the same 16px column the section header's Select All uses. */
+function _sfCheckbox(i, file) {
+    const wrap = _sfEl('label', 'sf-cb');
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.className = 'file-cb';
+    cb.dataset.index = String(i);
+    cb.checked = selectedScannedIndices.has(i);
+    cb.setAttribute('aria-label', file.filename);
+    wrap.appendChild(cb);
+    return wrap;
+}
+
+function _scannedNewRow(i, file) {
+    const row = _sfEl('div', 'sf-row');
+    row.id = `scanned-item-${i}`;
+    row.appendChild(_sfCheckbox(i, file));
+    row.appendChild(_sfEl('span', 'sf-name', file.filename));
+    row.appendChild(_sfMeta({
+        folder:     file.context_source === 'folder',
+        site:       file.site,
+        performers: (file.performers || []).join(', '),
+        date:       file.release_date,
+        quality:    file.quality,
+    }));
+    return row;
+}
+
+function _scannedOrgRow(i, file) {
     const nfo = file.nfo_metadata || {};
-    const checked = selectedScannedIndices.has(i) ? 'checked' : '';
-    return `
-        <div class="file-item glass-panel" id="scanned-item-${i}"
-             style="opacity:.7;border:1px solid rgba(0,255,136,.15);">
-            <label class="file-checkbox-wrap">
-                <input type="checkbox" class="file-cb" data-index="${i}" ${checked}
-                       onchange="toggleScannedFile(${i}, this.checked)">
-            </label>
-            <div class="file-info">
-                <div class="file-name">${escapeHtml(file.filename)}</div>
-                <div class="file-meta">
-                    ${nfo.site       ? `<span class="badge site-badge">${escapeHtml(nfo.site)}</span>` : ''}
-                    ${nfo.performers && nfo.performers.length ? `<span>${nfo.performers.map(escapeHtml).join(', ')}</span>` : ''}
-                    ${nfo.release_date ? `<span>${escapeHtml(nfo.release_date)}</span>` : ''}
-                    ${nfo.title      ? `<span style="color:var(--text-muted);font-size:.8rem;">${escapeHtml(nfo.title)}</span>` : ''}
-                </div>
-            </div>
-            <div style="font-size:.72rem;color:rgba(0,255,136,.7);white-space:nowrap;align-self:center;">✅ ${escapeHtml(t('scan.has_nfo'))}</div>
-        </div>`;
+    // Still a checkbox, not a static tick: an already-organised file can be
+    // opted back into matching one at a time (Select All deliberately skips
+    // them). The ✓ in the meta column is what marks it as organised.
+    const row = _sfEl('div', 'sf-row is-organized');
+    row.id = `scanned-item-${i}`;
+    row.appendChild(_sfCheckbox(i, file));
+    row.appendChild(_sfEl('span', 'sf-name', file.filename));
+    row.appendChild(_sfMeta({
+        organized:  true,
+        site:       nfo.site,
+        performers: (nfo.performers || []).join(', '),
+        date:       nfo.release_date,
+        title:      nfo.title,
+    }));
+    return row;
 }
 
 /**
  * Render `entries` ([globalIndex, file] pairs) into `listEl`, capping the
  * initial batch at SCAN_RENDER_CAP and appending a "Show all" button for the
- * remainder. Uses insertAdjacentHTML so each batch is parsed once and appended,
- * rather than re-serialising the whole list.
+ * remainder. Rows are built as nodes into a fragment, so each batch touches
+ * the live DOM once.
+ *
+ * One delegated change listener covers every row, including rows added later
+ * by "Show all" — replaces 300 inline onchange attributes that put a row index
+ * through the HTML parser on every render.
  */
-function _renderScannedRows(listEl, entries, rowHtmlFn) {
+function _renderScannedRows(listEl, entries, rowFn) {
     if (!listEl) return;
-    const head = entries.slice(0, SCAN_RENDER_CAP);
-    listEl.insertAdjacentHTML('beforeend', head.map(([i, f]) => rowHtmlFn(i, f)).join(''));
+    const append = (batch) => {
+        const frag = document.createDocumentFragment();
+        batch.forEach(([i, f]) => frag.appendChild(rowFn(i, f)));
+        listEl.appendChild(frag);
+    };
+    listEl.addEventListener('change', (ev) => {
+        const cb = ev.target.closest('.file-cb');
+        if (!cb) return;
+        toggleScannedFile(parseInt(cb.dataset.index, 10), cb.checked);
+    });
+    append(entries.slice(0, SCAN_RENDER_CAP));
 
     const rest = entries.slice(SCAN_RENDER_CAP);
     if (rest.length === 0) return;
 
     const btn = document.createElement('button');
-    btn.className = 'glass-btn show-all-btn';
+    btn.className = 'glass-btn sf-showall';
+    btn.type = 'button';
     btn.textContent = t('scan.show_all', { count: rest.length });
     btn.addEventListener('click', () => {
         btn.remove();
-        listEl.insertAdjacentHTML('beforeend', rest.map(([i, f]) => rowHtmlFn(i, f)).join(''));
+        append(rest);
         _updateScannedUI();   // sync dim/selection state for the newly added rows
     });
     listEl.appendChild(btn);
@@ -337,55 +387,69 @@ function displayScannedFiles() {
     // Only new files are selected by default — never touch already-organised ones
     selectedScannedIndices = new Set(newEntries.map(([i]) => i));
 
+    // Both sections are sections of ONE full-bleed surface, in the same idiom
+    // as the embed queue / unmatched / Rename Results: 16px control column,
+    // mono name, quiet meta column, hairline rows, a single 2px divider.
+    resultsContainer.replaceChildren();
+
     // ── Already-organised collapsed section (shell; rows filled below) ──
-    const organizedSection = orgEntries.length === 0 ? '' : `
-        <details class="glass-panel" style="padding:16px;margin-bottom:12px;border:1px solid rgba(0,255,136,.25);">
-            <summary style="cursor:pointer;display:flex;align-items:center;gap:10px;list-style:none;user-select:none;">
-                <span style="font-size:1.1rem;">✅</span>
-                <span style="font-weight:600;">${escapeHtml(t('scan.already_organized'))} &nbsp;
-                    <span class="selection-count" style="background:rgba(0,255,136,.2);padding:2px 8px;border-radius:12px;">
-                        ${orgEntries.length}
-                    </span>
-                </span>
-                <span style="font-size:.78rem;color:var(--text-muted);margin-left:4px;">
-                    ${escapeHtml(t('scan.organized_hint'))}
-                </span>
-                <span style="margin-left:auto;font-size:.8rem;color:var(--text-muted);">▼ ${escapeHtml(t('scan.expand'))}</span>
-            </summary>
-            <div class="file-list" id="organized-file-list" style="margin-top:12px;"></div>
-        </details>
-    `;
+    if (orgEntries.length > 0) {
+        const details = _sfEl('details', 'glass-panel scan-section');
+        details.id = 'organized-section';
+        const head = _sfEl('summary', 'sf-head');
+        const tick = _sfEl('span', 'sf-cb');
+        tick.appendChild(_sfEl('span', 'sf-head-glyph', '✓'));
+        head.appendChild(tick);
+        head.appendChild(_sfEl('b', 'sf-title', t('scan.already_organized')));
+        head.appendChild(_sfEl('span', 'sf-count',
+            t('scan.organized_count', { n: orgEntries.length })));
+        const toggle = _sfEl('span', 'sf-expand');
+        toggle.appendChild(_sfEl('span', 'sf-when-closed', `▸ ${t('scan.expand')}`));
+        toggle.appendChild(_sfEl('span', 'sf-when-open',   `▾ ${t('scan.collapse')}`));
+        head.appendChild(toggle);
+        details.appendChild(head);
+        const orgList = _sfEl('div', 'sf-list');
+        orgList.id = 'organized-file-list';
+        details.appendChild(orgList);
+        resultsContainer.appendChild(details);
+    }
 
     // ── New files section (shell; rows filled below) ────────────────────
-    const newSection = `
-        <div class="glass-panel" style="padding: 20px; margin-bottom: 15px;">
-            <div class="selection-header">
-                <label class="select-all-label">
-                    <input type="checkbox" id="select-all-scanned" ${newEntries.length > 0 ? 'checked' : ''}
-                           onchange="toggleSelectAllScanned(this.checked)">
-                    <span>${escapeHtml(t('scan.select_all'))}</span>
-                </label>
-                <h3>${escapeHtml(t('scan.scanned_files'))} &nbsp;<span class="selection-count" id="scanned-sel-count">${newEntries.length}</span> / ${scannedFiles.length} ${escapeHtml(t('scan.selected_suffix'))}</h3>
-            </div>
-            <div class="file-list" id="new-file-list">
-                ${newEntries.length === 0
-                    ? `<div style="text-align:center;padding:20px;color:var(--text-muted);">
-                           ${escapeHtml(t('scan.all_have_nfo'))}
-                       </div>`
-                    : ''
-                }
-            </div>
-        </div>
-    `;
-
-    resultsContainer.innerHTML = organizedSection + newSection;
+    const section = _sfEl('div', 'glass-panel scan-section');
+    section.id = 'scanned-section';
+    const head = _sfEl('div', 'sf-head');
+    const selWrap = _sfEl('label', 'sf-cb');
+    const selAll = document.createElement('input');
+    selAll.type = 'checkbox';
+    selAll.id = 'select-all-scanned';
+    selAll.checked = newEntries.length > 0;
+    // The Select All control shares the row checkboxes' column, so it needs a
+    // label the pointer can't show: title for the mouse, aria-label for AT.
+    selAll.title = t('scan.select_all');
+    selAll.setAttribute('aria-label', t('scan.select_all'));
+    selAll.addEventListener('change', () => toggleSelectAllScanned(selAll.checked));
+    selWrap.appendChild(selAll);
+    head.appendChild(selWrap);
+    head.appendChild(_sfEl('b', 'sf-title', t('scan.scanned_files')));
+    const count = _sfEl('span', 'sf-count',
+        t('scan.selected_of', { n: newEntries.length, total: scannedFiles.length }));
+    count.id = 'scanned-sel-count';
+    head.appendChild(count);
+    section.appendChild(head);
+    const newList = _sfEl('div', 'sf-list');
+    newList.id = 'new-file-list';
+    if (newEntries.length === 0) {
+        newList.appendChild(_sfEl('div', 'sf-empty', t('scan.all_have_nfo')));
+    }
+    section.appendChild(newList);
+    resultsContainer.appendChild(section);
 
     // Populate the (now-empty) lists with bounded, on-demand rendering.
     if (newEntries.length > 0) {
-        _renderScannedRows(document.getElementById('new-file-list'), newEntries, _scannedNewRowHtml);
+        _renderScannedRows(newList, newEntries, _scannedNewRow);
     }
     if (orgEntries.length > 0) {
-        _renderScannedRows(document.getElementById('organized-file-list'), orgEntries, _scannedOrgRowHtml);
+        _renderScannedRows(document.getElementById('organized-file-list'), orgEntries, _scannedOrgRow);
     }
 
     // A real file is now available — refresh the live template preview.
@@ -423,7 +487,9 @@ function _updateScannedUI() {
     const newTotal = scannedFiles.filter(f => !f.already_organized).length;
     const countEl   = document.getElementById('scanned-sel-count');
     const selectAll = document.getElementById('select-all-scanned');
-    if (countEl)   countEl.textContent    = sel;
+    if (countEl) {
+        countEl.textContent = t('scan.selected_of', { n: sel, total: scannedFiles.length });
+    }
     if (selectAll) {
         selectAll.checked       = sel === newTotal && newTotal > 0;
         selectAll.indeterminate = sel > 0 && sel < newTotal;

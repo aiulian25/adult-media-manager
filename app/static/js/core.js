@@ -1006,7 +1006,7 @@ function renderUpdateCard() {
     if (!updCanAutoDl()) {
         slot.innerHTML = `
             <div class="update-card highlight">
-                <h4><span class="update-chip new">${escapeHtml(t('update.chip_new'))}</span> ${escapeHtml(t('update.available_title', { version: upd.latest }))}</h4>
+                <h4><span class="update-chip new">${escapeHtml(t('update.chip_new'))}</span> ${escapeHtml(t('update.available_title', { version: 'v' + upd.latest }))}</h4>
                 <div class="up-muted">${escapeHtml(t('update.youre_on', { version: v.version }))} · ${whatsNew}</div>
                 ${_updIsElectron() ? '' : `<div class="up-tiny" style="margin-top:6px">${escapeHtml(t('update.docker_hint'))} <code>docker compose pull &amp;&amp; docker compose up -d</code></div>`}
             </div>${_toolsMissingHtml()}`;
@@ -1085,7 +1085,7 @@ function renderUpdateCard() {
             <div class="update-card highlight">
                 <div class="update-row">
                     <div style="flex:1;min-width:0">
-                        <h4><span class="update-chip new">${escapeHtml(t('update.chip_new'))}</span> ${escapeHtml(t('update.available_title', { version: upd.latest }))}</h4>
+                        <h4><span class="update-chip new">${escapeHtml(t('update.chip_new'))}</span> ${escapeHtml(t('update.available_title', { version: 'v' + upd.latest }))}</h4>
                         <div class="up-muted">${escapeHtml(t('update.youre_on', { version: v.version }))} · ${whatsNew} · ${escapeHtml(t('update.verified_from_github'))}</div>
                     </div>
                     <button class="btn btn-primary" id="btn-upd-download" style="flex-shrink:0">${escapeHtml(t('update.download_btn'))}</button>
@@ -1149,11 +1149,20 @@ function _maybeShowUpdateBanner() {
     const latest = v.update && v.update.latest;
     if (!latest) return;
     if (localStorage.getItem('amm_dismissed_update') === latest) return;
-    document.getElementById('update-banner-title').textContent =
-        t('update.available_title', { version: latest });
-    document.getElementById('update-banner-sub').textContent = updCanAutoDl()
-        ? t('update.banner_sub_native')
-        : (_updIsElectron() ? t('update.banner_sub_manual') : t('update.banner_sub_docker'));
+    // The version is set in mono like every other identifier in the app. Split
+    // the translated sentence on a sentinel rather than assuming where the
+    // placeholder falls — word order differs across locales.
+    const SENTINEL = '\u0000';
+    const [before, after] = t('update.available_title', { version: SENTINEL }).split(SENTINEL);
+    const titleEl = document.getElementById('update-banner-title');
+    titleEl.replaceChildren(document.createTextNode(before || ''));
+    const ver = document.createElement('span');
+    ver.className = 'update-banner-ver';
+    ver.textContent = `v${latest}`;
+    titleEl.append(ver, document.createTextNode(after || ''));
+    // No subtitle: the install mechanism is explained in the card behind
+    // "View update", where it is actionable, and the desktop build announces
+    // the verified download itself the moment it finishes.
     document.getElementById('update-banner').classList.remove('hidden');
 }
 

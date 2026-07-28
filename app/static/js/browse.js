@@ -316,48 +316,158 @@ async function openHistoryModal() {
     loadHistory();
 }
 
+/** Small DOM helper — history rows carry filesystem paths and are never
+ *  assembled as HTML strings. */
+function _hmEl(tag, cls, text) {
+    const node = document.createElement(tag);
+    if (cls) node.className = cls;
+    if (text != null) node.textContent = text;
+    return node;
+}
+
+/** Directory of a path, trailing slash kept ('' when there is none). */
+function _hmDir(p) {
+    const i = (p || '').lastIndexOf('/');
+    return i >= 0 ? p.slice(0, i + 1) : '';
+}
+const _hmBase = (p) => (p || '').split('/').pop();
+
+/** The single value of a set, or '' when the set isn't unanimous. */
+function _hmOnly(set) {
+    return set.size === 1 ? [...set][0] : '';
+}
+
+/**
+ * Batch header summary: "3 moved", "2 moved · 1 failed", "1 copied".
+ * Actions with no dedicated string (dedupe_trash, …) fall back to "{n} × name".
+ */
+function _hmSummary(entries) {
+    const KEYS = { move: 'history.n_moved', copy: 'history.n_copied',
+                   hardlink: 'history.n_hardlinked', symlink: 'history.n_symlinked' };
+    const counts = new Map();
+    let failed = 0;
+    entries.forEach(e => {
+        if (!e.success) { failed++; return; }
+        counts.set(e.action, (counts.get(e.action) || 0) + 1);
+    });
+    const parts = [...counts].map(([action, n]) => (KEYS[action]
+        ? t(KEYS[action], { n })
+        : t('history.n_other', { n, action })));
+    if (failed) parts.push(t('history.n_failed', { n: failed }));
+    return parts.join(' · ');
+}
+
+/**
+ * Consecutive entries sharing a timestamp came from one rename batch. Grouping
+ * them is presentation only — computed here from data already in the response,
+ * with Revert still targeting a single entry.
+ */
+function _hmGroup(entries) {
+    const groups = [];
+    entries.forEach(e => {
+        const last = groups[groups.length - 1];
+        if (last && last.when === e.timestamp) last.entries.push(e);
+        else groups.push({ when: e.timestamp, entries: [e] });
+    });
+    return groups;
+}
+
+/**
+ * Render one batch. When every path in it shares a folder (or moves from one
+ * folder to one other), that folder is printed once in the header and the rows
+ * show bare filenames; otherwise rows keep their full paths, so a directory
+ * change is never hidden.
+ */
+function _hmRenderGroup(group) {
+    const box = _hmEl('div', 'hm-group');
+    const head = _hmEl('div', 'hm-ghead');
+    head.appendChild(_hmEl('span', 'hm-when', group.when));
+    head.appendChild(_hmEl('span', 'hm-what', _hmSummary(group.entries)));
+
+    const oldDirs = new Set(), newDirs = new Set();
+    group.entries.forEach(e => {
+        oldDirs.add(_hmDir(e.old_path));
+        if (e.success && e.new_path) newDirs.add(_hmDir(e.new_path));
+    });
+    const from = _hmOnly(oldDirs);
+    const to   = newDirs.size ? _hmOnly(newDirs) : from;
+    let collapse = '';
+    if (from && to && from === to) {
+        collapse = from;
+        head.appendChild(_hmEl('span', 'hm-where', `${t('preview_modal.folder_label')} ${from}`));
+    } else if (from && to) {
+        collapse = from;   // both sides are single folders — names alone suffice
+        head.appendChild(_hmEl('span', 'hm-where', `${from} → ${to}`));
+    }
+    box.appendChild(head);
+
+    group.entries.forEach(e => {
+        // Collapse to bare names only when the name actually changed. A file
+        // that moved folders keeping its name would otherwise render as
+        // "dupe.mp4 → dupe.mp4" and read like a no-op; it keeps full paths so
+        // the move is visible in the row itself, not only in the header.
+        const bare = collapse && (!e.success || _hmBase(e.old_path) !== _hmBase(e.new_path));
+        const shown = (p) => (bare ? _hmBase(p) : (p || ''));
+
+        const row = _hmEl('div', 'hm-row');
+        row.appendChild(_hmEl('span', `hm-op op-${e.action}`, e.action));
+
+        const paths = _hmEl('div', 'hm-paths');
+        paths.appendChild(_hmEl('span', 'hm-from', shown(e.old_path)));
+        const dest = _hmEl('span', 'hm-to', e.success ? shown(e.new_path) : t('history.not_completed'));
+        if (!e.success) dest.classList.add('is-inert');
+        paths.appendChild(dest);
+        row.appendChild(paths);
+
+        if (e.companions > 0) {
+            row.appendChild(_hmEl('span', 'hm-comp', t('history.companions_chip', { n: e.companions })));
+        }
+        if (e.error) {
+            const err = _hmEl('span', 'hm-err', e.error);
+            err.title = e.error;
+            row.appendChild(err);
+        }
+        if (e.revertible) {
+            // class + data-id are what core.js's delegated click handler looks for
+            const btn = _hmEl('button', 'glass-btn hm-revert history-revert-btn', t('history.revert'));
+            btn.type = 'button';
+            btn.dataset.id = e.id;
+            row.appendChild(btn);
+        }
+        box.appendChild(row);
+    });
+    return box;
+}
+
 async function loadHistory() {
-    document.getElementById('history-list').innerHTML = `<div style="text-align:center;padding:20px;">${escapeHtml(t('browse.loading'))}</div>`;
-    
+    const list = document.getElementById('history-list');
+    const note = document.getElementById('history-note');
+    const setMessage = (cls, text) => {
+        list.replaceChildren(_hmEl('div', cls, text));
+        if (note) note.hidden = true;
+    };
+    setMessage('hm-empty', t('browse.loading'));
+
     try {
         const response = await fetch('/api/history?limit=50');
         if (!response.ok) throw new Error('Failed to load history');
-        
+
         const data = await response.json();
-        
-        if (data.entries.length === 0) {
-            document.getElementById('history-list').innerHTML = `<div style="text-align:center;padding:20px;color:var(--text-muted);">${t('history.no_entries')}</div>`;
+
+        // Grouped rename (F10): companion rows fold into the "+N companions"
+        // chip on their primary (video) row — reverting it restores the set.
+        const visible = data.entries.filter(e => !(e.group_id && !e.group_primary));
+        if (visible.length === 0) {
+            setMessage('hm-empty', t('history.no_entries'));
             return;
         }
 
-        const note = `<div class="history-note">${escapeHtml(t('history.revert_note'))}</div>`;
-        const rows = data.entries.map(entry => {
-            // Grouped rename (F10): companion rows fold into the "+N companions"
-            // chip on their primary (video) row — reverting it restores the set.
-            if (entry.group_id && !entry.group_primary) return '';
-            const chip = entry.companions > 0
-                ? `<span class="history-companions-chip">${escapeHtml(t('history.companions_chip', { n: entry.companions }))}</span>`
-                : '';
-            return `
-            <div class="history-item">
-                <div class="history-head">
-                    <span class="history-action">${escapeHtml(entry.action.toUpperCase())}</span>
-                    ${chip}
-                    <span class="history-time">${escapeHtml(entry.timestamp)}</span>
-                    ${entry.revertible
-                        ? `<button class="glass-btn history-revert-btn" data-id="${escapeHtml(entry.id)}">${escapeHtml(t('history.revert'))}</button>`
-                        : ''}
-                </div>
-                <div class="history-path">${escapeHtml(t('history.from'))} ${escapeHtml(entry.old_path)}</div>
-                <div class="history-path">${escapeHtml(t('history.to'))} ${escapeHtml(entry.new_path)}</div>
-                ${entry.error ? `<div style="color:var(--error);font-size:11px;margin-top:4px;">${escapeHtml(entry.error)}</div>` : ''}
-            </div>
-        `;
-        }).join('');
-        document.getElementById('history-list').innerHTML = note + rows;
+        list.replaceChildren();
+        _hmGroup(visible).forEach(g => list.appendChild(_hmRenderGroup(g)));
+        if (note) note.hidden = false;
 
     } catch (error) {
-        document.getElementById('history-list').innerHTML = `<div style="color:var(--error);text-align:center;padding:20px;">${escapeHtml(t('browse.error'))} ${escapeHtml(error.message)}</div>`;
+        setMessage('hm-empty is-error', `${t('browse.error')} ${error.message}`);
     }
 }
 

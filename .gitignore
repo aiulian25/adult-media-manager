@@ -67,3 +67,15 @@ reinstall.sh
 REINSTALL-*.md
 unistal.md
 app-improvement-review.md
+
+# Planning docs / roadmaps / scan notes are scaffolding, not product — they
+# never belong in the repo (Features.md shipped by mistake in v1.12.10).
+Features.md
+SCAN_NOTES.md
+
+# tools/ is dev-only; allow only what is explicitly whitelisted below
+tools/*
+!tools/ui-geometry-check.js
+
+# Editor/agent local state — never product
+.claude/

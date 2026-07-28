@@ -103,6 +103,8 @@ async function renameFiles() {
 function _showRenamePreviewModal(testResults, operations, actionType, embedMode = 'embed') {
     const modal     = document.getElementById('preview-modal');
     const list      = document.getElementById('preview-modal-list');
+    const notes     = document.getElementById('preview-modal-notes');
+    const footnote  = document.getElementById('preview-modal-footnote');
     const summary   = document.getElementById('preview-modal-summary');
     const btnOk     = document.getElementById('preview-modal-confirm');
     const btnCancel = document.getElementById('preview-modal-cancel');
@@ -125,73 +127,123 @@ function _showRenamePreviewModal(testResults, operations, actionType, embedMode 
     const verbKey = { move: 'rename.will_move', copy: 'rename.will_copy',
                       hardlink: 'rename.will_hardlink', symlink: 'rename.will_symlink' }[actionType]
                     || 'rename.will_move';
-    const parts = [];
-    if (moves.length)  parts.push(t(verbKey, { n: moves.length }));
-    if (errors.length) parts.push(t('rename.will_fail', { n: errors.length }));
-    if (policySkips.length) parts.push(t('rename.will_skip_exists', { n: policySkips.length }));
-    if (skips.length)  parts.push(t('rename.will_skip', { n: skips.length }));
-    summary.textContent = parts.join(' · ') || t('rename.nothing_to_do');
-
-    // Only render errors and actual moves inline; collapse skips into a
-    // single summary line so they don't drown out the important rows.
-    const renderRow = (r) => {
-        const samePlace = r.old_path === r.new_path;
-        if (samePlace) return ''; // rendered separately below
-        // Policy skip (⏭): neutral, not an error — the collision policy chose
-        // to leave this file alone because the target name already exists.
-        if (!r.success && r.skipped) {
-            return `
-            <div style="border:1px solid rgba(255,165,0,.3);border-radius:8px;padding:.6rem .9rem;font-size:.8rem;line-height:1.5">
-                <div style="color:var(--text-muted)">
-                    ⏭ <span style="color:var(--text)">${escapeHtml(r.old_path)}</span><br>
-                    ${escapeHtml(t('rename.skipped_exists'))}
-                </div>
-            </div>`;
-        }
-        const colour = r.success ? 'rgba(0,255,136,.25)' : 'rgba(255,71,87,.35)';
-        return `
-            <div style="border:1px solid ${colour};border-radius:8px;padding:.6rem .9rem;font-size:.8rem;line-height:1.5">
-                <div style="color:var(--text-muted);margin-bottom:.2rem">
-                    ${r.success ? '✅' : '❌'} From: <span style="color:var(--text)">${escapeHtml(r.old_path)}</span>
-                </div>
-                ${r.new_path ? `<div>→ To: <strong>${escapeHtml(r.new_path)}</strong>${r.collision_resolved ? ' <span title="' + escapeHtml(t('rename.preview_collisions', { n: 1 })) + '">🔀</span>' : ''}</div>` : ''}
-                ${r.error    ? `<div style="color:var(--error);margin-top:.2rem">⚠ ${escapeHtml(r.error)}</div>` : ''}
-            </div>`;
+    // Everything below is built with createElement/textContent — paths come
+    // from the filesystem and the metadata APIs, and never touch an HTML or
+    // attribute parser on their way to the screen. Same discipline as
+    // _showUnmatchedPanel and addChipToList in manual.js.
+    const el = (tag, cls, text) => {
+        const node = document.createElement(tag);
+        if (cls)  node.className = cls;
+        if (text != null) node.textContent = text;
+        return node;
     };
 
-    // Preflight callout blocks (F10) — shown ABOVE the rows so a collision at
-    // batch position 250 is impossible to miss.
+    // Summary: status pills, so what needs attention reads at a glance,
+    // plus the reassurance that this dialog has not written anything yet.
+    summary.replaceChildren();
+    if (moves.length)       summary.append(el('span', 'pm-pill pm-pill-move', t(verbKey, { n: moves.length })));
+    if (errors.length)      summary.append(el('span', 'pm-pill pm-pill-fail', t('rename.will_fail', { n: errors.length })));
+    if (policySkips.length) summary.append(el('span', 'pm-pill pm-pill-skip', t('rename.will_skip_exists', { n: policySkips.length })));
+    if (skips.length)       summary.append(el('span', 'pm-pill pm-pill-skip', t('rename.will_skip', { n: skips.length })));
+    // The reassurance only makes sense when Proceed will actually do something;
+    // otherwise say plainly that there is nothing to do.
+    summary.append(el('span', 'pm-reassure',
+        moves.length ? t('preview_modal.reassure') : t('rename.nothing_to_do')));
+
+    // Rows worth reading: everything that is actually changing. Files already
+    // at their destination collapse into the footnote below.
+    const rows = testResults.filter(r => r.old_path !== r.new_path);
+
+    // When every displayed path lives in one folder — the common case — print
+    // that folder once and show bare filenames, so the part that changes is
+    // the part you read. The moment any directory differs (moving into
+    // {site}/{performer}/ folders) full paths come back: a preview must never
+    // hide a directory change.
+    const dirOf    = (p) => { const i = (p || '').lastIndexOf('/'); return i >= 0 ? p.slice(0, i + 1) : ''; };
     const basename = (p) => (p || '').split('/').pop();
-    let html = '';
-    if (collisions.length) {
-        html += `
-            <div style="border:1px solid rgba(255,165,0,.45);border-radius:8px;padding:.6rem .9rem;
-                        font-size:.8rem;line-height:1.5">
-                🔀 <strong>${escapeHtml(t('rename.preview_collisions', { n: collisions.length }))}</strong><br>
-                <span style="color:var(--text-muted)">${collisions.map(r => escapeHtml(basename(r.new_path))).join(' · ')}</span>
-            </div>`;
+    const dirs = new Set();
+    rows.forEach(r => {
+        dirs.add(dirOf(r.old_path));
+        if (r.new_path) dirs.add(dirOf(r.new_path));
+    });
+    const onlyDir   = dirs.size === 1 ? [...dirs][0] : '';
+    const sharedDir = (onlyDir && rows.length > 1) ? onlyDir : '';
+    const shown     = (p) => (sharedDir ? basename(p) : (p || ''));
+
+    // Preflight callouts (F10) and the shared folder sit ABOVE the scroll
+    // region, so a collision at batch position 250 cannot scroll out of view.
+    notes.replaceChildren();
+    const addCallout = (glyph, title, names) => {
+        const box  = el('div', 'pm-callout');
+        box.append(el('span', 'pm-callout-glyph', glyph));
+        const body = el('div', 'pm-callout-body');
+        body.append(el('b', null, title));
+        body.append(el('span', 'pm-callout-names', names.map(r => basename(r.new_path)).join(' · ')));
+        box.append(body);
+        notes.append(box);
+    };
+    if (collisions.length) addCallout('🔀', t('rename.preview_collisions', { n: collisions.length }), collisions);
+    if (truncated.length)  addCallout('✂️', t('rename.preview_truncated',  { n: truncated.length  }), truncated);
+    if (sharedDir) {
+        const line = el('div', 'pm-base');
+        line.append(document.createTextNode(t('preview_modal.folder_label') + ' '));
+        line.append(el('b', null, sharedDir));
+        notes.append(line);
     }
-    if (truncated.length) {
-        html += `
-            <div style="border:1px solid rgba(255,165,0,.45);border-radius:8px;padding:.6rem .9rem;
-                        font-size:.8rem;line-height:1.5">
-                ✂️ <strong>${escapeHtml(t('rename.preview_truncated', { n: truncated.length }))}</strong><br>
-                <span style="color:var(--text-muted)">${truncated.map(r => escapeHtml(basename(r.new_path))).join(' · ')}</span>
-            </div>`;
-    }
-    html += testResults.map(renderRow).join('');
+
+    // One row per change, same anatomy as an embed-queue row:
+    // 16px status glyph · faint old name over primary new name · muted reason.
+    list.replaceChildren();
+    rows.forEach(r => {
+        let glyph, glyphCls, toText, inert = false, detail = '', detailCls = '';
+        if (!r.success && r.skipped) {
+            // Policy skip: neutral, not an error — the collision policy chose
+            // to leave this file alone because the target name already exists.
+            glyph = '⏭'; glyphCls = 'pm-glyph-skip';
+            toText = t('preview_modal.unchanged'); inert = true;
+            detail = t('rename.skipped_exists'); detailCls = 'pm-detail-skip';
+        } else if (!r.success) {
+            glyph = '✕'; glyphCls = 'pm-glyph-fail';
+            toText = t('preview_modal.not_renamed'); inert = true;
+            detail = r.error || ''; detailCls = 'pm-detail-fail';
+        } else {
+            glyph = '✓'; glyphCls = 'pm-glyph-move';
+            toText = shown(r.new_path);
+            if (r.collision_resolved) {
+                detail = t('preview_modal.auto_numbered'); detailCls = 'pm-detail-skip';
+            }
+        }
+
+        const row = el('div', 'pm-row');
+        row.append(el('span', `pm-glyph ${glyphCls}`, glyph));
+        const paths = el('div', 'pm-paths');
+        paths.append(el('span', 'pm-from', shown(r.old_path)));
+        paths.append(el('span', `pm-to${inert ? ' is-inert' : ''}`, toText));
+        row.append(paths);
+        if (detail) {
+            const note = el('span', `pm-detail ${detailCls}`, detail);
+            note.title = detail;   // the full reason when the column ellipsises
+            row.append(note);
+        }
+        list.append(row);
+    });
+    list.hidden = rows.length === 0;
 
     if (skips.length) {
-        html += `
-            <div style="border:1px solid rgba(255,165,0,.3);border-radius:8px;padding:.6rem .9rem;
-                        font-size:.8rem;color:var(--text-muted);line-height:1.5">
-                ⏭ ${escapeHtml(t('rename.skips_exact', { n: skips.length }))}<br>
-                <strong style="color:var(--text)">${escapeHtml(t('rename.skip_advice'))}</strong>
-                <code>{site}.{scene}.{quality}</code> · <code>{site} - {performer} - {scene}</code>
-            </div>`;
+        footnote.replaceChildren();
+        footnote.append(document.createTextNode(`⏭ ${t('rename.skips_exact', { n: skips.length })}`));
+        footnote.append(document.createElement('br'));
+        footnote.append(el('b', null, t('rename.skip_advice')));
+        footnote.append(document.createTextNode(' '));
+        footnote.append(el('code', null, '{site}.{scene}.{quality}'));
+        footnote.append(document.createTextNode(' · '));
+        footnote.append(el('code', null, '{site} - {performer} - {scene}'));
+        footnote.hidden = false;
+    } else {
+        footnote.replaceChildren();
+        footnote.hidden = true;
     }
 
-    list.innerHTML = html;
     modal.classList.remove('hidden');
     btnOk.focus();
 
@@ -402,33 +454,70 @@ function _showUnmatchedPanel() {
     const old = document.getElementById('unmatched-panel');
     if (old) old.remove();
 
+    // Built with DOM APIs + addEventListener, NOT innerHTML with an inline
+    // onclick carrying a JSON-serialised filename: that put user/API-supplied
+    // text into an HTML attribute + JS context at once (one stray quote away
+    // from breaking out). Same discipline as addChipToList in manual.js.
     const remaining = matchedResults.length;
     const panel = document.createElement('div');
     panel.id = 'unmatched-panel';
-    panel.className = 'glass-panel';
-    panel.style.cssText = 'padding:16px;margin-bottom:16px;border:1px solid rgba(255,71,87,.4);';
+    panel.className = 'glass-panel unmatched-section';
 
-    // Header row with count + "Continue editing" button
+    // Header in the embed-queue idiom: glyph · title · muted count · action.
     const header = document.createElement('div');
-    header.style.cssText = 'display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;';
-    header.innerHTML = `
-        <h3 style="margin:0;color:var(--error);">⚠ ${escapeHtml(t('rename.unmatched_title', { n: remaining }))}</h3>
-        <button class="glass-btn btn-primary" onclick="displayMatches();statusBar.classList.add('hidden');document.getElementById('unmatched-panel')?.remove();"
-                style="font-size:12px;">✏️ ${escapeHtml(t('rename.unmatched_edit_all'))}</button>
-    `;
+    header.className = 'um-head';
+    const glyph = document.createElement('span');
+    glyph.className = 'um-glyph';
+    glyph.textContent = '⚠';
+    header.appendChild(glyph);
+    const title = document.createElement('b');
+    title.className = 'um-title';
+    title.textContent = t('rename.unmatched_section');
+    header.appendChild(title);
+    const count = document.createElement('span');
+    count.className = 'um-count';
+    count.textContent = t('rename.unmatched_title', { n: remaining });
+    header.appendChild(count);
+    const spacer = document.createElement('span');
+    spacer.className = 'um-spacer';
+    header.appendChild(spacer);
+    const editAll = document.createElement('button');
+    editAll.type = 'button';
+    editAll.className = 'glass-btn btn-primary um-cta';
+    editAll.textContent = `✏️ ${t('rename.unmatched_edit_all')}`;
+    editAll.addEventListener('click', () => {
+        displayMatches();
+        statusBar.classList.add('hidden');
+        document.getElementById('unmatched-panel')?.remove();
+    });
+    header.appendChild(editAll);
     panel.appendChild(header);
 
-    // List each unmatched file with inline Edit Manually button
+    // One row per unmatched file — same anatomy as an embed-queue row:
+    // 16px glyph · mono name · 30px icon action. Capped height so a large
+    // unmatched set can't push the embed queue and results off-screen.
     const list = document.createElement('div');
-    list.style.cssText = 'display:flex;flex-direction:column;gap:6px;';
+    list.className = 'um-list';
     matchedResults.forEach((r) => {
         const item = document.createElement('div');
-        item.style.cssText = 'display:flex;align-items:center;justify-content:space-between;padding:8px 10px;background:rgba(255,71,87,.06);border-radius:8px;gap:12px;';
-        item.innerHTML = `
-            <span style="font-size:.82rem;color:var(--text-muted);word-break:break-all;flex:1;">${escapeHtml(r.original.filename)}</span>
-            <button class="glass-btn" style="font-size:11px;white-space:nowrap;flex-shrink:0;"
-                    onclick='openManualEditModal(${JSON.stringify(r.original).replace(/'/g, "&#39;")})'>✏️ ${escapeHtml(t('rename.unmatched_edit_one'))}</button>
-        `;
+        item.className = 'um-row';
+        const g = document.createElement('span');
+        g.className = 'um-row-glyph';
+        g.textContent = '⚠';
+        item.appendChild(g);
+        const name = document.createElement('span');
+        name.className = 'um-name';
+        name.textContent = r.original.filename;
+        name.title = r.original.path || r.original.filename;
+        item.appendChild(name);
+        const edit = document.createElement('button');
+        edit.type = 'button';
+        edit.className = 'glass-btn um-edit';
+        edit.textContent = '✏️';
+        edit.title = t('rename.unmatched_edit_one');
+        edit.setAttribute('aria-label', t('rename.unmatched_edit_one'));
+        edit.addEventListener('click', () => openManualEditModal(r.original));
+        item.appendChild(edit);
         list.appendChild(item);
     });
     panel.appendChild(list);
@@ -465,12 +554,14 @@ let EMBED_POLL_SLOW_MS     = 30000;
 // file, and on completion collapses itself to a one-line summary — unless
 // there are issues, in which case it stays open with them pinned first.
 // Zero required clicks; the chevron only exists for manual peeking.
+let _eqLastJob = null;       // F6: last /api/embed-status payload seen
 let _eqOpen = true;          // current expanded state
 let _eqUserToggled = false;  // once the user touches the chevron, we obey them
 
 const _EQ_GLYPH = { pending: '⏳', done: '✓', warning: '⚠', error: '✕', duplicate: '⧉' };
 
 function _eqReset() {
+    _eqLastJob = null;
     document.getElementById('embed-queue-panel')?.remove();
     _eqOpen = true;
     _eqUserToggled = false;
@@ -546,8 +637,20 @@ function _eqBuildRow(f) {
 }
 
 function _renderEmbedQueue(job) {
-    const files = Array.isArray(job.files) ? job.files : null;
+    let files = Array.isArray(job.files) ? job.files : null;
     if (!files || !files.length) return;   // restart-resumed job — no per-file data
+    // F6 (defensive): a completed job must never render a spinner. The server
+    // sweeps stragglers in _job_finish, but an older backend — or a job whose
+    // per-file states were restored without them — could still report complete
+    // with a non-terminal row, and polling has stopped by then, so nothing
+    // would ever repaint it. Resolve for rendering only; the underlying job
+    // object is left untouched.
+    if (job.complete) {
+        files = files.map(f => (f.status === 'embedding' || f.status === 'pending')
+            ? { ...f, status: 'warning', progress: null,
+                detail: f.detail || t('embed.queue_state_unknown') }
+            : f);
+    }
     let panel = document.getElementById('embed-queue-panel');
     const issues = files.filter(f => f.status === 'warning' || f.status === 'error' || f.status === 'duplicate');
     const open = _eqUserToggled ? _eqOpen : (job.complete ? issues.length > 0 : true);
@@ -701,6 +804,7 @@ async function _pollEmbedStatus(jobId, total) {
             // Keep the banner and title in sync with progress
             _setEmbedBanner(t('embed.banner', { done: job.done, total: job.total }));
             document.title = `⏳ ${t('embed.title_progress', { done: job.done, total: job.total })}`;
+            _eqLastJob = job;         // F6: last known state for the final repaint
             _renderEmbedQueue(job);   // per-file queue panel (self-managing)
 
             if (job.complete) {
@@ -748,6 +852,13 @@ async function _pollEmbedStatus(jobId, total) {
  * @param {Array|null} warnings  - Array of {path, warning} or null
  */
 function _finishEmbedPolling(warnings) {
+    // F6: polling stops here — this is the LAST chance to repaint. Force one
+    // final render marked complete so no row is left spinning, including on the
+    // paths that never saw a completed job (404/expired, network give-up).
+    if (_eqLastJob) {
+        try { _renderEmbedQueue({ ..._eqLastJob, complete: true }); } catch {}
+        _eqLastJob = null;
+    }
     // Dismiss the sticky banner and release the beforeunload guard
     _clearEmbedBanner();
     statusBar.classList.add('hidden');

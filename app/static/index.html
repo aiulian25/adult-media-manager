@@ -21,10 +21,8 @@
         <!-- ── Update banner: announces a new release once; dismiss is
              remembered per-version (never nags until the NEXT release). ── -->
         <div id="update-banner" class="update-banner hidden">
-            <span class="update-banner-text">
-                <b id="update-banner-title"></b>
-                <span class="update-banner-sub" id="update-banner-sub"></span>
-            </span>
+            <span class="update-banner-dot" aria-hidden="true"></span>
+            <b id="update-banner-title" class="update-banner-text"></b>
             <button id="update-banner-view" class="btn btn-primary update-banner-btn" data-i18n="update.banner_view">View update</button>
             <button id="update-banner-dismiss" class="banner-dismiss" title="Dismiss for this version">&times;</button>
         </div>
@@ -64,7 +62,7 @@
                 </select>
                 <div class="fusion-nav">
                     <button id="btn-library" class="glass-btn" title="Library — catalog stats &amp; duplicates">
-                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                             <ellipse cx="12" cy="5" rx="9" ry="3"/>
                             <path d="M3 5v14a9 3 0 0 0 18 0V5"/>
                             <path d="M3 12a9 3 0 0 0 18 0"/>
@@ -72,14 +70,14 @@
                         <span data-i18n="nav.library">Library</span>
                     </button>
                     <button id="btn-history" class="glass-btn" title="View rename history">
-                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                             <path d="M3 3v5h5M3.05 13A9 9 0 1 0 6 5.3L3 8"/>
                             <path d="M12 7v5l4 2"/>
                         </svg>
                         <span data-i18n="nav.history">History</span>
                     </button>
                     <button id="btn-settings" class="glass-btn" title="Settings">
-                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                             <circle cx="12" cy="12" r="3"/>
                             <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
                         </svg>
@@ -179,64 +177,91 @@
                 <button class="modal-close" id="settings-modal-close" aria-label="Close">&times;</button>
             </div>
             <div class="modal-body">
-                <!-- ── General preferences ──────────────────────────────── -->
+                <!-- ── General preferences ──────────────────────────────────
+                     One list: a 2px rule opens each section, a hairline
+                     separates one setting from the next, nothing carries a
+                     border of its own. Label + hint on the left, control in a
+                     fixed right-hand column so every control lines up. ── -->
                 <h4 class="settings-section-title" data-i18n="settings.section_general">General</h4>
 
-                <div class="settings-pref-row">
-                    <label class="settings-pref-label" for="settings-lang" data-i18n="settings.language">Language</label>
-                    <select id="settings-lang" class="glass-input settings-select">
-                        <option value="en">English</option>
-                        <option value="de">Deutsch</option>
-                        <option value="es">Español</option>
-                        <option value="fr">Français</option>
-                        <option value="ja">日本語</option>
-                        <option value="pt">Português</option>
-                    </select>
+                <div class="set-row">
+                    <span class="set-main">
+                        <label class="set-label" for="settings-lang" data-i18n="settings.language">Language</label>
+                    </span>
+                    <span class="set-ctl">
+                        <select id="settings-lang" class="glass-input settings-select">
+                            <option value="en">English</option>
+                            <option value="de">Deutsch</option>
+                            <option value="es">Español</option>
+                            <option value="fr">Français</option>
+                            <option value="ja">日本語</option>
+                            <option value="pt">Português</option>
+                        </select>
+                    </span>
                 </div>
 
-                <div class="settings-pref-row">
-                    <label class="settings-pref-label" for="settings-theme" data-i18n="settings.theme">Theme</label>
-                    <select id="settings-theme" class="glass-input settings-select">
-                        <option value="default" data-i18n="settings.theme_legacy">Legacy (default)</option>
-                        <option value="dark" data-i18n="settings.theme_dark">Dark</option>
-                        <option value="light" data-i18n="settings.theme_light">Light</option>
-                    </select>
+                <div class="set-row">
+                    <span class="set-main">
+                        <label class="set-label" for="settings-theme" data-i18n="settings.theme">Theme</label>
+                    </span>
+                    <span class="set-ctl">
+                        <select id="settings-theme" class="glass-input settings-select">
+                            <option value="default" data-i18n="settings.theme_legacy">Legacy (default)</option>
+                            <option value="dark" data-i18n="settings.theme_dark">Dark</option>
+                            <option value="light" data-i18n="settings.theme_light">Light</option>
+                        </select>
+                    </span>
                 </div>
 
-                <div class="settings-pref-row">
-                    <label class="settings-pref-label" for="settings-embed-mode" data-i18n="settings.metadata_mode">Default metadata write</label>
-                    <select id="settings-embed-mode" class="glass-input settings-select">
-                        <option value="embed" data-i18n="toolbar.metadata.remux">Remux — file + .nfo</option>
-                        <option value="remux_only" data-i18n="toolbar.metadata.remux_only">Remux only (in file)</option>
-                        <option value="smart" data-i18n="toolbar.metadata.both">Both — file + .nfo</option>
-                        <option value="embed_only" data-i18n="toolbar.metadata.embedded">Embedded only (in file)</option>
-                        <option value="nfo_only" data-i18n="toolbar.metadata.sidecar">Sidecar only (.nfo)</option>
-                    </select>
-                    <p class="settings-pref-hint" data-i18n="settings.metadata_mode_hint">Sets how metadata is saved when you rename or save. "Both" (recommended) embeds tags in the file AND writes a .nfo sidecar for extra assurance. Persisted across restarts.</p>
+                <div class="set-row">
+                    <span class="set-main">
+                        <label class="set-label" for="settings-embed-mode" data-i18n="settings.metadata_mode">Default metadata write</label>
+                        <span class="set-hint" data-i18n="settings.metadata_mode_hint">Sets how metadata is saved when you rename or save. "Both" (recommended) embeds tags in the file AND writes a .nfo sidecar for extra assurance. Persisted across restarts.</span>
+                    </span>
+                    <span class="set-ctl">
+                        <select id="settings-embed-mode" class="glass-input settings-select">
+                            <option value="embed" data-i18n="toolbar.metadata.remux">Remux — file + .nfo</option>
+                            <option value="remux_only" data-i18n="toolbar.metadata.remux_only">Remux only (in file)</option>
+                            <option value="smart" data-i18n="toolbar.metadata.both">Both — file + .nfo</option>
+                            <option value="embed_only" data-i18n="toolbar.metadata.embedded">Embedded only (in file)</option>
+                            <option value="nfo_only" data-i18n="toolbar.metadata.sidecar">Sidecar only (.nfo)</option>
+                        </select>
+                    </span>
                 </div>
 
-                <div class="settings-pref">
-                    <label class="cb-label" for="settings-clear-metadata" style="gap:8px;">
+                <div class="set-row">
+                    <span class="set-main">
+                        <label class="set-label" for="settings-clear-metadata" data-i18n="settings.clear_metadata">Clear existing file metadata before embedding</label>
+                        <span class="set-hint" data-i18n="settings.clear_metadata_hint">Off by default. When enabled, embedding starts from a blank slate instead of merging over the file's current tags — use this when files carry wrong or outdated embedded metadata. Only container-level tags are cleared; audio/subtitle language tags are kept. Applies to every embedding mode (in-place modes switch to the full remux, since only a remux can strip unknown stale tags).</span>
+                    </span>
+                    <span class="set-ctl is-check">
                         <input type="checkbox" id="settings-clear-metadata">
-                        <span data-i18n="settings.clear_metadata">Clear existing file metadata before embedding</span>
-                    </label>
-                    <p class="settings-pref-hint" data-i18n="settings.clear_metadata_hint">Off by default. When enabled, embedding starts from a blank slate instead of merging over the file's current tags — use this when files carry wrong or outdated embedded metadata. Only container-level tags are cleared; audio/subtitle language tags are kept. Applies to every embedding mode (in-place modes switch to the full remux, since only a remux can strip unknown stale tags).</p>
+                    </span>
                 </div>
 
-                <div class="settings-pref-row">
-                    <label class="settings-pref-label" for="settings-performer-order" data-i18n="settings.performer_order">Performer order in names</label>
-                    <select id="settings-performer-order" class="glass-input settings-select">
-                        <option value="female_first" data-i18n="settings.performer_order_female">Female performers first (recommended)</option>
-                        <option value="source" data-i18n="settings.performer_order_source">Keep the source's order</option>
-                    </select>
-                    <p class="settings-pref-hint" data-i18n="settings.performer_order_hint">Applies to {performer} and {performers} in names, the match cards and the NFO actor order. Performers whose gender the source doesn't state keep their position — use the ◀ ▶ arrows on a match card to reorder a single file by hand.</p>
+                <div class="set-row">
+                    <span class="set-main">
+                        <label class="set-label" for="settings-performer-order" data-i18n="settings.performer_order">Performer order in names</label>
+                        <span class="set-hint" data-i18n="settings.performer_order_hint">Applies to {performer} and {performers} in names, the match cards and the NFO actor order. Performers whose gender the source doesn't state keep their position — use the ◀ ▶ arrows on a match card to reorder a single file by hand.</span>
+                    </span>
+                    <span class="set-ctl">
+                        <select id="settings-performer-order" class="glass-input settings-select">
+                            <option value="female_first" data-i18n="settings.performer_order_female">Female performers first (recommended)</option>
+                            <option value="source" data-i18n="settings.performer_order_source">Keep the source's order</option>
+                        </select>
+                    </span>
                 </div>
-                <div class="settings-pref">
-                    <label class="cb-label" for="settings-contribute-fp" style="gap:8px;">
+
+                <div class="set-row">
+                    <span class="set-main">
+                        <label class="set-label" for="settings-contribute-fp" data-i18n="settings.contribute_fp">Contribute fingerprints to StashDB (sends data to an external service)</label>
+                        <!-- amber, not muted: the one setting here that sends
+                             anything off the machine -->
+                        <span class="set-hint is-warn" data-i18n="settings.contribute_fp_hint">⚠ Off by default. When enabled, confirming a StashDB match UPLOADS that file's content hashes (OSHash/pHash) and duration to stashdb.org under your StashDB account — improving fingerprint matching for everyone. No file names, paths, or other personal data are ever sent.</span>
+                    </span>
+                    <span class="set-ctl is-check">
                         <input type="checkbox" id="settings-contribute-fp">
-                        <span data-i18n="settings.contribute_fp">Contribute fingerprints to StashDB (sends data to an external service)</span>
-                    </label>
-                    <p class="settings-pref-hint" data-i18n="settings.contribute_fp_hint">⚠ Off by default. When enabled, confirming a StashDB match UPLOADS that file's content hashes (OSHash/pHash) and duration to stashdb.org under your StashDB account — improving fingerprint matching for everyone. No file names, paths, or other personal data are ever sent.</p>
+                    </span>
                 </div>
 
                 <!-- ── API keys ─────────────────────────────────────────── -->
@@ -339,8 +364,14 @@
                 <button class="modal-close" id="preview-modal-close" aria-label="Cancel">&times;</button>
             </div>
             <div class="modal-body" style="padding:0">
-                <div id="preview-modal-summary" style="padding:.6rem 1.2rem;font-size:.85rem;color:var(--text-muted);border-bottom:1px solid var(--border-soft)"></div>
-                <div id="preview-modal-list" style="max-height:55vh;overflow-y:auto;padding:1rem 1.2rem;display:flex;flex-direction:column;gap:.5rem"></div>
+                <!-- summary pills · batch callouts + shared folder · scrolling
+                     rows · already-at-destination footnote. Only the rows
+                     scroll, so a collision at batch position 250 and the
+                     folder every path shares both stay on screen. -->
+                <div id="preview-modal-summary" class="pm-summary"></div>
+                <div id="preview-modal-notes" class="pm-notes"></div>
+                <div id="preview-modal-list" class="pm-list"></div>
+                <div id="preview-modal-footnote" class="pm-footnote" hidden></div>
             </div>
             <div class="modal-footer" style="display:flex;gap:.8rem;justify-content:flex-end;padding:.8rem 1.2rem">
                 <button id="preview-modal-cancel" class="btn btn-secondary" data-i18n="preview_modal.cancel">Cancel</button>
@@ -387,7 +418,9 @@
                 <button class="modal-close" id="history-close">&times;</button>
             </div>
             <div class="modal-body">
-                <div id="history-list" class="history-list"></div>
+                <!-- note stays pinned; only the rows scroll -->
+                <div id="history-note" class="hm-note" data-i18n="history.revert_note">Revert restores a moved file or removes a created copy or link. Embedded metadata and .nfo sidecars are not removed.</div>
+                <div id="history-list" class="hm-list"></div>
             </div>
             <div class="modal-footer">
                 <button id="history-undo" class="glass-btn" data-i18n="history.undo">Undo Last</button>

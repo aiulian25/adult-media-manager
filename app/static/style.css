@@ -163,6 +163,9 @@ body {
     max-width: 1600px;
     margin: 0 auto;
     padding: 20px;
+    /* mirrors padding-top so a full-bleed first child (the update banner) can
+       cancel it and sit flush against the window edge */
+    --app-pad-top: 20px;
     min-height: 100vh;
 }
 
@@ -1165,67 +1168,69 @@ input.input-error {
     border-color: var(--primary);
 }
 
-/* ═══ History List ═══ */
-.history-list {
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
+/* ═══ Rename history — a log, not a stack of cards ═══════════════════════
+   Same row anatomy as the preview modal, so an operation reads identically
+   before it happens and after. Entries sharing a timestamp came from one
+   batch and group under one header carrying the time, the count and the
+   folder they share — the two things every row used to repeat. */
+#history-modal .modal-body {
+    padding: 0;
+    display: flex; flex-direction: column;
+    overflow: hidden;            /* only the rows scroll; the note stays put */
 }
-
-.history-item {
-    padding: 15px;
-    background: rgba(178, 75, 243, 0.05);
-    border: 1px solid var(--glass-border);
-    border-radius: 8px;
-}
-
-.history-head {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    margin-bottom: 8px;
-}
-
-.history-action {
-    font-size: 10px;
-    font-weight: 700;
-    letter-spacing: .05em;
-    padding: 2px 8px;
-    border-radius: 10px;
-    background: rgba(178, 75, 243, 0.18);
-    color: var(--primary, #b24bf3);
-    flex-shrink: 0;
-}
-
-.history-revert-btn {
-    margin-left: auto;
-    font-size: 11px;
-    padding: 3px 12px;
-    flex-shrink: 0;
-}
-
-.history-note {
-    font-size: 11px;
-    line-height: 1.5;
+.hm-note {
+    padding: 10px 16px 9px;
+    font-size: 0.78rem; line-height: 1.5;
     color: var(--text-muted);
-    padding: 8px 12px;
-    margin-bottom: 12px;
-    background: rgba(178, 75, 243, 0.06);
-    border-left: 3px solid rgba(178, 75, 243, 0.35);
-    border-radius: 0 6px 6px 0;
+    border-bottom: 1px solid var(--border-soft);
+}
+.hm-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+.hm-empty { padding: 26px 16px; text-align: center; font-size: 0.82rem; color: var(--text-muted); }
+.hm-empty.is-error { color: var(--error); }
+
+.hm-group { padding: 0 16px; }
+.hm-group + .hm-group { border-top: 1px solid var(--border); }
+.hm-ghead { display: flex; align-items: baseline; gap: 9px; padding: 9px 0 6px; font-size: 0.76rem; }
+.hm-when { flex: none; font-family: var(--mono); color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+.hm-what { flex: none; color: var(--text-muted); }
+.hm-where {
+    flex: 1; min-width: 0; text-align: right;
+    font-family: var(--mono); font-size: 0.7rem; color: var(--faint);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 
-.history-time {
-    font-size: 12px;
-    color: var(--text-muted);
+.hm-row { display: flex; align-items: center; gap: 9px; padding: 5px 0; font-size: 0.78rem; }
+.hm-row + .hm-row { border-top: 1px solid var(--border-soft); }
+.hm-op {
+    flex: none;
+    font-size: 0.6rem; font-weight: 800; letter-spacing: 0.05em; text-transform: uppercase;
+    color: var(--accent-light); background: var(--accent-soft);
+    border-radius: 5px; padding: 1px 6px; white-space: nowrap;
 }
-
-.history-path {
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 11px;
-    color: var(--text-secondary);
-    margin-bottom: 4px;
+/* copy and link leave the original in place — a different kind of act */
+.hm-op.op-copy     { color: var(--success); background: var(--good-soft); }
+.hm-op.op-hardlink,
+.hm-op.op-symlink  { color: var(--warning); background: var(--warn-soft); }
+.hm-paths { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.hm-from {
+    font-family: var(--mono); font-size: 0.7rem; color: var(--faint);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
+.hm-to {
+    font-family: var(--mono); font-size: 0.8rem; color: var(--text-primary);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.hm-to.is-inert { color: var(--text-muted); }
+.hm-comp {
+    flex: none; font-size: 0.66rem; white-space: nowrap;
+    color: var(--warning); background: var(--warn-soft);
+    border-radius: 5px; padding: 1px 6px;
+}
+.hm-err {
+    flex: none; max-width: 34%; font-size: 0.72rem; color: var(--error);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.hm-revert { flex: none; font-size: 12px; padding: 4px 11px; }
 
 /* ═══ Manual Edit Modal ═══ */
 .chip {
@@ -1373,6 +1378,7 @@ input.input-error {
 @media (max-width: 768px) {
     .app {
         padding: 10px;
+        --app-pad-top: 10px;
     }
     
     .scanbar {
@@ -1513,160 +1519,141 @@ input.input-error {
 }
 
 /* ═══ Settings Modal ═══ */
+/* ═══ Settings — one list, three kinds of rule ════════════════════════════
+   2px between sections (the same rule that divides the job surface), 1px
+   between individual settings, and nothing else: no tints, no left rails,
+   no rounded containers inside the modal. The wider column is what actually
+   stops every hint wrapping four times. */
 .settings-modal-card {
-    max-width: 560px;
+    max-width: 640px;
     width: 95vw;
     max-height: 88vh;
 }
+#settings-modal .modal-body { padding: 0; }
 
-/* Section heading inside the Settings panel (General / API Keys) */
 .settings-section-title {
-    font-size: .7rem;
-    font-weight: 700;
+    font-size: .66rem;
+    font-weight: 800;
     text-transform: uppercase;
-    letter-spacing: .08em;
-    color: var(--text-muted);
-    margin: 1.25rem 0 .65rem;
-    padding-bottom: .4rem;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+    letter-spacing: .1em;
+    color: var(--accent-light);
+    margin: 0;
+    padding: 12px 16px 7px;
+    border-top: 2px solid var(--border);
 }
 .settings-section-title:first-child {
-    margin-top: 0;
+    border-top: 0;
 }
 
-/* General-preference rows (language / theme) */
-.settings-pref-row {
+/* One setting per row: label (+ hint) left, control in a fixed right column
+   so every control lines up down the panel. */
+.set-row {
     display: flex;
-    flex-direction: column;
-    gap: .4rem;
-    margin-bottom: .9rem;
+    align-items: flex-start;
+    gap: 16px;
+    padding: 9px 16px;
 }
-
-.settings-pref-label {
-    font-size: .88rem;
-    font-weight: 600;
-    color: var(--text-primary);
+.set-row + .set-row { border-top: 1px solid var(--border-soft); }
+.set-main { flex: 1; min-width: 0; }
+.set-label {
+    display: block;
+    font-size: .82rem; font-weight: 600; color: var(--text-primary);
+    cursor: pointer;
 }
+.set-hint {
+    display: block; margin-top: 2px;
+    font-size: .72rem; line-height: 1.5; color: var(--text-muted);
+}
+.set-hint.is-warn { color: var(--warning); }
+/* Measured: the longest option ("Female performers first (recommended)")
+   needs 237px of text, so the column is sized to fit it rather than letting
+   a native select silently ellipsise the recommendation away. */
+.set-ctl { flex: none; width: 275px; }
+.set-ctl.is-check { width: auto; padding-top: 2px; }
+.set-ctl.is-check input[type="checkbox"] { width: 15px; height: 15px; margin: 0; cursor: pointer; }
 
 .settings-select {
     width: 100%;
     cursor: pointer;
-    padding: .55rem .7rem;
+    padding: 5px 9px;
+    font-size: 12.5px;
 }
 
-.settings-pref-hint {
-    font-size: .73rem;
-    color: var(--text-muted);
-    margin: 0;
-}
-
+/* Where the keys live / which env vars win — context for the section above,
+   not a warning, so it loses the tinted rail and reads as quiet help text. */
 .settings-hint {
-    font-size: .78rem;
+    font-size: .74rem;
     color: var(--text-muted);
-    line-height: 1.6;
-    margin-bottom: 1.25rem;
-    padding: .6rem .9rem;
-    background: rgba(178, 75, 243, 0.06);
-    border-left: 3px solid rgba(178, 75, 243, 0.35);
-    border-radius: 0 6px 6px 0;
+    line-height: 1.55;
+    margin: 0;
+    padding: 0 16px 9px;
 }
 
 .settings-hint code {
-    font-family: 'JetBrains Mono', monospace;
-    font-size: .73rem;
-    background: rgba(178, 75, 243, 0.15);
+    font-family: var(--mono);
+    font-size: .7rem;
+    background: var(--raised);
+    border: 1px solid var(--border);
     padding: 1px 5px;
-    border-radius: 4px;
-    color: var(--primary);
+    border-radius: 5px;
+    color: var(--text-secondary);
 }
 
-/* Each key section is its own card */
+/* Key blocks keep their structure — header · description · input · status —
+   but lose the card. */
 .settings-key-row {
-    background: rgba(255, 255, 255, 0.03);
-    border: 1px solid rgba(255, 255, 255, 0.07);
-    border-radius: 10px;
-    padding: 1rem 1.1rem;
-    margin-bottom: .75rem;
-    transition: border-color .2s;
+    padding: 10px 16px;
+    border-top: 1px solid var(--border-soft);
 }
 
-.settings-key-row:last-child {
-    margin-bottom: 0;
-}
-
-/* Env-managed row gets a subtle purple tint */
-.settings-key-row.is-env-locked {
-    background: rgba(178, 75, 243, 0.05);
-    border-color: rgba(178, 75, 243, 0.18);
-}
+/* Env-managed key: stated in the status note below the input, not by tinting
+   the whole block. */
+.settings-key-row.is-env-locked { opacity: .85; }
 
 .settings-key-header {
     display: flex;
     align-items: center;
-    gap: .6rem;
-    margin-bottom: .3rem;
+    gap: 9px;
 }
 
 .settings-key-label {
-    font-size: .93rem;
+    font-size: .82rem;
     font-weight: 600;
     color: var(--text-primary);
-    flex: 1;
 }
 
-/* Active / Inactive badges */
+/* Active / Inactive: the same chip shape as the site and action chips
+   elsewhere, so a status reads the same wherever it appears. */
 .settings-badge {
-    font-size: .67rem;
-    font-weight: 700;
+    flex: none;
+    font-size: .6rem;
+    font-weight: 800;
     text-transform: uppercase;
-    letter-spacing: .05em;
-    padding: 3px 9px;
-    border-radius: 20px;
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    flex-shrink: 0;
-}
-
-.settings-badge::before {
-    content: '';
-    width: 6px;
-    height: 6px;
-    border-radius: 50%;
-    display: inline-block;
-    flex-shrink: 0;
+    letter-spacing: .06em;
+    padding: 1px 6px;
+    border-radius: 5px;
+    white-space: nowrap;
 }
 
 .settings-badge-active {
-    background: rgba(0, 255, 136, 0.12);
+    background: var(--good-soft);
     color: var(--success);
-    border: 1px solid rgba(0, 255, 136, 0.28);
-}
-
-.settings-badge-active::before {
-    background: var(--success);
-    box-shadow: 0 0 4px var(--success);
 }
 
 .settings-badge-inactive {
-    background: rgba(139, 123, 168, 0.12);
+    background: rgba(148, 154, 166, 0.14);
     color: var(--text-muted);
-    border: 1px solid rgba(139, 123, 168, 0.22);
-}
-
-.settings-badge-inactive::before {
-    background: var(--text-muted);
 }
 
 .settings-key-desc {
-    font-size: .78rem;
+    font-size: .72rem;
     color: var(--text-muted);
-    margin-bottom: .75rem;
-    line-height: 1.55;
+    margin: 3px 0 0;
+    line-height: 1.5;
 }
 
 .settings-key-desc a {
-    color: var(--primary);
+    color: var(--accent-light);
     text-decoration: none;
 }
 
@@ -1675,11 +1662,12 @@ input.input-error {
 }
 
 .settings-key-desc code {
-    font-family: 'JetBrains Mono', monospace;
-    font-size: .73rem;
-    background: rgba(178, 75, 243, 0.12);
+    font-family: var(--mono);
+    font-size: .68rem;
+    background: var(--raised);
+    border: 1px solid var(--border);
     padding: 1px 5px;
-    border-radius: 4px;
+    border-radius: 5px;
     color: var(--text-secondary);
 }
 
@@ -1687,13 +1675,14 @@ input.input-error {
     position: relative;
     display: flex;
     align-items: center;
+    margin-top: 7px;
 }
 
 .settings-key-input {
     flex: 1;
-    padding-right: 2.8rem;
-    font-family: 'JetBrains Mono', monospace;
-    font-size: .82rem;
+    padding: 6px 34px 6px 10px;
+    font-family: var(--mono);
+    font-size: .76rem;
     transition: opacity .2s;
 }
 
@@ -1704,7 +1693,7 @@ input.input-error {
 
 .settings-eye-btn {
     position: absolute;
-    right: .5rem;
+    right: 6px;
     background: none;
     border: none;
     cursor: pointer;
@@ -1728,8 +1717,8 @@ input.input-error {
 
 /* Source notes — three states */
 .settings-source-note {
-    font-size: .73rem;
-    margin-top: .45rem;
+    font-size: .7rem;
+    margin: 5px 0 0;
     min-height: 1.1em;
     display: flex;
     align-items: center;
@@ -1751,7 +1740,7 @@ input.input-error {
 
 /* Settings modal footer: cancel left, save right */
 .settings-modal-card .modal-footer {
-    padding: 1rem 1.25rem;
+    padding: 12px 16px;
     justify-content: space-between;
     align-items: center;
 }
@@ -2242,51 +2231,69 @@ input.input-error {
 }
 
 /* ── Software update: banner + card + restart prompt (F17 v2) ─────────── */
+/* The banner is the app's top edge, not a card floating above it: full-bleed,
+   square, flush to the window, one hairline handing off to the toolbar. The
+   negative top margin cancels .app's top padding (--app-pad-top, which is 0
+   in native builds where .app already has none). */
 .update-banner {
     display: flex;
     align-items: center;
-    gap: 12px;
-    margin: 10px 0 0;
-    padding: 9px 14px;
-    border: 1px solid var(--border-soft);
-    border-left: 3px solid var(--primary);
-    border-radius: 10px;
-    background: var(--raised);
-    font-size: 0.85rem;
+    gap: 10px;
+    margin: calc(-1 * var(--app-pad-top, 20px)) calc(50% - 50vw) 12px;
+    padding: 8px max(14px, calc(50vw - 786px));
+    border: 0;
+    border-bottom: 1px solid var(--border);
+    border-radius: 0;
+    background: var(--panel);
+    font-size: 0.82rem;
 }
 .update-banner.hidden { display: none; }
-.update-banner-text { flex: 1; min-width: 0; }
-.update-banner-text b { font-weight: 650; }
-.update-banner-sub { color: var(--text-muted); margin-left: 6px; }
-.update-banner-btn { padding: 5px 14px; font-size: 0.78rem; flex-shrink: 0; }
+/* carries the "something is new" signal the 3px left rail used to */
+.update-banner-dot {
+    flex: none; width: 6px; height: 6px;
+    border-radius: 50%; background: var(--primary);
+}
+.update-banner-text {
+    flex: 1; min-width: 0; font-weight: 650;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.update-banner-ver { font-family: var(--mono); color: var(--accent-light); }
+.update-banner-btn { padding: 4px 12px; font-size: 12px; border-radius: 7px; flex-shrink: 0; }
+/* same square icon target used across the app */
 .banner-dismiss {
+    flex: none; width: 26px; height: 26px; padding: 0;
+    display: inline-flex; align-items: center; justify-content: center;
     background: none; border: none; cursor: pointer;
-    color: var(--text-muted); font-size: 1.1rem; line-height: 1;
-    padding: 2px 6px; border-radius: 6px;
+    color: var(--text-muted); font-size: 1rem; line-height: 1;
+    border-radius: 7px;
 }
 .banner-dismiss:hover { color: var(--text-primary); background: var(--border-soft); }
 
+/* A row in the Settings list, not a bordered card floating inside it. Every
+   phase of renderUpdateCard's state machine — available / downloading /
+   verified / installing / done / error — flattens through this one rule. */
 .update-card {
-    border: 1px solid var(--border-soft);
-    border-radius: 10px;
-    background: var(--raised);
-    padding: 12px 14px;
-    font-size: 0.85rem;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    padding: 10px 16px;
+    font-size: 0.82rem;
 }
-.update-card.highlight { border-color: var(--primary); }
-.update-card.error { border-color: var(--error); }
-.update-card h4 { margin: 0; font-size: 0.88rem; font-weight: 650; display: flex; align-items: center; gap: 8px; }
-.update-card .up-muted { color: var(--text-secondary); font-size: 0.78rem; margin-top: 4px; }
-.update-card .up-tiny { color: var(--text-muted); font-size: 0.74rem; margin-top: 2px; }
+.update-card + .update-card { border-top: 1px solid var(--border-soft); }
+.update-card.error h4 { color: var(--error); }
+.update-card h4 { margin: 0; font-size: 0.82rem; font-weight: 650; display: flex; align-items: center; gap: 8px; }
+.update-card .up-muted { color: var(--text-muted); font-size: 0.72rem; margin-top: 2px; }
+.update-card .up-tiny { color: var(--faint); font-size: 0.7rem; margin-top: 2px; }
 .update-card .mono { font-family: ui-monospace, monospace; }
 .update-card a { color: var(--primary); }
 .update-row { display: flex; align-items: center; gap: 12px; }
 .update-chip {
-    font-size: 0.7rem; font-weight: 700; padding: 2px 8px;
-    border-radius: 99px; text-transform: uppercase; letter-spacing: .03em;
+    flex: none;
+    font-size: 0.6rem; font-weight: 800; padding: 1px 6px;
+    border-radius: 5px; text-transform: uppercase; letter-spacing: .06em;
 }
 .update-chip.ok { color: var(--good); background: var(--good-soft); }
-.update-chip.new { color: var(--primary); background: var(--border-soft); }
+.update-chip.new { color: var(--accent-light); background: var(--accent-soft); }
 .update-bar { height: 7px; background: var(--border-soft); border-radius: 99px; overflow: hidden; margin: 10px 0 6px; }
 .update-bar > i { display: block; height: 100%; width: 0; background: var(--primary); border-radius: 99px; transition: width .3s ease; }
 .update-bar.indet > i { width: 32%; animation: upd-slide 1.4s ease-in-out infinite alternate; }
@@ -2304,17 +2311,27 @@ input.input-error {
 .restart-actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 16px; }
 
 /* ── Settings: remove-saved-key button (roadmap-2 F14) ─────────────────── */
+/* Amber, not muted grey: removing a saved key is an option people were
+   missing entirely, and colour registers before the help text does. Amber
+   rather than red — it is reversible (paste the key back), not destructive
+   in the way deleting a file is. Red is kept for the hover. */
 .settings-key-clear {
-    background: none;
-    border: 1px solid var(--border-soft);
-    border-radius: 8px;
-    color: var(--text-muted);
+    margin-left: auto;
+    flex: none;
+    background: var(--warn-soft);
+    border: 1px solid transparent;
+    border-radius: 6px;
+    color: var(--warning);
     font-size: 0.72rem;
-    padding: 2px 8px;
+    font-weight: 650;
+    padding: 2px 9px;
     cursor: pointer;
-    margin-left: 8px;
 }
-.settings-key-clear:hover { color: var(--error); border-color: var(--error); }
+.settings-key-clear:hover {
+    color: var(--error);
+    background: var(--bad-soft);
+    border-color: var(--error);
+}
 
 /* ── Library stores row (F16): what AMM has accumulated + maintenance ── */
 .library-stores-row {
@@ -2382,7 +2399,24 @@ input.input-error {
 
 /* nav: icon-only buttons, labels stay for screen readers */
 .fusion-nav { display: flex; gap: 6px; margin-left: auto; }
-.fusion-nav .glass-btn { width: 30px; height: 30px; padding: 0; justify-content: center; }
+/* Specificity, not source order: `.fusion-bar .glass-btn { padding: 5px 10px }`
+   further down this file has the SAME specificity as a bare `.fusion-nav
+   .glass-btn`, so it used to win and re-apply horizontal padding — leaving an
+   8px content box that flex-shrunk the 20px icon to 8px WIDE by 20 tall. The
+   icons weren't small, they were squashed. Three fixes missed it because they
+   edited the losing rule. Adding .fusion-bar makes this 0,3,0 so it wins
+   wherever either rule moves to. */
+.fusion-bar .fusion-nav .glass-btn {
+    width: 30px; height: 30px; padding: 0;
+    justify-content: center;
+}
+/* flex: none is the durable half of the fix — if a padding rule ever sneaks
+   back in, the glyph overflows visibly instead of silently collapsing to a
+   sliver. tools/ui-geometry-check.js asserts the rendered box stays square. */
+.fusion-bar .fusion-nav .glass-btn > svg {
+    flex: none;
+    width: 24px; height: 24px;
+}
 .fusion-nav .glass-btn > span {
     position: absolute;
     width: 1px; height: 1px;
@@ -2435,7 +2469,11 @@ input.input-error {
    bar bleeds to the viewport edges and squares off against the title bar;
    its CONTENT stays aligned with the .app column (max-width 1600px) via the
    padding calc. Web/Docker (no .is-native) keeps the inset panel. */
-html.is-native .app { padding-top: 0; }
+html.is-native .app { padding-top: 0; --app-pad-top: 0px; }
+/* native: the banner and the toolbar are both full-bleed strips, so they meet
+   on the banner's hairline — a gap between them would read as a seam. In the
+   browser build the toolbar is still an inset panel and keeps its breathing room. */
+html.is-native .update-banner { margin-bottom: 0; }
 html.is-native .fusion-bar {
     margin: 0 calc(50% - 50vw) 12px;               /* full-bleed regardless of .app width */
     border-radius: 0;
@@ -2624,6 +2662,9 @@ html.is-native .fusion-bar {
    are sections of ONE continuous surface spanning the entire app width —
    no bordered boxes floating inside the app. A single prominent hairline
    divides the two sections. Same bleed technique as the native toolbar. ═══ */
+#organized-section,
+#scanned-section,
+#unmatched-panel,
 #embed-queue-panel,
 .rename-results {
     border: 0;
@@ -2638,7 +2679,12 @@ html.is-native .fusion-bar {
 .rename-results { margin-top: 0; padding-bottom: 48px; }
 /* the ONE divider between the sections — deliberately more prominent than
    the row hairlines (2px, full border token) */
-#embed-queue-panel + .rename-results { border-top: 2px solid var(--border); }
+#embed-queue-panel + .rename-results,
+#unmatched-panel + #embed-queue-panel,
+#unmatched-panel + .rename-results,
+#organized-section + #scanned-section { border-top: 2px solid var(--border); }
+#unmatched-panel { margin-bottom: 0; }
+#organized-section { margin-bottom: 0; }
 /* inner list boxes flatten onto the surface: soft hairlines between rows only */
 .eq-list,
 .rename-results-list {
@@ -2646,4 +2692,179 @@ html.is-native .fusion-bar {
     border-radius: 0;
     background: transparent;
     padding-right: 0;
+}
+
+/* ═══ Unmatched files — a section of the job surface, not a card ══════════
+   Same parts as the embed queue: muted header, hairline rows, mono names,
+   30px icon action. Amber (warning) not red: these files are unfinished
+   work, not failures — red stays meaningful for real errors. */
+.unmatched-section { padding: 12px 14px; }
+.um-head { display: flex; align-items: center; gap: 10px; }
+.um-glyph { color: var(--warning); font-size: 0.84rem; }
+.um-title { font-size: 0.9rem; }
+.um-count { font-size: 0.78rem; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.um-spacer { flex: 1; }
+.um-cta { flex: none; font-size: 12px; padding: 5px 12px; white-space: nowrap; }
+.um-list {
+    display: flex;
+    flex-direction: column;
+    margin-top: 8px;
+    /* ~8 rows, then scroll — a big unmatched set must not push the embed
+       queue and Rename Results off the screen. */
+    max-height: 260px;
+    overflow-y: auto;
+}
+.um-row { display: flex; align-items: center; gap: 9px; padding: 5px 0; font-size: 0.78rem; }
+.um-row + .um-row { border-top: 1px solid var(--border-soft); }
+.um-row-glyph { flex: none; width: 16px; text-align: center; color: var(--warning); font-size: 0.72rem; }
+.um-name {
+    flex: 1; min-width: 0;
+    font-family: var(--mono); color: var(--text-secondary);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.um-edit {
+    flex: none; width: 30px; height: 30px; padding: 0;
+    display: inline-flex; align-items: center; justify-content: center;
+    font-size: 0.82rem;
+}
+
+/* ═══ Scanned files — sections of the job surface, not stacked cards ══════
+   Same parts as every other list: 16px control column, mono name, a quiet
+   meta column on the right. ~28px per row instead of ~80px, so a 23-file
+   scan is one screen rather than three. */
+.scan-section { padding: 12px 14px; }
+.sf-head { display: flex; align-items: center; gap: 10px; }
+summary.sf-head { cursor: pointer; user-select: none; list-style: none; }
+summary.sf-head::-webkit-details-marker { display: none; }
+.sf-head-glyph { color: var(--success); font-size: 0.84rem; }
+.sf-title { font-size: 0.9rem; }
+.sf-count { font-size: 0.78rem; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.sf-expand { margin-left: auto; font-size: 0.74rem; color: var(--text-muted); }
+.sf-when-open { display: none; }
+details[open] > .sf-head .sf-when-closed { display: none; }
+details[open] > .sf-head .sf-when-open   { display: inline; }
+
+.sf-list { display: flex; flex-direction: column; margin-top: 6px; }
+/* The control column: Select All in the header sits directly above the row
+   checkboxes, so it reads as one column rather than a floating label. */
+.sf-cb {
+    flex: none; width: 16px; margin: 0;
+    display: inline-flex; align-items: center; justify-content: center;
+}
+.sf-cb input[type="checkbox"] { width: 14px; height: 14px; margin: 0; cursor: pointer; }
+.sf-row { display: flex; align-items: center; gap: 9px; padding: 5px 0; font-size: 0.78rem; }
+.sf-row + .sf-row { border-top: 1px solid var(--border-soft); }
+.sf-name {
+    flex: 1; min-width: 0;
+    font-family: var(--mono); color: var(--text-primary);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+/* Excluded from the batch: fade the name, keep the row in place. */
+.sf-row.unselected .sf-name { color: var(--faint); }
+.sf-row.is-organized .sf-name { color: var(--text-muted); }
+
+.sf-meta {
+    flex: none; max-width: 46%;
+    display: flex; align-items: center; gap: 8px;
+    font-size: 0.7rem; color: var(--muted); overflow: hidden;
+}
+/* The site is the one accent chip — it drives the rename template. */
+.sf-site {
+    flex: none;
+    font-size: 0.62rem; font-weight: 800; letter-spacing: 0.04em; text-transform: uppercase;
+    color: var(--accent-light); background: var(--accent-soft);
+    border-radius: 5px; padding: 1px 7px; white-space: nowrap;
+}
+.sf-perf { color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sf-date, .sf-q { flex: none; color: var(--faint); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.sf-title { color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sf-folder, .sf-tick { flex: none; }
+.sf-tick { color: var(--success); font-size: 0.72rem; }
+.sf-empty { padding: 14px 0; text-align: center; font-size: 0.8rem; color: var(--text-muted); }
+.sf-showall { align-self: flex-start; margin-top: 8px; font-size: 12px; padding: 5px 12px; }
+
+/* ═══ Rename preview modal — the queue idiom inside a dialog ══════════════
+   The modal keeps its frame: an overlay that asks "proceed?" earns one.
+   Everything inside drops its borders and becomes the same hairline mono
+   rows as the embed queue, the unmatched section and Rename Results, so
+   the preview and its outcome read identically. */
+.pm-summary {
+    display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px;
+    padding: 10px 14px 8px; font-size: 0.8rem; color: var(--text-muted);
+}
+.pm-pill {
+    flex: none; font-size: 0.68rem; font-weight: 700;
+    border-radius: 99px; padding: 1px 9px; white-space: nowrap;
+}
+.pm-pill-move { color: var(--success); background: var(--good-soft); }
+.pm-pill-skip { color: var(--warning); background: var(--warn-soft); }
+.pm-pill-fail { color: var(--error);   background: var(--bad-soft); }
+/* Sits beside the pills when there is room, drops to its own full-width line
+   when there isn't — never squeezed into a four-line column. */
+.pm-reassure { flex: 1 1 auto; min-width: 28ch; }
+
+/* Fixed strip above the scroll region — batch callouts and the folder every
+   path shares, so neither can be scrolled out of sight. */
+.pm-notes { padding: 0 14px; }
+.pm-callout {
+    display: flex; gap: 9px; align-items: baseline;
+    padding: 7px 0; font-size: 0.76rem; line-height: 1.5;
+    border-top: 1px solid var(--border-soft);
+}
+.pm-callout-glyph { flex: none; width: 16px; text-align: center; color: var(--warning); }
+.pm-callout-body { flex: 1; min-width: 0; }
+.pm-callout-body b { color: var(--text-primary); font-size: 0.78rem; }
+.pm-callout-names {
+    display: block; margin-top: 2px; overflow-wrap: anywhere;
+    font-family: var(--mono); font-size: 0.7rem; color: var(--faint);
+}
+/* The directory every row repeats, printed once instead of 38 times. */
+.pm-base {
+    padding: 7px 0 8px; font-family: var(--mono); font-size: 0.72rem;
+    color: var(--faint); border-top: 1px solid var(--border-soft);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.pm-base b { color: var(--muted); font-weight: 600; }
+
+/* Only the rows scroll. The body itself must not, or the summary, the
+   callouts and the footnote scroll out of a dialog whose whole job is to
+   show them before an irreversible operation. */
+#preview-modal .modal-body { display: flex; flex-direction: column; overflow: hidden; }
+.pm-list {
+    flex: 1 1 auto; min-height: 0; overflow-y: auto;
+    padding: 0 14px 4px; border-top: 1px solid var(--border-soft);
+}
+.pm-row { display: flex; align-items: center; gap: 9px; padding: 5px 0; font-size: 0.78rem; }
+.pm-row + .pm-row { border-top: 1px solid var(--border-soft); }
+.pm-glyph { flex: none; width: 16px; text-align: center; font-size: 0.72rem; }
+.pm-glyph-move { color: var(--success); }
+.pm-glyph-skip { color: var(--warning); }
+.pm-glyph-fail { color: var(--error); }
+.pm-paths { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.pm-from {
+    font-family: var(--mono); font-size: 0.7rem; color: var(--faint);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.pm-to {
+    font-family: var(--mono); font-size: 0.8rem; color: var(--text-primary);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.pm-to.is-inert { color: var(--text-muted); }
+.pm-detail {
+    flex: none; max-width: 38%; font-size: 0.72rem; color: var(--faint);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.pm-detail-skip { color: var(--warning); }
+.pm-detail-fail { color: var(--error); }
+
+/* Files already named exactly right collapse into one footnote below the
+   rows — they are not what the user came here to check. */
+.pm-footnote {
+    padding: 8px 14px 10px; font-size: 0.76rem; color: var(--text-muted);
+    line-height: 1.55; border-top: 1px solid var(--border-soft);
+}
+.pm-footnote b { color: var(--text-primary); }
+.pm-footnote code {
+    font-family: var(--mono); font-size: 0.72rem;
+    background: var(--accent-soft); border-radius: 5px; padding: 1px 6px;
 }

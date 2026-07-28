@@ -248,9 +248,40 @@ def _job_extend(job_id: str, extra_total: int) -> None:
 
 
 def _job_finish(job_id: str) -> None:
-    """Mark a job complete in memory AND in the durable store."""
+    """Mark a job complete in memory AND in the durable store.
+
+    F6 — terminal-state reconciliation. "complete" and the per-file states are
+    two independent bookkeeping channels: completion is decided by
+    done >= total, while each entry["status"] is mutated by its own _embed_one.
+    The client STOPS polling the moment it sees complete (_finishEmbedPolling),
+    so any entry still pending/embedding at this instant would keep its spinner
+    on screen forever — the "stuck at the 3rd file" report. Sweeping here makes
+    the server the single source of truth: a completed job can never contain a
+    non-terminal file.
+
+    The sweep marks stragglers "warning", not "done": reaching this point
+    without a reported outcome means we genuinely do not know whether the file
+    was written, and claiming success would be a lie. In normal operation the
+    sweep finds nothing (every _embed_one sets its own terminal state), so the
+    queue still auto-collapses to "✓ N embedded".
+    """
     job = _embed_jobs.get(job_id)
     if job is not None:
+        stranded = [e for e in job.get("files", [])
+                    if e.get("status") in ("pending", "embedding")]
+        for e in stranded:
+            e["status"] = "warning"
+            if not e.get("detail"):
+                e["detail"] = ("Embed state unknown — the job ended before "
+                               "this file reported its outcome")
+            e["progress"] = None
+        if stranded:
+            # Permanent diagnostic: in normal operation this NEVER fires, so a
+            # line here means a file's outcome went missing — grep the logs for
+            # "[embed] stranded" when a queue row looks wrong.
+            print(f"[embed] stranded at finish job={job_id} "
+                  f"done={job['done']}/{job['total']} "
+                  f"files={[e['name'] for e in stranded]}")
         job["complete"] = True
         job["finished"] = _time.monotonic()   # total wall time = finished-created
     _job_store.finish(job_id, "complete")
@@ -2865,73 +2896,89 @@ async def _run_embed_phase(job_id: str, tasks: list, embed_mode: str = "embed") 
         # F3: wall time for this ONE file, measured across the whole embed
         # (semaphore wait included — that is real latency from the user's view).
         _t0 = _time.monotonic()
-        # Container write for embed/smart/embed_only (skipped for nfo_only). The
-        # concurrency cap matters for the FFmpeg remux; nfo_only skips it entirely.
-        if not nfo_only:
-            async with embed_sem:
-                if entry is not None:
-                    entry["status"] = "embedding"
-                # Live per-file progress for the queue-panel underline bar.
-                _pcb = ((lambda p, _e=entry: _e.__setitem__("progress", round(p * 100, 1)))
-                        if entry is not None else None)
-                ok, err = await _embed_for_mode(result.new_path, meta, embed_mode,
-                                                progress_cb=_pcb)
-                if not ok:
-                    warning = f"Metadata embedding warning: {err}"
-                    embed_failed = True
+        # F6: every per-file step runs inside this try. Previously an
+        # unexpected raise here (e.g. _match_cache_rekey hitting a full or
+        # read-only DATA_DIR — the one unguarded write in the chain)
+        # propagated out of asyncio.gather, so the lines after it never ran:
+        # _job_finish was skipped, the job never reached complete, and this
+        # file's queue row stayed "embedding" forever. The bookkeeping block
+        # below is now unconditional, so a crash costs ONE file's outcome,
+        # never the whole batch's completion.
+        try:
+            # Container write for embed/smart/embed_only (skipped for nfo_only). The
+            # concurrency cap matters for the FFmpeg remux; nfo_only skips it entirely.
+            if not nfo_only:
+                async with embed_sem:
                     if entry is not None:
-                        entry["detail"] = str(err)[:200]
-                else:
-                    # F6: the write changed the file's bytes — re-key the match
-                    # cache + catalog to the post-embed hash so the confirmation
-                    # made in Phase 1 survives the very embed that follows it.
-                    new_oshash = await _refresh_fingerprint_after_embed(
-                        result.new_path,
-                        cat.get("oshash") if cat else None,
-                        delete_old=bool(cat and cat.get("action") == "move"),
-                    )
-        nfo_written = False
-        if not embed_only:  # write the sidecar for nfo_only/smart/embed
-            if entry is not None and entry["status"] != "embedding":
-                entry["status"] = "embedding"   # nfo_only path: mark active here
-            # Poster (F3): only meaningful alongside the NFO that references it.
-            if _FETCH_POSTERS and meta.get("poster_url"):
-                poster_dest = result.new_path.with_name(result.new_path.stem + "-poster.jpg")
-                if await _download_poster(meta["poster_url"], poster_dest):
-                    meta = {**meta, "poster_path": poster_dest.name}
-            try:
-                # F1: XML serialise + file write — off the loop (see the
-                # _refresh_fingerprint_after_embed note above).
-                await asyncio.to_thread(write_nfo, result.new_path, meta)
-                nfo_written = True
-            except Exception as nfo_err:
-                if not warning:
-                    warning = f"NFO write warning: {nfo_err}"
-                if entry is not None and entry.get("detail") is None:
-                    entry["detail"] = f"NFO: {str(nfo_err)[:200]}"
-        # Catalog (R1): "organised" is the NFO-on-disk signal (the scan self-heals
-        # against it), so only mark it once the NFO is actually written. embed_only
-        # writes container tags but no NFO, so it is intentionally NOT tracked as
-        # organised — a re-scan would clear the flag anyway (no sidecar on disk).
-        if cat and nfo_written:
-            try:
-                # F1: sqlite write — off the loop. A local closure keeps the
-                # keyword arguments (asyncio.to_thread forwards *args only
-                # cleanly, and these must not become positional by accident).
-                def _mark() -> None:
-                    catalog.mark_organized(
-                        str(result.new_path),
-                        # Post-embed hash when the container was rewritten (F6);
-                        # the pre-embed one otherwise (nfo_only — bytes untouched).
-                        oshash=new_oshash or cat.get("oshash"),
-                        scene_id=cat.get("scene_id"),
-                        source=cat.get("source"),
-                        confidence=cat.get("confidence"),
-                        confirmed=cat.get("confirmed", False),
-                    )
-                await asyncio.to_thread(_mark)
-            except Exception as e:
-                print(f"WARNING: catalog mark_organized (phase 2) failed: {e}")
+                        entry["status"] = "embedding"
+                    # Live per-file progress for the queue-panel underline bar.
+                    _pcb = ((lambda p, _e=entry: _e.__setitem__("progress", round(p * 100, 1)))
+                            if entry is not None else None)
+                    ok, err = await _embed_for_mode(result.new_path, meta, embed_mode,
+                                                    progress_cb=_pcb)
+                    if not ok:
+                        warning = f"Metadata embedding warning: {err}"
+                        embed_failed = True
+                        if entry is not None:
+                            entry["detail"] = str(err)[:200]
+                    else:
+                        # F6: the write changed the file's bytes — re-key the match
+                        # cache + catalog to the post-embed hash so the confirmation
+                        # made in Phase 1 survives the very embed that follows it.
+                        new_oshash = await _refresh_fingerprint_after_embed(
+                            result.new_path,
+                            cat.get("oshash") if cat else None,
+                            delete_old=bool(cat and cat.get("action") == "move"),
+                        )
+            nfo_written = False
+            if not embed_only:  # write the sidecar for nfo_only/smart/embed
+                if entry is not None and entry["status"] != "embedding":
+                    entry["status"] = "embedding"   # nfo_only path: mark active here
+                # Poster (F3): only meaningful alongside the NFO that references it.
+                if _FETCH_POSTERS and meta.get("poster_url"):
+                    poster_dest = result.new_path.with_name(result.new_path.stem + "-poster.jpg")
+                    if await _download_poster(meta["poster_url"], poster_dest):
+                        meta = {**meta, "poster_path": poster_dest.name}
+                try:
+                    # F1: XML serialise + file write — off the loop (see the
+                    # _refresh_fingerprint_after_embed note above).
+                    await asyncio.to_thread(write_nfo, result.new_path, meta)
+                    nfo_written = True
+                except Exception as nfo_err:
+                    if not warning:
+                        warning = f"NFO write warning: {nfo_err}"
+                    if entry is not None and entry.get("detail") is None:
+                        entry["detail"] = f"NFO: {str(nfo_err)[:200]}"
+            # Catalog (R1): "organised" is the NFO-on-disk signal (the scan self-heals
+            # against it), so only mark it once the NFO is actually written. embed_only
+            # writes container tags but no NFO, so it is intentionally NOT tracked as
+            # organised — a re-scan would clear the flag anyway (no sidecar on disk).
+            if cat and nfo_written:
+                try:
+                    # F1: sqlite write — off the loop. A local closure keeps the
+                    # keyword arguments (asyncio.to_thread forwards *args only
+                    # cleanly, and these must not become positional by accident).
+                    def _mark() -> None:
+                        catalog.mark_organized(
+                            str(result.new_path),
+                            # Post-embed hash when the container was rewritten (F6);
+                            # the pre-embed one otherwise (nfo_only — bytes untouched).
+                            oshash=new_oshash or cat.get("oshash"),
+                            scene_id=cat.get("scene_id"),
+                            source=cat.get("source"),
+                            confidence=cat.get("confidence"),
+                            confirmed=cat.get("confirmed", False),
+                        )
+                    await asyncio.to_thread(_mark)
+                except Exception as e:
+                    print(f"WARNING: catalog mark_organized (phase 2) failed: {e}")
+        except Exception as crash:
+            # Honest terminal state: we do NOT know the file was written.
+            embed_failed = True
+            warning = f"Metadata embedding warning: {crash}"
+            if entry is not None and entry.get("detail") is None:
+                entry["detail"] = str(crash)[:200]
+            print(f"WARNING: embed crashed for {result.new_path}: {crash}")
         # Final per-file state for the queue panel: container-write failure is
         # an "error" (red ✕), sidecar-only trouble a "warning" (amber ⚠).
         _status = ("error" if embed_failed
@@ -2942,21 +2989,32 @@ async def _run_embed_phase(job_id: str, tasks: list, embed_mode: str = "embed") 
         # after EMBED_JOB_TTL, so persist mode/outcome/reason/bytes/duration.
         # Off the loop (F1 discipline) and best-effort: catalog.log_embed
         # swallows its own errors, and an audit write must never fail an embed.
-        await asyncio.to_thread(
-            catalog.log_embed, str(result.new_path), embed_mode, _status,
-            (entry.get("detail") if entry is not None else warning),
-            (entry.get("size") if entry is not None else None),
-            _time.monotonic() - _t0,
-        )
+        try:
+            await asyncio.to_thread(
+                catalog.log_embed, str(result.new_path), embed_mode, _status,
+                (entry.get("detail") if entry is not None else warning),
+                (entry.get("size") if entry is not None else None),
+                _time.monotonic() - _t0,
+            )
+        except Exception as e:   # F6: an audit write must never cost the count
+            print(f"WARNING: embed_log write failed for {result.new_path}: {e}")
+        # MUST be the last thing and MUST always run: the completion check below
+        # reads job["done"], so a skipped increment leaves the job permanently
+        # short of its total and the UI polling forever.
         _job_progress(
             job_id,
             {"path": str(result.new_path), "warning": warning} if warning else None,
         )
 
-    await asyncio.gather(*[
+    # F6: return_exceptions=True — belt and braces with the per-file guard above.
+    # gather must never abort the phase before the completion check runs.
+    results = await asyncio.gather(*[
         _embed_one(r, p, m, c, entry)
         for (r, p, m, c), entry in zip(tasks, entries)
-    ])
+    ], return_exceptions=True)
+    for r in results:
+        if isinstance(r, BaseException):
+            print(f"WARNING: embed task raised past its guard: {r}")
     # Chunk-shared jobs (_job_extend): several background tasks report into one
     # job, so completion belongs to whichever task drains the LAST unit — not
     # to each task's own gather. Everything is loop-local (no threads), so this
