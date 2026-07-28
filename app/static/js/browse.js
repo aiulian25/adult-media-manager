@@ -34,61 +34,95 @@ function _browseShowHidden() {
     return localStorage.getItem('amm_browse_show_hidden') === '1';
 }
 
+/** Small DOM helper — listings carry filesystem names and are built as nodes. */
+function _bEl(tag, cls, text) {
+    const node = document.createElement(tag);
+    if (cls) node.className = cls;
+    if (text != null) node.textContent = text;
+    return node;
+}
+
+/** One directory row: empty control column · name with a trailing "/" · enter chevron. */
+function _bDirRow(item, i) {
+    const row = _bEl('div', 'b-row dir');
+    row.dataset.didx = String(i);
+    row.appendChild(_bEl('span', 'b-cb'));
+    const name = _bEl('span', 'b-name');
+    // ".." already reads as a path; every other directory gets the shell's
+    // trailing slash instead of a folder emoji.
+    name.append(document.createTextNode(item.name === '..' ? '../' : item.name));
+    if (item.name !== '..') name.appendChild(_bEl('i', null, '/'));
+    row.appendChild(name);
+    row.appendChild(_bEl('span', 'b-enter', '›'));
+    return row;
+}
+
+/** One file row: checkbox in the shared 16px column · name · size. */
+function _bFileRow(item, i, isSelected) {
+    const row = _bEl('div', `b-row file${isSelected ? ' is-sel' : ''}`);
+    row.dataset.fidx = String(i);
+    const wrap = _bEl('span', 'b-cb');
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.checked = isSelected;
+    cb.tabIndex = -1;
+    // Visual indicator only: the delegated row handler owns selection so that
+    // Shift-range and Ctrl-toggle work from anywhere on the row.
+    cb.style.pointerEvents = 'none';
+    cb.setAttribute('aria-label', item.name);
+    wrap.appendChild(cb);
+    row.appendChild(wrap);
+    row.appendChild(_bEl('span', 'b-name', item.name));
+    const size = formatFileSize(item.size);
+    if (size) row.appendChild(_bEl('span', 'b-size', size));
+    return row;
+}
+
 async function loadBrowseDirectory(path) {
+    const list = document.getElementById('browse-list');
     document.getElementById('browse-path').textContent = path;
-    document.getElementById('browse-list').innerHTML = `<div style="text-align:center;padding:20px;">${escapeHtml(t('browse.loading'))}</div>`;
+    list.replaceChildren(_bEl('div', 'b-empty', t('browse.loading')));
 
     try {
         const response = await fetch(`/api/browse?path=${encodeURIComponent(path)}&show_hidden=${_browseShowHidden()}`);
         if (!response.ok) throw new Error('Failed to browse');
-        
+
         const data = await response.json();
         currentBrowsePath = data.path;
-        
+
         document.getElementById('browse-path').textContent = data.path;
-        
+
         const directories = data.items.filter(item => item.type === 'directory');
         const files = data.items.filter(item => item.type === 'file');
 
-        // Store paths in global arrays — inline onclick references index only,
-        // so filenames with ( ) ! ' and other special chars never break the JS parser.
+        // Index-keyed globals: rows carry only an index, so names containing
+        // ( ) ! ' or quotes never reach a parser of any kind.
         window._browseDirs  = directories.map(d => d.path);
         window._browsePaths = files.map(f => f.path);
+        window._browseSizes = files.map(f => f.size);
 
-        let html = '';
+        const frag = document.createDocumentFragment();
+        directories.forEach((item, i) => frag.appendChild(_bDirRow(item, i)));
 
-        // Show directories
-        html += directories.map((item, i) => `
-            <div class="browse-item directory" onclick="navigateDir(_browseDirs[${i}])">📁 ${escapeHtml(item.name)}</div>
-        `).join('');
-
-        // Show files if in file selection mode. Clicks go through a single
-        // delegated handler (onBrowseFileClick) so Shift-range and Ctrl-toggle
-        // work; the checkbox is a visual indicator only (pointer-events:none)
-        // so a click anywhere on the row is handled the same way.
+        // Files only in file-selection mode; directories stay listed either way
+        // so navigation keeps working.
         if (browseSelectionMode === 'files') {
-            html += files.map((item, i) => {
-                const isSelected = selectedFiles.some(f => f.path === item.path);
-                return `
-                    <div class="browse-item file ${isSelected ? 'selected' : ''}" data-fidx="${i}">
-                        <input type="checkbox" ${isSelected ? 'checked' : ''} tabindex="-1"
-                               style="pointer-events:none;">
-                        📄 ${escapeHtml(item.name)}
-                    </div>
-                `;
-            }).join('');
+            files.forEach((item, i) => frag.appendChild(
+                _bFileRow(item, i, selectedFiles.some(f => f.path === item.path))));
         }
 
         // A fresh listing invalidates the old focus/anchor indices.
         browseFocusIdx  = -1;
         browseAnchorIdx = -1;
 
-        document.getElementById('browse-list').innerHTML = html || `<div style="text-align:center;padding:20px;color:var(--text-muted);">${escapeHtml(t('browse.empty'))}</div>`;
+        if (frag.childNodes.length) list.replaceChildren(frag);
+        else list.replaceChildren(_bEl('div', 'b-empty', t('browse.empty')));
         updateSelectionCounter();
         updateBrowseBackBtn();
-        
+
     } catch (error) {
-        document.getElementById('browse-list').innerHTML = `<div style="color:var(--error);text-align:center;padding:20px;">${escapeHtml(t('browse.error'))} ${escapeHtml(error.message)}</div>`;
+        list.replaceChildren(_bEl('div', 'b-empty is-error',
+            `${t('browse.error')} ${error.message}`));
     }
 }
 
@@ -110,24 +144,20 @@ function updateBrowseBackBtn() {
 
 function updateBrowseSelectionMode(mode) {
     browseSelectionMode = mode;
-    document.getElementById('browse-mode-folder').classList.toggle('active', mode === 'folder');
-    document.getElementById('browse-mode-files').classList.toggle('active', mode === 'files');
-    
-    const selectBtn = document.getElementById('browse-select');
-    if (mode === 'folder') {
-        selectBtn.textContent = t('modal.browse_select_folder_btn') || 'Select Folder';
-        selectedFiles = [];
-    } else {
-        selectBtn.textContent = t('modal.browse_select_files_btn') || 'Select Files';
-    }
+    document.getElementById('browse-mode-folder').classList.toggle('is-on', mode === 'folder');
+    document.getElementById('browse-mode-files').classList.toggle('is-on', mode === 'files');
+
+    if (mode === 'folder') selectedFiles = [];
 
     // Keyboard-selection hint is only relevant when picking files.
     const hint = document.getElementById('browse-kbd-hint');
-    if (hint) hint.style.display = (mode === 'files') ? 'block' : 'none';
-    
+    if (hint) hint.hidden = (mode !== 'files');
+
     // Reload current directory to show/hide files
     if (currentBrowsePath) {
         loadBrowseDirectory(currentBrowsePath);
+    } else {
+        updateSelectionCounter();   // keeps the footer honest before the first load
     }
 }
 
@@ -145,12 +175,12 @@ function _setFileIdxSelected(idx, selected) {
     const p = (window._browsePaths || [])[idx];
     if (p == null) return;
     const at = selectedFiles.findIndex(f => f.path === p);
-    if (selected && at === -1)      selectedFiles.push({ path: p });
+    if (selected && at === -1)      selectedFiles.push({ path: p, size: (window._browseSizes || [])[idx] });
     else if (!selected && at !== -1) selectedFiles.splice(at, 1);
 
-    const row = document.querySelector(`.browse-item.file[data-fidx="${idx}"]`);
+    const row = document.querySelector(`.b-row.file[data-fidx="${idx}"]`);
     if (row) {
-        row.classList.toggle('selected', selected);
+        row.classList.toggle('is-sel', selected);
         const cb = row.querySelector('input[type="checkbox"]');
         if (cb) cb.checked = selected;
     }
@@ -177,11 +207,11 @@ function _setBrowseFocus(idx) {
     const n = (window._browsePaths || []).length;
     if (n === 0) { browseFocusIdx = -1; return; }
     idx = Math.max(0, Math.min(n - 1, idx));
-    document.querySelectorAll('.browse-item.file.focused')
-        .forEach(el => el.classList.remove('focused'));
-    const row = document.querySelector(`.browse-item.file[data-fidx="${idx}"]`);
+    document.querySelectorAll('.b-row.file.is-foc')
+        .forEach(el => el.classList.remove('is-foc'));
+    const row = document.querySelector(`.b-row.file[data-fidx="${idx}"]`);
     if (row) {
-        row.classList.add('focused');
+        row.classList.add('is-foc');
         row.scrollIntoView({ block: 'nearest' });
     }
     browseFocusIdx = idx;
@@ -246,14 +276,43 @@ function onBrowseKeydown(e) {
     }
 }
 
+/**
+ * Footer state: the left line says what is about to be picked, the primary
+ * button names it. In folder mode that is the directory you are standing in;
+ * in file mode it is the count plus the total size, which is worth knowing
+ * before committing a multi-gigabyte remux.
+ */
 function updateSelectionCounter() {
     const counter = document.getElementById('selection-counter');
-    if (browseSelectionMode === 'files' && selectedFiles.length > 0) {
-        counter.textContent = `${selectedFiles.length} file${selectedFiles.length > 1 ? 's' : ''} selected`;
-        counter.style.display = 'block';
-    } else {
-        counter.style.display = 'none';
+    const selectBtn = document.getElementById('browse-select');
+    if (!counter || !selectBtn) return;
+
+    if (browseSelectionMode === 'folder') {
+        counter.textContent = currentBrowsePath
+            ? t('modal.browse_selecting', { path: currentBrowsePath }) : '';
+        selectBtn.textContent = t('modal.browse_select_folder_btn');
+        selectBtn.disabled = false;
+        return;
     }
+
+    const n = selectedFiles.length;
+    if (n === 0) {
+        counter.textContent = '';
+        selectBtn.textContent = t('modal.browse_select_files_btn');
+        selectBtn.disabled = true;
+        return;
+    }
+    const bytes = selectedFiles.reduce(
+        (sum, f) => sum + (typeof f.size === 'number' ? f.size : 0), 0);
+    const size = formatFileSize(bytes);
+    // Separate singular keys rather than "1 file(s)" — every language here has
+    // a distinct singular, and the count is read on every pick.
+    const one = n === 1;
+    counter.textContent = size
+        ? t(one ? 'modal.browse_one_selected_size' : 'modal.browse_n_selected_size', { n, size })
+        : t(one ? 'modal.browse_one_selected'      : 'modal.browse_n_selected',      { n });
+    selectBtn.textContent = t(one ? 'modal.browse_select_one' : 'modal.browse_select_n', { n });
+    selectBtn.disabled = false;
 }
 
 // F12: if the picker was showing hidden entries and the user chose a path with
@@ -292,12 +351,30 @@ function selectBrowseFolder() {
     const list = document.getElementById('browse-list');
     if (list) {
         list.addEventListener('click', (e) => {
-            const row = e.target.closest('.browse-item.file');
+            // Directory rows used to carry an inline onclick with an index;
+            // both kinds now go through this one delegated handler.
+            const dir = e.target.closest('.b-row.dir');
+            if (dir && list.contains(dir)) {
+                const d = parseInt(dir.dataset.didx, 10);
+                const path = (window._browseDirs || [])[d];
+                if (path != null) navigateDir(path);
+                return;
+            }
+            const row = e.target.closest('.b-row.file');
             if (!row || !list.contains(row)) return;
             const idx = parseInt(row.dataset.fidx, 10);
             if (!Number.isNaN(idx)) onBrowseFileClick(e, idx);
         });
     }
+    // Mode toggle + navigation, previously inline onclick attributes.
+    document.getElementById('browse-mode-folder')
+        ?.addEventListener('click', () => updateBrowseSelectionMode('folder'));
+    document.getElementById('browse-mode-files')
+        ?.addEventListener('click', () => updateBrowseSelectionMode('files'));
+    document.getElementById('browse-back')?.addEventListener('click', browseBack);
+    document.getElementById('browse-home')
+        ?.addEventListener('click', () => navigateDir(_getDefaultBrowsePath()));
+    document.getElementById('browse-root')?.addEventListener('click', () => navigateDir('/'));
     document.addEventListener('keydown', onBrowseKeydown);
 
     // "Show hidden" toggle: persist the choice and reload the current directory.

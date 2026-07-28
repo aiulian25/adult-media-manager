@@ -62,7 +62,7 @@
                 </select>
                 <div class="fusion-nav">
                     <button id="btn-library" class="glass-btn" title="Library — catalog stats &amp; duplicates">
-                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                             <ellipse cx="12" cy="5" rx="9" ry="3"/>
                             <path d="M3 5v14a9 3 0 0 0 18 0V5"/>
                             <path d="M3 12a9 3 0 0 0 18 0"/>
@@ -70,14 +70,14 @@
                         <span data-i18n="nav.library">Library</span>
                     </button>
                     <button id="btn-history" class="glass-btn" title="View rename history">
-                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                             <path d="M3 3v5h5M3.05 13A9 9 0 1 0 6 5.3L3 8"/>
                             <path d="M12 7v5l4 2"/>
                         </svg>
                         <span data-i18n="nav.history">History</span>
                     </button>
                     <button id="btn-settings" class="glass-btn" title="Settings">
-                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                             <circle cx="12" cy="12" r="3"/>
                             <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
                         </svg>
@@ -388,24 +388,31 @@
                 <button class="modal-close" id="modal-close">&times;</button>
             </div>
             <div class="modal-body">
-                <div class="browse-mode-toggle" style="margin-bottom: 15px; display: flex; gap: 10px;">
-                    <button id="browse-mode-folder" class="glass-btn active" onclick="updateBrowseSelectionMode('folder')" style="flex: 1;" data-i18n="modal.browse_select_folder">📁 Select Folder</button>
-                    <button id="browse-mode-files" class="glass-btn" onclick="updateBrowseSelectionMode('files')" style="flex: 1;" data-i18n="modal.browse_select_files">📄 Select Files</button>
+                <!-- Docker / browser only: the desktop builds hand off to the OS
+                     picker (electronAPI.pickPaths) and never open this. -->
+                <div class="b-bar">
+                    <div class="b-seg">
+                        <button type="button" id="browse-mode-folder" class="b-seg-btn is-on" data-i18n="modal.browse_select_folder">Select folder</button>
+                        <button type="button" id="browse-mode-files" class="b-seg-btn" data-i18n="modal.browse_select_files">Select files</button>
+                    </div>
+                    <span class="b-spacer"></span>
+                    <label class="b-hidden"><input type="checkbox" id="browse-show-hidden"><span data-i18n="modal.browse_show_hidden">Show hidden</span></label>
                 </div>
-                <div style="display:flex;align-items:center;gap:8px;margin-bottom:15px;">
-                    <button id="browse-back" class="glass-btn" onclick="browseBack()" style="padding:5px 11px;font-size:15px;line-height:1;" title="Go back" disabled>&#8592;</button>
-                    <button id="browse-home" class="glass-btn" onclick="navigateDir(_getDefaultBrowsePath())" style="padding:5px 11px;font-size:13px;line-height:1;white-space:nowrap;" title="Home" data-i18n="modal.browse_home">🏠 Home</button>
-                    <button id="browse-root" class="glass-btn" onclick="navigateDir('/')" style="padding:5px 11px;font-size:13px;line-height:1;" title="Root (/)">/</button>
-                    <div id="browse-path" class="browse-path" style="margin-bottom:0;flex:1;"></div>
-                    <label class="cb-label" style="white-space:nowrap;font-size:13px;"><input type="checkbox" id="browse-show-hidden"><span data-i18n="modal.browse_show_hidden">Show hidden</span></label>
+                <div class="b-nav">
+                    <button type="button" id="browse-back" class="b-ico" title="Go back" aria-label="Go back" disabled>&#8592;</button>
+                    <button type="button" id="browse-home" class="b-ico" data-i18n-attr="title" data-i18n="modal.browse_home" title="Home" aria-label="Home">&#8962;</button>
+                    <button type="button" id="browse-root" class="b-ico" title="Root (/)" aria-label="Root">/</button>
+                    <!-- truncates from the LEFT (dir:rtl) so the folder you are
+                         in stays visible on a deep path -->
+                    <div id="browse-path" class="b-crumb"></div>
                 </div>
-                <div id="selection-counter" style="display:none; padding: 8px; margin-bottom: 10px; background: var(--accent-soft); border-radius: 8px; text-align: center; font-size: 14px;"></div>
-                <div id="browse-kbd-hint" style="display:none; margin-bottom:10px; font-size:12px; color:var(--text-muted); text-align:center;" data-i18n="modal.browse_kbd_hint">Tip: click checkboxes, or use ↑/↓ to move · Space to toggle · Shift+↑/↓ or Shift+Click for a range · Ctrl+A to select all</div>
-                <div id="browse-list" class="browse-list"></div>
+                <div id="browse-list" class="b-list"></div>
+                <div id="browse-kbd-hint" class="b-hint" hidden data-i18n="modal.browse_kbd_hint">Tip: click checkboxes, or use ↑/↓ to move · Space to toggle · Shift+↑/↓ or Shift+Click for a range · Ctrl+A to select all</div>
             </div>
-            <div class="modal-footer">
-                <button id="browse-cancel" class="glass-btn" data-i18n="modal.browse_cancel">Cancel</button>
-                <button id="browse-select" class="glass-btn btn-primary" data-i18n="modal.browse_select">Select Folder</button>
+            <div class="modal-footer b-foot">
+                <span id="selection-counter" class="b-count"></span>
+                <button id="browse-cancel" class="btn btn-secondary" data-i18n="modal.browse_cancel">Cancel</button>
+                <button id="browse-select" class="btn btn-primary" data-i18n="modal.browse_select">Select folder</button>
             </div>
         </div>
     </div>

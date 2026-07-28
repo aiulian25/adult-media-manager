@@ -536,17 +536,37 @@ function _showUnmatchedPanel() {
  * @param {string} jobId   - The hex job id returned by /api/rename
  * @param {number} total   - Total files in the batch (for the status label)
  */
-// F13: poll pacing. After the fast window (10 min) the poller DEGRADES to a
-// 30-second slow poll instead of quitting — the backend job store is durable
-// and a single remux is allowed up to an hour, so the UI must not abandon a
-// live job. Module-level `let`s so tests can shrink them.
+// F13: poll pacing. After the fast window the poller DEGRADES to a 30-second
+// slow poll instead of quitting — the backend job store is durable and a single
+// remux is allowed up to an hour, so the UI must not abandon a live job.
+// Module-level `let`s so tests can shrink them.
 // F1: 1 s (was 2 s) — the backend no longer blocks its event loop on embed
 // bookkeeping, so a 1 s repaint is honest real-time rather than a queued poll.
 let EMBED_POLL_INTERVAL_MS = 1000;
-// Tick count kept equivalent to the same 10-minute fast window (600 × 1 s):
-// halving the interval without this would have halved the window to 5 min.
-let EMBED_POLL_FAST_LIMIT  = 600;    // ticks at fast pace (600 × 1 s = 10 min)
+// F2: the window counts QUIET polls, not elapsed ones. It used to be a plain
+// stopwatch (`polls >= LIMIT`), so a batch that was remuxing perfectly happily
+// dropped to one repaint per 30 s at the 10-minute mark — bars and counter
+// crawling exactly when a long job most needs to look alive. Now only a job
+// that reports nothing new for 600 consecutive polls slows down, and the first
+// change snaps it straight back. Each poll is a microsecond in-memory dict read
+// server-side (see embed_status in main.py), so staying fast costs nothing.
+let EMBED_POLL_FAST_LIMIT  = 600;    // consecutive UNCHANGED polls (= 10 quiet min)
 let EMBED_POLL_SLOW_MS     = 30000;
+
+/**
+ * Fingerprint of everything the user can SEE moving in an embed-status payload:
+ * the done counter and each file's status + progress.
+ *
+ * `elapsed` is deliberately excluded — it ticks on every poll by definition, so
+ * including it would make every job look busy and the slow poll unreachable.
+ * `warnings` is covered by `done` (the server appends a warning only in
+ * _job_progress, which increments done in the same call).
+ */
+function _embedProgressSig(job) {
+    const files = Array.isArray(job.files) ? job.files : [];
+    return job.done + '/' + job.total + '|' +
+        files.map(f => f.status + ':' + f.progress).join(',');
+}
 
 // ── Embed queue panel ─────────────────────────────────────────────────────────
 // Self-managing per-file progress view (mockup B): appears above the Rename
@@ -777,6 +797,11 @@ async function _pollEmbedStatus(jobId, total) {
     let polls = 0;
     let netFails = 0;
     let slowNotified = false;  // one-time "still embedding" notice on escalation
+    // F2: consecutive polls whose payload was byte-identical to the previous
+    // one. Reset to 0 by any observable change, so the fast window only closes
+    // on a genuinely stalled job.
+    let quietPolls = 0;
+    let lastSig = null;
 
     // Mark embedding as active — enables beforeunload guard and banner
     _embedInProgress = true;
@@ -796,6 +821,10 @@ async function _pollEmbedStatus(jobId, total) {
             }
             netFails = 0;  // reachable again — reset the failure streak
             const job = await res.json();
+            // F2: did anything the user can see actually move since last poll?
+            const sig = _embedProgressSig(job);
+            quietPolls = (sig === lastSig) ? quietPolls + 1 : 0;
+            lastSig = sig;
             const statusText = t('status.embedding', { done: job.done, total: job.total });
             showStatus(statusText, 'info');
             progressFill.style.width =
@@ -817,9 +846,14 @@ async function _pollEmbedStatus(jobId, total) {
                 }
                 _finishEmbedPolling(job.warnings);
             } else {
-                // F13: past the fast window, degrade to the slow poll — never
-                // abandon a live job. The one-time notice explains the pace.
-                const slow = polls >= EMBED_POLL_FAST_LIMIT;
+                // F13/F2: degrade to the slow poll only once the job has gone
+                // QUIET for the whole window — never abandon a live job, and
+                // never throttle one that is still visibly working. Any change
+                // resets quietPolls to 0, so a batch that resumes goes straight
+                // back to the fast cadence (and can notify again if it stalls
+                // a second time).
+                const slow = quietPolls >= EMBED_POLL_FAST_LIMIT;
+                if (!slow) slowNotified = false;
                 if (slow && !slowNotified) {
                     slowNotified = true;
                     showStatus(t('embed.long_running'), 'info');

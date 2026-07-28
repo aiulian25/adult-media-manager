@@ -185,9 +185,14 @@ _job_store = JobStore(DATA_DIR / "jobs.db")
 def _job_create(job_id: str, total: int, kind: str = "embed") -> dict:
     """Register a background embed job in memory AND in the durable store."""
     complete = total == 0  # trivially complete if there's nothing to embed
+    _now = _time.monotonic()
     job = {
         "total": total, "done": 0, "warnings": [],
-        "complete": complete, "created": _time.monotonic(),
+        "complete": complete, "created": _now,
+        # A COMPLETE job always carries its finish time — the TTL sweep in
+        # embed_status keys on it. This trivially-complete path (total == 0)
+        # never reaches _job_finish, so it must stamp its own.
+        "finished": _now if complete else None,
         # Per-file live states for the embed queue panel: [{name, status,
         # detail}] in processing (natural) order. status: pending | embedding |
         # done | warning | error. Memory-only — after a server restart the
@@ -3051,17 +3056,27 @@ async def _run_manual_embed_job(
     entry = None
     _mjob = _embed_jobs.get(job_id)
     if _mjob is not None:
-        try:
-            _msize = file_path.stat().st_size
-        except OSError:
-            _msize = None
-        entry = {"name": file_path.name, "status": "embedding",
+        # Off the loop (F1 discipline, same as the batch path's _build_entries):
+        # a stat on a sleeping NAS mount must not block the event loop.
+        def _stat_size():
+            try:
+                return file_path.stat().st_size
+            except OSError:
+                return None
+        _msize = await asyncio.to_thread(_stat_size)
+        # "pending" until the semaphore is actually acquired — matching the batch
+        # path (see _run_embed_phase's entry builder). Claiming "embedding" while
+        # queued behind three other remuxes showed a spinner for work that had
+        # not started.
+        entry = {"name": file_path.name, "status": "pending",
                  "detail": None, "size": _msize, "progress": None}
         _mjob.setdefault("files", []).append(entry)
 
     embed_failed = False
     try:
         async with _get_embed_sem():
+            if entry is not None:
+                entry["status"] = "embedding"
             _pcb = ((lambda p, _e=entry: _e.__setitem__("progress", round(p * 100, 1)))
                     if entry is not None else None)
             ok, err = await _embed_for_mode(file_path, metadata, embed_mode,
@@ -3124,9 +3139,27 @@ async def embed_status(job_id: str):
     if not job_id.isalnum() or len(job_id) != 32:
         raise HTTPException(status_code=400, detail="Invalid job_id")
 
-    # Prune stale entries (TTL-based; cheap O(n) scan on a tiny dict)
+    # Prune stale entries (cheap O(n) scan on a tiny dict).
+    #
+    # F1 — a RUNNING job is never evicted, however long its batch takes. The TTL
+    # clock starts at COMPLETION, exactly like the durable layer
+    # (JobStore.prune deletes `status IN (_TERMINAL)` rows only, jobs.py).
+    # Keying on "created" meant this very poll deleted the live job of any batch
+    # whose embed phase outlived 10 minutes — routine for a multi-GB remux over
+    # NAS. The fallout was silent and total: `files[]` vanished (the queue panel
+    # froze at its last paint), _job_progress's `job is None` early return
+    # stopped BOTH the in-memory count and the durable mirror, warnings raised
+    # afterwards were dropped, _job_finish skipped the F6 stranded-row sweep,
+    # and the batch ended "complete" at a stale count with every later file
+    # mislabelled "Embed state unknown". Reproduced with EMBED_JOB_TTL=1: two
+    # further completions left done at 1/5, and finish reported complete=true,
+    # done=1/5.
     now = _time.monotonic()
-    stale = [k for k, v in _embed_jobs.items() if now - v["created"] > EMBED_JOB_TTL]
+    stale = [
+        k for k, v in _embed_jobs.items()
+        if v.get("complete")
+        and now - (v.get("finished") or v.get("created", now)) > EMBED_JOB_TTL
+    ]
     for k in stale:
         _embed_jobs.pop(k, None)
 
@@ -4740,21 +4773,37 @@ _FFMPEG_OUT_SUFFIX: dict[str, str] = {
 }
 
 async def _run_ffmpeg_with_progress(cmd: list, timeout: float,
-                                    on_pct=None, duration: Optional[float] = None
+                                    on_pct=None, duration: Optional[float] = None,
+                                    total_bytes: Optional[int] = None
                                     ) -> tuple[Optional[int], str]:
     """Run an ffmpeg command, streaming its ``-progress pipe:1`` feed.
 
     Returns (returncode, stderr_text); returncode None means timeout (process
-    killed). ``on_pct`` receives 0..1 fractions computed from ffmpeg's live
-    ``out_time`` against ``duration`` — REAL progress from the muxer itself,
-    not a timer. stdout (progress lines) and stderr (errors) are read
-    concurrently so neither pipe can fill up and deadlock the process.
+    killed). ``on_pct`` receives 0..1 fractions — REAL progress reported by the
+    muxer itself, never a timer. Two measured sources, in preference order:
+
+      • ``duration`` (seconds): fraction = live ``out_time_us`` / duration.
+        Preferred — presentation time is linear regardless of bitrate, so a
+        VBR file's bar advances evenly.
+      • ``total_bytes``: fraction = live ``total_size`` / total_bytes. Used
+        only when the duration probe came back empty (F3) — ffprobe timing out
+        on a sleeping NAS mount, a missing binary, or a header without a
+        duration. For ``-codec copy`` the output tracks the input closely
+        (measured: 69,132,082 → 69,129,362 bytes, 0.004%), but "closely" is not
+        "exactly", so this branch is capped below 1.0: the bar must never claim
+        a completion the process has not reported.
+
+    stdout (progress lines) and stderr (errors) are read concurrently so
+    neither pipe can fill up and deadlock the process.
     """
     proc = await asyncio.create_subprocess_exec(
         *cmd,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
+
+    # Byte ratio is the fallback only — if a duration is known it wins outright.
+    _use_bytes = bool(on_pct) and not duration and bool(total_bytes)
 
     async def _read_progress():
         while True:
@@ -4765,6 +4814,14 @@ async def _run_ffmpeg_with_progress(cmd: list, timeout: float,
                 try:
                     us = int(line.split(b"=", 1)[1])
                     on_pct(max(0.0, min(1.0, (us / 1_000_000) / duration)))
+                except ValueError:
+                    pass
+            elif _use_bytes and line.startswith(b"total_size="):
+                # ffmpeg prints "N/A" before the first packet is muxed; int()
+                # raises and the sample is skipped, exactly like the branch above.
+                try:
+                    written = int(line.split(b"=", 1)[1])
+                    on_pct(max(0.0, min(0.99, written / total_bytes)))
                 except ValueError:
                     pass
 
@@ -4851,16 +4908,34 @@ async def embed_metadata(file_path: Path, metadata: dict,
     os.close(tmp_fd)
     tmp_path = Path(tmp_str)
 
+    # Source size, stat'ed ONCE and off the loop (a stat on a sleeping NAS mount
+    # must not block the event loop — F1 discipline). Feeds both the F3
+    # byte-ratio progress fallback and the dynamic timeout further down, which
+    # used to stat the file again inline.
+    def _src_size() -> Optional[int]:
+        try:
+            return file_path.stat().st_size
+        except OSError:
+            return None
+    src_bytes = await asyncio.to_thread(_src_size)
+
     # Two-phase accurate progress (queue-panel underline bar): remux 0–50%,
-    # NAS copy-back 50–100%. Without a probeable duration the remux phase
-    # can't report, so the copy phase takes the full 0–100 range instead of
-    # lying at 50% — the bar only ever shows measured numbers.
+    # NAS copy-back 50–100%. Both halves report MEASURED numbers only.
+    #
+    # F3 — the remux half has two possible measurements, in preference order:
+    # presentation time (out_time / duration) when the duration probes, byte
+    # ratio (total_size / source size) when it does not. The probe returns None
+    # for real, routine reasons — ffprobe hitting its 8 s timeout on a sleeping
+    # NAS mount, a header without a duration — and the remux is the LONG phase,
+    # so "no duration" used to mean a spinner and nothing else for the entire
+    # rewrite. Only when neither measurement exists does the remux stay silent
+    # and the copy-back take the whole 0–100 range, rather than lying at 50%.
     duration = None
     if progress_cb:
         duration = await asyncio.to_thread(_probe_duration_seconds, file_path)
-    _w_remux = 0.5 if duration else 0.0
+    _w_remux = 0.5 if (duration or src_bytes) else 0.0
     def _remux_pct(p):
-        if progress_cb and duration:
+        if progress_cb and _w_remux:
             progress_cb(p * _w_remux)
     def _copy_pct(p):
         if progress_cb:
@@ -4895,14 +4970,13 @@ async def embed_metadata(file_path: Path, metadata: dict,
         # Dynamic timeout: 300 s base + 180 s per GB, capped at 3600 s (1 hour).
         # -codec copy is I/O-bound; large files on slow NAS mounts need generous
         # headroom.  The previous formula under-estimated for files > 2.5 GB.
-        try:
-            file_size_bytes = file_path.stat().st_size
-            timeout = min(3600, 300 + int(file_size_bytes / (1024 ** 3) * 180))
-        except OSError:
-            timeout = 600
+        # Reuses the single stat taken above (unreadable size → the old 600 s).
+        timeout = (min(3600, 300 + int(src_bytes / (1024 ** 3) * 180))
+                   if src_bytes else 600)
 
         returncode, stderr_text = await _run_ffmpeg_with_progress(
-            cmd, timeout, on_pct=_remux_pct, duration=duration)
+            cmd, timeout, on_pct=_remux_pct, duration=duration,
+            total_bytes=src_bytes)
         if returncode is None:
             tmp_path.unlink(missing_ok=True)
             return False, f"FFmpeg timed out after {timeout}s during metadata embedding"
@@ -4933,7 +5007,8 @@ async def embed_metadata(file_path: Path, metadata: dict,
                 tmp_path = Path(tmp_str2)
                 cmd_va[-1] = str(tmp_path)
                 returncode2, stderr_text2 = await _run_ffmpeg_with_progress(
-                    cmd_va, timeout, on_pct=_remux_pct, duration=duration)
+                    cmd_va, timeout, on_pct=_remux_pct, duration=duration,
+                    total_bytes=src_bytes)
                 if returncode2 is None:
                     tmp_path.unlink(missing_ok=True)
                     return False, f"FFmpeg timed out after {timeout}s during metadata embedding"

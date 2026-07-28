@@ -71,12 +71,20 @@ Clean, flat interface with a live naming-template preview and three built-in the
 
 ---
 
+## What's New in v1.12.12
+
+- **Live embed progress actually stays live** — three separate faults made a long remux go dark. (1) The status poll pruned its own in-memory job on a 10-minute *creation* timer with no check for whether the job was still running, so any batch that outlived it lost its per-file rows, froze its counter — in memory *and* in the durable mirror — dropped later warnings, and finished "complete" at a stale count with every remaining file mislabelled "state unknown". The timer now starts at completion, so a running job is never evicted. (2) The client dropped from 1-second to 30-second polling on a plain stopwatch; it now counts *unchanged* polls, so a batch that is visibly working stays at 1 second however long it runs, and one that genuinely stalls still backs off. (3) A file whose duration could not be probed — ffprobe timing out on a sleeping NAS mount — reported nothing at all for the whole rewrite; the bar is now driven by ffmpeg's own byte counter instead, capped below 100% so it can never claim a completion the muxer hasn't reported.
+- **The file picker joins the rest of the UI** (Docker and browser only — desktop builds use the OS picker). Entries drop from 40px bordered cards to ~28px hairline rows with monospace names, directories marked by a trailing `/` rather than an emoji. The mode switch is one segmented control, the path breadcrumb truncates from the left so the folder you are in stays visible, and the footer states what you are about to pick — `2 files selected · 3.5 GB` — with the button naming the count.
+- **Toolbar icons sized to 22px**, leaving a clear ring inside each button.
+
+---
+
 ## What's New in v1.12.11
 
 - **The embed queue can no longer freeze on a spinner** — if a file's post-embed bookkeeping raised, the exception escaped the gather and the job never reached its finish handler, so the client stopped polling with rows still spinning, forever. Every file now finishes under a crash guard, and any row still marked pending when a job ends is reconciled to a warning with an explicit reason instead of spinning silently.
 - **One visual language across the whole app** — the unmatched-files notice, the rename preview, the scanned-files list, the update banner, Rename History and Settings were each built with their own borders, fonts and spacing. They now share one: hairline rows, monospace filenames, a 16px status column, and a single rule between sections. Nothing is a card floating inside another card.
 - **Scanning and reviewing are far denser** — scanned files drop from ~80px cards to ~28px rows (a 23-file scan is one screen, not three), and the rename preview and history print the folder every path shares once instead of on every line, so the part that actually changes is what you read.
-- **Toolbar icons are legible again** — the Library, History and Settings glyphs were rendering 8px wide by 20px tall, squashed by a CSS rule that outranked their own sizing. They are now 24px and square, and `npm run check:ui` asserts the rendered geometry so the regression can't ship again.
+- **Toolbar icons are legible again** — the Library, History and Settings glyphs were rendering 8px wide by 20px tall, squashed by a CSS rule that outranked their own sizing. They are square now and fill their button, and `npm run check:ui` asserts the rendered geometry so the regression can't ship again.
 - **Removing a saved API key is visible** — the Remove control next to each key is amber instead of muted grey; several people never noticed the option existed.
 
 See the [releases page](https://github.com/aiulian25/adult-media-manager/releases) for full notes on every version.
@@ -163,10 +171,10 @@ No Docker required. Ships a self-contained Python 3.12 runtime — no system Pyt
 
 ### AppImage (recommended — no root required)
 
-1. Download `Adult.Media.Manager-1.12.11.AppImage`
+1. Download `Adult.Media.Manager-1.12.12.AppImage`
 2. Make it executable:
    ```bash
-   chmod +x Adult.Media.Manager-1.12.11.AppImage
+   chmod +x Adult.Media.Manager-1.12.12.AppImage
    ```
 3. Double-click it (or run it from the terminal)
 
@@ -182,7 +190,7 @@ From that point, launch it from your application menu. The original downloaded f
 ### .deb Package (Debian / Ubuntu / Mint)
 
 ```bash
-sudo apt install ./adult-media-manager_1.12.11_amd64.deb
+sudo apt install ./adult-media-manager_1.12.12_amd64.deb
 ```
 
 Launch **Adult Media Manager** from your application menu, or:
@@ -196,7 +204,7 @@ Launch **Adult Media Manager** from your application menu, or:
 Requires [RPM Fusion](https://rpmfusion.org/) enabled for the `ffmpeg` / `mkvtoolnix` media tools (used as fallback — the package also ships its own bundled copies):
 
 ```bash
-sudo dnf install ./adult-media-manager-1.12.11.x86_64.rpm
+sudo dnf install ./adult-media-manager-1.12.12.x86_64.rpm
 ```
 
 Remove with `sudo dnf remove adult-media-manager`.
