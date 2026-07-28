@@ -404,6 +404,7 @@
   "library.store_cache": "Match-Cache",
   "library.store_aliases": "Gelernte Aliase",
   "library.store_history": "Verlaufseinträge",
+  "library.store_embeds": "Protokollierte Einbettungen",
   "library.store_thumbs": "Vorschaubilder",
   "library.clear_cache": "Match-Cache leeren",
   "library.clear_cache_confirm": "Match-Cache leeren? Alle UNBESTÄTIGTEN zwischengespeicherten Treffer werden entfernt und beim nächsten Abgleich neu abgefragt. Bestätigte Treffer bleiben erhalten.",

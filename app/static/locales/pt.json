@@ -404,6 +404,7 @@
   "library.store_cache": "Cache de correspondências",
   "library.store_aliases": "Aliases aprendidos",
   "library.store_history": "Entradas de histórico",
+  "library.store_embeds": "Incorporações registadas",
   "library.store_thumbs": "Miniaturas",
   "library.clear_cache": "Limpar cache",
   "library.clear_cache_confirm": "Limpar o cache de correspondências? Todas as correspondências NÃO confirmadas serão removidas e consultadas novamente na próxima correspondência. As confirmadas são mantidas.",

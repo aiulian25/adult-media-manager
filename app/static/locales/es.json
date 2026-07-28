@@ -404,6 +404,7 @@
   "library.store_cache": "Caché de coincidencias",
   "library.store_aliases": "Alias aprendidos",
   "library.store_history": "Entradas de historial",
+  "library.store_embeds": "Incrustaciones registradas",
   "library.store_thumbs": "Miniaturas",
   "library.clear_cache": "Vaciar caché",
   "library.clear_cache_confirm": "¿Vaciar la caché de coincidencias? Se eliminan todas las coincidencias NO confirmadas y se volverán a consultar en el próximo emparejamiento. Las confirmadas se conservan.",

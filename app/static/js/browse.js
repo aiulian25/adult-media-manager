@@ -474,6 +474,8 @@ function _libraryStatTiles(s) {
                 ${tile('library.store_cache', st.match_cache.count)}
                 ${tile('library.store_aliases', st.aliases.count)}
                 ${tile('library.store_history', st.history.count)}
+                ${/* F3: embeds recorded in the durable audit trail */ ''}
+                ${st.embed_log ? tile('library.store_embeds', st.embed_log.count) : ''}
                 ${tile('library.store_thumbs', escapeHtml(formatFileSize(st.thumbnails.bytes)), true)}
                 <div class="library-maint-btns">
                     <button class="glass-btn" id="library-clear-cache">🧹 ${escapeHtml(t('library.clear_cache'))}</button>

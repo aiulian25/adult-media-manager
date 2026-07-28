@@ -404,6 +404,7 @@
   "library.store_cache": "マッチキャッシュ",
   "library.store_aliases": "学習済みエイリアス",
   "library.store_history": "履歴エントリ",
+  "library.store_embeds": "記録された埋め込み",
   "library.store_thumbs": "サムネイル",
   "library.clear_cache": "キャッシュを消去",
   "library.clear_cache_confirm": "マッチキャッシュを消去しますか？未確認のキャッシュ済みマッチはすべて削除され、次回のマッチングで再取得されます。確認済みのマッチは保持されます。",

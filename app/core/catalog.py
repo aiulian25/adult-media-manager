@@ -58,6 +58,18 @@ _SCAN_COLUMNS = (
 _PHASH_HAMMING_MAX = 8
 _PHASH_GROUP_MAX_ROWS = 20000
 
+# F3 embed-log retention. Every other persistent store in AMM is bounded
+# (AMM_HISTORY_MAX, AMM_MATCH_CACHE_MAX); an append-only audit table must be too,
+# or re-embedding a large library repeatedly grows catalog.db without limit.
+# 0 = unlimited (explicit opt-out). Pruning is amortised: the oldest rows are
+# trimmed once every _EMBED_LOG_PRUNE_EVERY inserts, not on every write.
+_EMBED_LOG_MAX = 20000
+_EMBED_LOG_PRUNE_EVERY = 500
+# Durable store, so cap the free-text reason defensively even though the caller
+# (app.main._embed_one) already truncates it — a log must not become the place
+# an unbounded ffmpeg stderr lands.
+_EMBED_LOG_DETAIL_MAX = 500
+
 
 def _split_sizes(raw) -> list[int]:
     """Split a ``GROUP_CONCAT(size, char(10))`` blob into a list of ints.
@@ -83,6 +95,8 @@ class Catalog:
         self.db_path = Path(db_path)
         self._lock = threading.RLock()
         self._conn: Optional[sqlite3.Connection] = None
+        # F3: insert counter driving amortised embed_log pruning (see log_embed).
+        self._embed_log_writes = 0
         try:
             self._conn = sqlite3.connect(
                 str(self.db_path), check_same_thread=False
@@ -120,6 +134,25 @@ class Catalog:
             """
         )
         c.execute("CREATE INDEX IF NOT EXISTS idx_files_oshash ON files(oshash)")
+        # F3 — per-file embed audit trail. Additive table (CREATE IF NOT EXISTS),
+        # so an existing catalog.db upgrades in place with no migration step and
+        # no schema-version bump: nothing reads or writes it on older builds.
+        # A LOG, not a state table: rows are append-only history keyed by the
+        # path as it was at embed time, so a later rename does not rewrite them.
+        c.execute(
+            """
+            CREATE TABLE IF NOT EXISTS embed_log (
+                path      TEXT    NOT NULL,
+                mode      TEXT,
+                status    TEXT,
+                detail    TEXT,
+                bytes     INTEGER,
+                elapsed_s REAL,
+                at        REAL    NOT NULL
+            )
+            """
+        )
+        c.execute("CREATE INDEX IF NOT EXISTS idx_embed_log_path ON embed_log(path)")
         c.execute(f"PRAGMA user_version={_SCHEMA_VERSION}")
         c.commit()
 
@@ -356,6 +389,99 @@ class Catalog:
                 self._conn.commit()
         except Exception as e:
             print(f"WARNING: catalog forget failed: {e}")
+
+    # ── embed audit trail (F3) ──────────────────────────────────────────────
+    def log_embed(self, path: str, mode: Optional[str], status: Optional[str],
+                  detail: Optional[str], bytes_: Optional[int],
+                  elapsed_s: Optional[float]) -> None:
+        """Append one embed outcome for ``path`` (best-effort, never raises).
+
+        Durable answer to "did this file actually get remuxed, when, in which
+        mode, and why did it warn/fail" — the in-memory job dict that carries
+        this today is discarded after EMBED_JOB_TTL (10 min).
+
+        Retention is amortised here rather than in a background task: once every
+        _EMBED_LOG_PRUNE_EVERY inserts the oldest rows beyond _EMBED_LOG_MAX are
+        deleted (by rowid, which is monotonic for an append-only table), so the
+        common path stays a single INSERT.
+        """
+        if not self._conn or not path:
+            return
+        if detail is not None:
+            detail = str(detail)[:_EMBED_LOG_DETAIL_MAX]
+        try:
+            with self._lock:
+                self._conn.execute(
+                    """
+                    INSERT INTO embed_log
+                        (path, mode, status, detail, bytes, elapsed_s, at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (path, mode, status, detail, bytes_, elapsed_s, time.time()),
+                )
+                self._embed_log_writes += 1
+                if (_EMBED_LOG_MAX
+                        and self._embed_log_writes % _EMBED_LOG_PRUNE_EVERY == 0):
+                    self._conn.execute(
+                        """
+                        DELETE FROM embed_log WHERE rowid NOT IN (
+                            SELECT rowid FROM embed_log ORDER BY rowid DESC LIMIT ?
+                        )
+                        """,
+                        (_EMBED_LOG_MAX,),
+                    )
+                self._conn.commit()
+        except Exception as e:
+            print(f"WARNING: catalog log_embed failed: {e}")
+
+    def embed_log_for(self, path: str, limit: int = 20) -> list[dict]:
+        """Newest-first embed history for ``path`` (at most ``limit`` rows).
+
+        ``path`` is matched exactly as stored AND against its resolved form, so a
+        caller passing a symlinked or non-normalised variant of the same file
+        still finds its history. Returns [] when the catalog is disabled or on
+        any error — a reporting call must never break the UI.
+        """
+        if not self._conn or not path:
+            return []
+        try:
+            resolved = str(Path(path).resolve())
+        except Exception:
+            resolved = path
+        try:
+            with self._lock:
+                rows = self._conn.execute(
+                    """
+                    SELECT path, mode, status, detail, bytes, elapsed_s, at
+                    FROM embed_log
+                    WHERE path = ? OR path = ?
+                    ORDER BY at DESC, rowid DESC
+                    LIMIT ?
+                    """,
+                    (path, resolved, max(1, min(int(limit), 200))),
+                ).fetchall()
+            return [dict(r) for r in rows]
+        except Exception as e:
+            print(f"WARNING: catalog embed_log_for failed: {e}")
+            return []
+
+    def embed_log_stats(self) -> dict:
+        """{"count": rows, "last_at": newest epoch or None} for the Library tile.
+
+        One cheap aggregate query; returns zeros when the catalog is disabled so
+        the Library modal renders unchanged on a broken/absent catalog.
+        """
+        if not self._conn:
+            return {"count": 0, "last_at": None}
+        try:
+            with self._lock:
+                row = self._conn.execute(
+                    "SELECT COUNT(*) AS n, MAX(at) AS last_at FROM embed_log"
+                ).fetchone()
+            return {"count": int(row["n"] or 0), "last_at": row["last_at"]}
+        except Exception as e:
+            print(f"WARNING: catalog embed_log_stats failed: {e}")
+            return {"count": 0, "last_at": None}
 
     # ── reporting ───────────────────────────────────────────────────────────
     def stats(self) -> dict:

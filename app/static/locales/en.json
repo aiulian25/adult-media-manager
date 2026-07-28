@@ -404,6 +404,7 @@
   "library.store_cache": "Match cache",
   "library.store_aliases": "Learned aliases",
   "library.store_history": "History entries",
+  "library.store_embeds": "Embeds logged",
   "library.store_thumbs": "Thumbnails",
   "library.clear_cache": "Clear match cache",
   "library.clear_cache_confirm": "Clear the match cache? All UNCONFIRMED cached matches are removed and will be re-queried on the next match. Confirmed matches are kept.",

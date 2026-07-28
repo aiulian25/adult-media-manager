@@ -4,7 +4,7 @@ FROM python:3.11-slim
 # Single version source for the image: the ARG default feeds the LABEL AND the
 # runtime ENV (read by app.main._resolve_app_version + docker-entrypoint.sh), so a
 # release bump changes ONE line here. Keep it in sync with package.json's version.
-ARG AMM_VERSION=1.12.9
+ARG AMM_VERSION=1.12.10
 
 LABEL maintainer="Adult Media Manager <app@adultmediamanager.local>"
 LABEL description="Adult media metadata organizer with TPDB integration"
@@ -36,11 +36,19 @@ RUN apt-get update && \
 # Create application directory
 WORKDIR /app
 
-# Copy requirements first for better layer caching
-COPY requirements.txt .
+# Copy the dependency files first for better layer caching. requirements.lock is
+# the authoritative one (exact versions + sha256 for the whole transitive tree);
+# requirements.txt ships too so the image documents its own direct deps.
+COPY requirements.txt requirements.lock ./
 
-# Install Python dependencies
-RUN pip install --no-cache-dir -r requirements.txt
+# Install Python dependencies — REPRODUCIBLE (F5).
+# --require-hashes makes pip refuse anything whose sha256 is not in the lock, so
+# a rebuilt image contains a byte-identical dependency set and a compromised or
+# merely newer upstream release can never enter a build silently. The same lock
+# feeds the deb/rpm/AppImage bundle via prepare-build.sh, so all four targets
+# ship one dependency set. Verified to resolve on cp311 x86_64 AND aarch64
+# (this image is built multi-arch).
+RUN pip install --no-cache-dir --require-hashes -r requirements.lock
 
 # Copy application code
 COPY app/ ./app/

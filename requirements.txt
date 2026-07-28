@@ -1,9 +1,22 @@
+# Adult Media Manager — direct Python dependencies (human-facing summary).
+#
+# EXACT pins, no ranges: a build must never silently pick up a new upstream
+# release. The authoritative file for every build is requirements.lock, which
+# adds the full transitive closure plus sha256 hashes and is installed with
+# --require-hashes by BOTH the Dockerfile and prepare-build.sh (F5).
+#
+# Keep these versions identical to requirements.lock — the lock is what is
+# actually installed; this file documents intent and is used by nothing else.
+#
+# To bump: change the version here AND in requirements.lock (refresh that
+# package's hash block from PyPI), then rebuild.
+
 # Web framework
-fastapi>=0.100.0
-uvicorn[standard]>=0.22.0
+fastapi==0.140.7
+uvicorn[standard]==0.51.0
 
 # HTTP client
-httpx>=0.24.0
+httpx==0.28.1
 
 # Data validation
-pydantic>=2.0.0
+pydantic==2.13.4

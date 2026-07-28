@@ -201,14 +201,35 @@ def _job_create(job_id: str, total: int, kind: str = "embed") -> dict:
 
 
 def _job_progress(job_id: str, warning: Optional[dict] = None) -> None:
-    """Record one unit of progress (and an optional warning) for a job."""
+    """Record one unit of progress (and an optional warning) for a job.
+
+    The in-memory counter is bumped SYNCHRONOUSLY — the completion check in
+    _run_embed_phase reads job["done"] immediately after, so it must be exact.
+    Only the durable sqlite mirror is offloaded (F1): it is a commit on the
+    caller's thread, and with 3 concurrent embeds finishing together those
+    commits landed on the event loop and delayed /api/embed-status polls.
+    Fire-and-forget is safe — JobStore.progress swallows its own errors and the
+    row is a progress mirror, not the source of truth (the live job dict is).
+    """
     job = _embed_jobs.get(job_id)
     if job is None:
         return
     job["done"] += 1
     if warning:
         job["warnings"].append(warning)
-    _job_store.progress(job_id, job["done"], job["warnings"])
+    # Snapshot the warnings list: the executor thread must not iterate a list
+    # another coroutine may append to while json.dumps walks it.
+    done_snapshot = job["done"]
+    warn_snapshot = list(job["warnings"])
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None            # called from a sync context — persist inline
+    if loop is not None:
+        loop.run_in_executor(None, _job_store.progress, job_id,
+                             done_snapshot, warn_snapshot)
+    else:
+        _job_store.progress(job_id, done_snapshot, warn_snapshot)
 
 
 def _job_extend(job_id: str, extra_total: int) -> None:
@@ -1390,6 +1411,9 @@ def _store_stats() -> dict:
         "history": {"count": len(history.entries),
                     "bytes": _fsize(DATA_DIR / "history.json")},
         "thumbnails": {"count": th_count, "bytes": th_bytes},
+        # F3: durable embed audit trail — rows recorded + newest timestamp. Lives
+        # in catalog.db (already counted under its own file), so no bytes here.
+        "embed_log": catalog.embed_log_stats(),
     }
     _store_stats_cache.update(at=now, data=data)
     return data
@@ -1449,6 +1473,27 @@ async def clear_thumbnails():
             print(f"WARNING: clear-thumbnails failed: {e}")
     _store_stats_cache["data"] = None
     return {"freed_bytes": freed, "removed": removed}
+
+
+@app.get("/api/catalog/embed-log")
+async def catalog_embed_log(path: str = Query(..., min_length=1, max_length=4096),
+                            limit: int = Query(20, ge=1, le=200)):
+    """Durable per-file embed history (F3): newest first, at most ``limit`` rows.
+
+    Answers "was this file actually remuxed, when, in which mode, and why did it
+    warn/fail" after the in-memory job expired (EMBED_JOB_TTL, 10 min).
+
+    Read-only. The SAME allowed-roots guard every other path-taking endpoint
+    uses (/api/browse, /api/preview-paths, /api/save-manual-metadata) applies, so
+    this cannot be used to probe for the existence of files outside the
+    configured media directories. Rows are returned only for a path the caller
+    already knows; no listing/enumeration is exposed.
+    """
+    p = Path(path)
+    if not _is_allowed_path(p):
+        raise HTTPException(status_code=403,
+                            detail="Path not in an allowed media directory")
+    return {"entries": await asyncio.to_thread(catalog.embed_log_for, str(p), limit)}
 
 
 @app.get("/api/catalog/duplicates")
@@ -2749,9 +2794,18 @@ async def _refresh_fingerprint_after_embed(
         new_oshash = None
     if not new_oshash:
         return None
-    _match_cache_rekey(old_oshash, new_oshash, delete_old=delete_old)
+    # F1: both of these are BLOCKING disk I/O — the rekey rewrites the whole
+    # match_cache.json (up to AMM_MATCH_CACHE_MAX entries) and the catalog call
+    # is a sqlite write. Run inline they stall the single event loop right when
+    # 3 concurrent embeds finish together, which froze the embed-queue panel
+    # while /api/embed-status waited for a turn. Same offload the scan path
+    # already uses for catalog.upsert_scanned.
+    await asyncio.to_thread(_match_cache_rekey, old_oshash, new_oshash,
+                            delete_old=delete_old)
     try:
-        catalog.update_fingerprint(str(path), new_oshash, path.stat().st_size)
+        size = path.stat().st_size
+        await asyncio.to_thread(catalog.update_fingerprint, str(path),
+                                new_oshash, size)
     except Exception as e:
         print(f"WARNING: catalog fingerprint refresh failed: {e}")
     return new_oshash
@@ -2808,6 +2862,9 @@ async def _run_embed_phase(job_id: str, tasks: list, embed_mode: str = "embed") 
         warning = None
         new_oshash = None
         embed_failed = False
+        # F3: wall time for this ONE file, measured across the whole embed
+        # (semaphore wait included — that is real latency from the user's view).
+        _t0 = _time.monotonic()
         # Container write for embed/smart/embed_only (skipped for nfo_only). The
         # concurrency cap matters for the FFmpeg remux; nfo_only skips it entirely.
         if not nfo_only:
@@ -2843,7 +2900,9 @@ async def _run_embed_phase(job_id: str, tasks: list, embed_mode: str = "embed") 
                 if await _download_poster(meta["poster_url"], poster_dest):
                     meta = {**meta, "poster_path": poster_dest.name}
             try:
-                write_nfo(result.new_path, meta)
+                # F1: XML serialise + file write — off the loop (see the
+                # _refresh_fingerprint_after_embed note above).
+                await asyncio.to_thread(write_nfo, result.new_path, meta)
                 nfo_written = True
             except Exception as nfo_err:
                 if not warning:
@@ -2856,23 +2915,39 @@ async def _run_embed_phase(job_id: str, tasks: list, embed_mode: str = "embed") 
         # organised — a re-scan would clear the flag anyway (no sidecar on disk).
         if cat and nfo_written:
             try:
-                catalog.mark_organized(
-                    str(result.new_path),
-                    # Post-embed hash when the container was rewritten (F6);
-                    # the pre-embed one otherwise (nfo_only — bytes untouched).
-                    oshash=new_oshash or cat.get("oshash"),
-                    scene_id=cat.get("scene_id"),
-                    source=cat.get("source"),
-                    confidence=cat.get("confidence"),
-                    confirmed=cat.get("confirmed", False),
-                )
+                # F1: sqlite write — off the loop. A local closure keeps the
+                # keyword arguments (asyncio.to_thread forwards *args only
+                # cleanly, and these must not become positional by accident).
+                def _mark() -> None:
+                    catalog.mark_organized(
+                        str(result.new_path),
+                        # Post-embed hash when the container was rewritten (F6);
+                        # the pre-embed one otherwise (nfo_only — bytes untouched).
+                        oshash=new_oshash or cat.get("oshash"),
+                        scene_id=cat.get("scene_id"),
+                        source=cat.get("source"),
+                        confidence=cat.get("confidence"),
+                        confirmed=cat.get("confirmed", False),
+                    )
+                await asyncio.to_thread(_mark)
             except Exception as e:
                 print(f"WARNING: catalog mark_organized (phase 2) failed: {e}")
         # Final per-file state for the queue panel: container-write failure is
         # an "error" (red ✕), sidecar-only trouble a "warning" (amber ⚠).
+        _status = ("error" if embed_failed
+                   else "warning" if warning else "done")
         if entry is not None:
-            entry["status"] = ("error" if embed_failed
-                               else "warning" if warning else "done")
+            entry["status"] = _status
+        # F3: durable audit row — the in-memory job (and this status) is gone
+        # after EMBED_JOB_TTL, so persist mode/outcome/reason/bytes/duration.
+        # Off the loop (F1 discipline) and best-effort: catalog.log_embed
+        # swallows its own errors, and an audit write must never fail an embed.
+        await asyncio.to_thread(
+            catalog.log_embed, str(result.new_path), embed_mode, _status,
+            (entry.get("detail") if entry is not None else warning),
+            (entry.get("size") if entry is not None else None),
+            _time.monotonic() - _t0,
+        )
         _job_progress(
             job_id,
             {"path": str(result.new_path), "warning": warning} if warning else None,
@@ -2911,6 +2986,7 @@ async def _run_manual_embed_job(
     if job is None:
         return
 
+    _mt0 = _time.monotonic()   # F3: wall time for this single manual embed
     warning = None
     # Queue-panel entry for the manual save too ("port it everywhere") — one
     # file, same live states + size as the batch path.
@@ -2950,9 +3026,19 @@ async def _run_manual_embed_job(
         if entry is not None and entry.get("detail") is None:
             entry["detail"] = str(e)[:200]
 
+    _status = ("error" if embed_failed
+               else "warning" if warning else "done")
     if entry is not None:
-        entry["status"] = ("error" if embed_failed
-                           else "warning" if warning else "done")
+        entry["status"] = _status
+    # F3: manual saves are embeds too — log them on the SAME audit trail as the
+    # batch path, or "did this file get remuxed?" would have a blind spot for
+    # every file organised through Manual Edit.
+    await asyncio.to_thread(
+        catalog.log_embed, str(file_path), embed_mode, _status,
+        (entry.get("detail") if entry is not None else warning),
+        (entry.get("size") if entry is not None else None),
+        _time.monotonic() - _mt0,
+    )
     _job_progress(
         job_id, {"path": str(file_path), "warning": warning} if warning else None
     )

@@ -8,7 +8,7 @@
 #   bash prepare-build.sh
 #   npm run build
 #
-# Re-run whenever requirements.txt changes.
+# Re-run whenever requirements.lock changes (F5: the lock is authoritative).
 
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -77,11 +77,15 @@ fi
 # ── Install packages ──────────────────────────────────────────────────────────
 # --target installs flat into the directory — no venv, no symlinks, no ABI path issues.
 # We use the BUNDLED Python so all compiled extensions (.so) match exactly.
-REQ_HASH="$(sha256sum requirements.txt | awk '{print $1}')-${ARCH}"
+# Cache key follows requirements.LOCK (F5): the lock is what actually gets
+# installed, so a lock edit must invalidate bundled-packages/. requirements.txt
+# is included too — it is only documentation, but a mismatch between the two is
+# a mistake worth forcing a rebuild over.
+REQ_HASH="$(sha256sum requirements.lock requirements.txt | sha256sum | awk '{print $1}')-${ARCH}"
 HASH_FILE="${PACKAGES_DIR}/.req-hash"
 
 if [ -d "$PACKAGES_DIR" ] && [ -f "$HASH_FILE" ] && [ "$(cat "$HASH_FILE")" = "$REQ_HASH" ]; then
-    echo "✓ Packages up to date (requirements.txt unchanged, ${ARCH})"
+    echo "✓ Packages up to date (requirements.lock unchanged, ${ARCH})"
 else
     echo "→ Installing packages into ${PACKAGES_DIR}/ (${ARCH}) ..."
     rm -rf "$PACKAGES_DIR"
@@ -98,8 +102,9 @@ else
             --only-binary=:all: \
             --python-version "${PY_VERSION%.*}" \
             --implementation cp \
+            --require-hashes \
             --quiet \
-            -r requirements.txt
+            -r requirements.lock
     else
         "${PYTHON_DIR}/bin/pip3" install \
             --target="${PACKAGES_DIR}" \
@@ -107,10 +112,13 @@ else
             --quiet \
             pip setuptools wheel
 
+        # --require-hashes (F5): identical dependency set to the Docker image;
+        # pip refuses any file whose sha256 is not in the lock.
         "${PYTHON_DIR}/bin/pip3" install \
             --target="${PACKAGES_DIR}" \
+            --require-hashes \
             --quiet \
-            -r requirements.txt
+            -r requirements.lock
     fi
 
     # Remove pip/setuptools from the bundle — not needed at runtime

@@ -451,8 +451,12 @@ function _showUnmatchedPanel() {
 // 30-second slow poll instead of quitting — the backend job store is durable
 // and a single remux is allowed up to an hour, so the UI must not abandon a
 // live job. Module-level `let`s so tests can shrink them.
-let EMBED_POLL_INTERVAL_MS = 2000;
-let EMBED_POLL_FAST_LIMIT  = 300;    // ticks at fast pace (300 × 2 s = 10 min)
+// F1: 1 s (was 2 s) — the backend no longer blocks its event loop on embed
+// bookkeeping, so a 1 s repaint is honest real-time rather than a queued poll.
+let EMBED_POLL_INTERVAL_MS = 1000;
+// Tick count kept equivalent to the same 10-minute fast window (600 × 1 s):
+// halving the interval without this would have halved the window to 5 min.
+let EMBED_POLL_FAST_LIMIT  = 600;    // ticks at fast pace (600 × 1 s = 10 min)
 let EMBED_POLL_SLOW_MS     = 30000;
 
 // ── Embed queue panel ─────────────────────────────────────────────────────────
