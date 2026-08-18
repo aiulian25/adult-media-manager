@@ -22,8 +22,12 @@ ENV PYTHONUNBUFFERED=1 \
     DATA_DIR=/data \
     AMM_VERSION=${AMM_VERSION}
 
-# Install system dependencies
+# Install system dependencies.
+# `upgrade` applies the base image's outstanding security updates — python:3.11-slim
+# is rebuilt on its own cadence, so without this the image ships whatever CVEs were
+# open the day that tag was cut (trivy caught the util-linux family this way).
 RUN apt-get update && \
+    apt-get upgrade -y && \
     apt-get install -y --no-install-recommends \
         ca-certificates \
         curl \
@@ -48,7 +52,12 @@ COPY requirements.txt requirements.lock ./
 # feeds the deb/rpm/AppImage bundle via prepare-build.sh, so all four targets
 # ship one dependency set. Verified to resolve on cp311 x86_64 AND aarch64
 # (this image is built multi-arch).
-RUN pip install --no-cache-dir --require-hashes -r requirements.lock
+RUN pip install --no-cache-dir --require-hashes -r requirements.lock && \
+    pip uninstall -y setuptools wheel
+# setuptools/wheel are build-time only — nothing in requirements.lock imports them
+# at runtime, and leaving them installed ships their CVEs (and setuptools' vendored
+# jaraco.*) for no benefit. prepare-build.sh strips the same three from the native
+# bundle, so all four targets now ship the same runtime-only dependency set.
 
 # Copy application code
 COPY app/ ./app/
