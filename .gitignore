@@ -67,6 +67,7 @@ reinstall.sh
 REINSTALL-*.md
 unistal.md
 app-improvement-review.md
+build-and-push.md
 
 # Planning docs / roadmaps / scan notes are scaffolding, not product — they
 # never belong in the repo (Features.md shipped by mistake in v1.12.10).
