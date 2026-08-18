@@ -4772,14 +4772,31 @@ _FFMPEG_OUT_SUFFIX: dict[str, str] = {
     ".qt":   ".mov",
 }
 
-async def _run_ffmpeg_with_progress(cmd: list, timeout: float,
+# Stall watchdog for the FFmpeg remux. FFmpeg writes a ``-progress`` block as it
+# muxes, so silence means the process is WEDGED (hung mount, dead pipe) — not
+# slow. The wall-clock cap this replaced (300 s + 180 s/GB) could not tell those
+# apart: it implied a sustained ~5.7 MB/s per job, while a NAS shared by several
+# parallel remuxes delivers a fraction of that, so healthy multi-GB files that
+# were streaming the whole time got killed minutes from the finish line.
+_SECONDS_PER_HOUR = 3600.0
+_FFMPEG_STALL_LIMIT = 300.0                    # no progress for 5 min → dead
+_FFMPEG_STALL_POLL = 5.0                       # watchdog tick
+_FFMPEG_MAX_RUNTIME = 6 * _SECONDS_PER_HOUR    # backstop for a runaway inchworm
+
+
+async def _run_ffmpeg_with_progress(cmd: list,
                                     on_pct=None, duration: Optional[float] = None,
                                     total_bytes: Optional[int] = None
                                     ) -> tuple[Optional[int], str]:
     """Run an ffmpeg command, streaming its ``-progress pipe:1`` feed.
 
-    Returns (returncode, stderr_text); returncode None means timeout (process
-    killed). ``on_pct`` receives 0..1 fractions — REAL progress reported by the
+    Returns (returncode, stderr_text). A ``returncode`` of None means the
+    watchdog killed the process, and the second element carries the reason —
+    the process is killed only when it STALLS or blows the absolute ceiling,
+    never for being slow, since "slow" is the normal state of a multi-GB remux
+    over a contended NAS.
+
+    ``on_pct`` receives 0..1 fractions — REAL progress reported by the
     muxer itself, never a timer. Two measured sources, in preference order:
 
       • ``duration`` (seconds): fraction = live ``out_time_us`` / duration.
@@ -4804,12 +4821,18 @@ async def _run_ffmpeg_with_progress(cmd: list, timeout: float,
 
     # Byte ratio is the fallback only — if a duration is known it wins outright.
     _use_bytes = bool(on_pct) and not duration and bool(total_bytes)
+    started = _time.monotonic()
+    last_activity = started
 
     async def _read_progress():
+        nonlocal last_activity
         while True:
             line = await proc.stdout.readline()
             if not line:
                 return
+            # ANY progress line is proof of life — including the ones the bar
+            # ignores, and the ones nobody reads when on_pct is None.
+            last_activity = _time.monotonic()
             if on_pct and duration and line.startswith(b"out_time_us="):
                 try:
                     us = int(line.split(b"=", 1)[1])
@@ -4828,14 +4851,34 @@ async def _run_ffmpeg_with_progress(cmd: list, timeout: float,
     async def _read_stderr():
         return await proc.stderr.read()
 
-    try:
-        _, stderr_data, _ = await asyncio.wait_for(
-            asyncio.gather(_read_progress(), _read_stderr(), proc.wait()),
-            timeout=timeout)
-    except asyncio.TimeoutError:
+    def _kill_reason(now: float) -> Optional[str]:
+        stalled_for = now - last_activity
+        if stalled_for >= _FFMPEG_STALL_LIMIT:
+            return f"no progress for {int(stalled_for)}s"
+        if now - started >= _FFMPEG_MAX_RUNTIME:
+            return f"still running after {int((now - started) / _SECONDS_PER_HOUR)}h"
+        return None
+
+    work = asyncio.gather(_read_progress(), _read_stderr(), proc.wait())
+    while True:
+        finished, _pending = await asyncio.wait({work}, timeout=_FFMPEG_STALL_POLL)
+        if finished:
+            break
+        reason = _kill_reason(_time.monotonic())
+        if not reason:
+            continue
         proc.kill()
-        await proc.wait()
-        return None, ""
+        # Cancel the readers rather than waiting for EOF: a killed process can
+        # leave the pipes open in a forked child, and the reason for stopping is
+        # already known — nothing downstream wants this process's stderr. Not
+        # even proc.wait() is awaited here: asyncio resolves it only once the
+        # pipes close too, which is the very thing that may never happen. The
+        # child watcher reaps the process either way.
+        work.cancel()
+        await asyncio.gather(work, return_exceptions=True)
+        return None, reason
+
+    _, stderr_data, _ = work.result()
     return proc.returncode, stderr_data.decode(errors="replace").strip()
 
 
@@ -4869,6 +4912,85 @@ async def _copy_with_progress(src: Path, dst: Path, on_pct=None) -> None:
         on_pct(1.0)
 
 
+# ── Staging admission control ────────────────────────────────────────────────
+# A remux holds a source-sized work file in _EMBED_STAGING_DIR for the whole
+# pass AND the copy-back, so N parallel jobs need N × filesize of staging. When
+# staging is a fixed-size tmpfs (the AMM_EMBED_STAGING RAM-disk setup) an
+# oversubscribed batch used to die MID-REMUX with a raw muxer ENOSPC, after the
+# NAS reads had already been spent. Jobs now claim their bytes before starting
+# and wait for a slot, so oversubscription costs time instead of work.
+_BYTES_PER_GB = 1024 ** 3
+_STAGING_MARGIN = 1.05        # -codec copy output ≈ input; 5 % covers muxer overhead
+_STAGING_WAIT_POLL = 15.0     # seconds between re-checks while waiting for room
+_STAGING_WAIT_MAX = 600.0     # stop waiting after 10 min and report it
+_staging_claimed_bytes = 0    # bytes promised to remuxes that are running now
+
+
+def _staging_claim_for(size_bytes: int) -> int:
+    """Bytes one remux of ``size_bytes`` reserves in staging (claim == release)."""
+    return int(size_bytes * _STAGING_MARGIN)
+
+
+def _staging_free_bytes() -> Optional[int]:
+    """Free bytes in the staging dir, or None if it can't be measured (blocking)."""
+    try:
+        stat = os.statvfs(_EMBED_STAGING_DIR)
+        return stat.f_bavail * stat.f_frsize
+    except OSError:
+        return None
+
+
+async def _claim_staging_space(needed_bytes: Optional[int]) -> Optional[str]:
+    """Reserve staging room for one remux. Returns None once claimed, else why not.
+
+    Waits while other in-flight remuxes drain, because a full staging dir is
+    normally transient — the jobs ahead only have to finish their copy-back. A
+    file that cannot fit even in an *idle* staging dir is a configuration
+    problem, not congestion, so that case fails immediately with the numbers.
+
+    An unknown source size (stat failed) or an unreadable staging dir is
+    admitted unclaimed: a size we can't read is a size we can't budget, and
+    refusing the job would be a regression over the previous behaviour.
+    """
+    global _staging_claimed_bytes
+    if not needed_bytes:
+        return None
+    claim = _staging_claim_for(needed_bytes)
+    waited = 0.0
+    while True:
+        free = await asyncio.to_thread(_staging_free_bytes)
+        if free is None:
+            return None
+        # ponytail: free already excludes what running jobs have written so far,
+        # so adding their full claims double-counts — deliberately conservative
+        # (waits a little early, never overcommits). Track written-vs-claimed
+        # per job only if staging ever sits idle while jobs queue.
+        if claim + _staging_claimed_bytes <= free:
+            _staging_claimed_bytes += claim
+            return None
+        if _staging_claimed_bytes == 0:
+            return (f"staging too small: this file needs "
+                    f"{claim / _BYTES_PER_GB:.1f} GB and {_EMBED_STAGING_DIR} has "
+                    f"{free / _BYTES_PER_GB:.1f} GB free — enlarge it "
+                    f"(AMM_EMBED_STAGING) or lower AMM_EMBED_CONCURRENCY")
+        if waited >= _STAGING_WAIT_MAX:
+            return (f"staging still full after {int(waited)}s: this file needs "
+                    f"{claim / _BYTES_PER_GB:.1f} GB, {_EMBED_STAGING_DIR} has "
+                    f"{free / _BYTES_PER_GB:.1f} GB free — lower "
+                    f"AMM_EMBED_CONCURRENCY or enlarge staging")
+        await asyncio.sleep(_STAGING_WAIT_POLL)
+        waited += _STAGING_WAIT_POLL
+
+
+def _release_staging_space(needed_bytes: Optional[int]) -> None:
+    """Hand back the claim taken by _claim_staging_space (never below zero)."""
+    global _staging_claimed_bytes
+    if not needed_bytes:
+        return
+    _staging_claimed_bytes = max(
+        0, _staging_claimed_bytes - _staging_claim_for(needed_bytes))
+
+
 async def embed_metadata(file_path: Path, metadata: dict,
                          progress_cb=None) -> tuple[bool, str]:
     """
@@ -4877,6 +4999,11 @@ async def embed_metadata(file_path: Path, metadata: dict,
 
     Formats that FFmpeg cannot write are skipped silently — the caller always
     writes a companion NFO sidecar which carries the metadata for those files.
+
+    This half owns STAGING ADMISSION — the remux needs room for a full copy of
+    the source, so the job claims those bytes up front and waits for a slot
+    rather than discovering a full staging dir halfway through the rewrite.
+    _embed_metadata_staged does the work once the claim is granted.
 
     Mapping:
         title       → title tag
@@ -4892,6 +5019,35 @@ async def embed_metadata(file_path: Path, metadata: dict,
     if ext in _FFMPEG_NO_WRITE_EXTS:
         return True, ""
 
+    # Source size, stat'ed ONCE and off the loop (a stat on a sleeping NAS mount
+    # must not block the event loop — F1 discipline). Feeds the staging claim
+    # here and the F3 byte-ratio progress fallback further down.
+    def _src_size() -> Optional[int]:
+        try:
+            return file_path.stat().st_size
+        except OSError:
+            return None
+    src_bytes = await asyncio.to_thread(_src_size)
+
+    admission_error = await _claim_staging_space(src_bytes)
+    if admission_error:
+        return False, admission_error
+    try:
+        return await _embed_metadata_staged(file_path, metadata, ext,
+                                            src_bytes, progress_cb)
+    finally:
+        _release_staging_space(src_bytes)
+
+
+async def _embed_metadata_staged(file_path: Path, metadata: dict, ext: str,
+                                 src_bytes: Optional[int],
+                                 progress_cb=None) -> tuple[bool, str]:
+    """The remux itself, with staging space already claimed for ``src_bytes``.
+
+    Three-phase commit: remux into local staging → copy to a NAS-side temp in
+    the destination directory → atomic replace. The original is untouched until
+    that final step, so every failure path above leaves it exactly as it was.
+    """
     # Resolve the output suffix (same container where safe; remapped otherwise).
     out_suffix = _FFMPEG_OUT_SUFFIX.get(ext, ext)
 
@@ -4907,17 +5063,6 @@ async def embed_metadata(file_path: Path, metadata: dict,
     tmp_fd, tmp_str = tempfile.mkstemp(suffix=out_suffix, dir=_EMBED_STAGING_DIR)
     os.close(tmp_fd)
     tmp_path = Path(tmp_str)
-
-    # Source size, stat'ed ONCE and off the loop (a stat on a sleeping NAS mount
-    # must not block the event loop — F1 discipline). Feeds both the F3
-    # byte-ratio progress fallback and the dynamic timeout further down, which
-    # used to stat the file again inline.
-    def _src_size() -> Optional[int]:
-        try:
-            return file_path.stat().st_size
-        except OSError:
-            return None
-    src_bytes = await asyncio.to_thread(_src_size)
 
     # Two-phase accurate progress (queue-panel underline bar): remux 0–50%,
     # NAS copy-back 50–100%. Both halves report MEASURED numbers only.
@@ -4967,19 +5112,11 @@ async def embed_metadata(file_path: Path, metadata: dict,
 
         cmd.append(str(tmp_path))
 
-        # Dynamic timeout: 300 s base + 180 s per GB, capped at 3600 s (1 hour).
-        # -codec copy is I/O-bound; large files on slow NAS mounts need generous
-        # headroom.  The previous formula under-estimated for files > 2.5 GB.
-        # Reuses the single stat taken above (unreadable size → the old 600 s).
-        timeout = (min(3600, 300 + int(src_bytes / (1024 ** 3) * 180))
-                   if src_bytes else 600)
-
         returncode, stderr_text = await _run_ffmpeg_with_progress(
-            cmd, timeout, on_pct=_remux_pct, duration=duration,
-            total_bytes=src_bytes)
+            cmd, on_pct=_remux_pct, duration=duration, total_bytes=src_bytes)
         if returncode is None:
             tmp_path.unlink(missing_ok=True)
-            return False, f"FFmpeg timed out after {timeout}s during metadata embedding"
+            return False, f"FFmpeg aborted during metadata embedding: {stderr_text}"
 
         if returncode != 0:
             # If a subtitle codec is also unsupported in the container, retry
@@ -5007,11 +5144,11 @@ async def embed_metadata(file_path: Path, metadata: dict,
                 tmp_path = Path(tmp_str2)
                 cmd_va[-1] = str(tmp_path)
                 returncode2, stderr_text2 = await _run_ffmpeg_with_progress(
-                    cmd_va, timeout, on_pct=_remux_pct, duration=duration,
+                    cmd_va, on_pct=_remux_pct, duration=duration,
                     total_bytes=src_bytes)
                 if returncode2 is None:
                     tmp_path.unlink(missing_ok=True)
-                    return False, f"FFmpeg timed out after {timeout}s during metadata embedding"
+                    return False, f"FFmpeg aborted during metadata embedding: {stderr_text2}"
                 if returncode2 != 0:
                     tmp_path.unlink(missing_ok=True)
                     return False, stderr_text2
@@ -5172,9 +5309,11 @@ async def embed_metadata_mp4(file_path: Path, metadata: dict) -> tuple[bool, str
 
     cmd.append("--overWrite")
 
-    # AtomicParsley may rewrite the moov atom; size-scaled timeout like the remux.
+    # AtomicParsley may rewrite the moov atom, so scale the cap with size. It
+    # emits no progress feed to watchdog (unlike the remux) and writes in place
+    # without staging, so a wall-clock cap is all this path can do.
     try:
-        timeout = min(3600, 300 + int(file_path.stat().st_size / (1024 ** 3) * 180))
+        timeout = min(3600, 300 + int(file_path.stat().st_size / _BYTES_PER_GB * 180))
     except OSError:
         timeout = 600
 

@@ -45,8 +45,9 @@ services:
       #    final verified copy-back touches the NAS. On a 62 GB host a 24 GB
       #    tmpfs comfortably covers 4× ~5 GB files in flight. Uncomment BOTH the
       #    env line and the tmpfs block below. Size it ≥ (largest file ×
-      #    concurrency) + headroom — a too-small tmpfs fails embeds with a clear
-      #    "no space left" in the embed queue, originals stay untouched.
+      #    concurrency) + headroom — undersize it and embeds queue for a free
+      #    slot instead of failing, and a file too big for staging at ALL says
+      #    so with the numbers. Originals stay untouched either way.
       # - AMM_EMBED_STAGING=/embed-ram
     # tmpfs:
     #   - /embed-ram:size=24g,mode=1777
