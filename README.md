@@ -71,20 +71,25 @@ Clean, flat interface with a live naming-template preview and three built-in the
 
 ---
 
+## What's New in v1.12.15
+
+- **The desktop app opens straight away.** Two slow things used to run *before* any window existed: starting the backend, and — on a first AppImage launch — registering the app in your desktop menu, which copies the whole ~242 MB AppImage with a blocking file copy. From your side the app simply did nothing for several seconds after you clicked it. The window and a splash now paint first and everything slow happens behind them, so a cold start gives immediate feedback instead of silence.
+- **Scanning is around 4× faster.** File headers are now read in parallel instead of one at a time — 200 files went from 8.1 s to 1.9 s in testing. Rescans are faster still (~0.5 s for the same 200), because durations already in the catalog are reused and unchanged files cost no probe at all. Tune with `AMM_SCAN_WORKERS` (default 8, range 1–16); lower it to 2–4 on an HDD-backed SMB share that slows under parallel access. This is a *different* knob from embed concurrency: scanning reads headers, it does not move gigabytes, so it parallelises much further.
+- **You can now set how many files embed at once, in the app.** ⚙ Settings → "Files embedded at the same time" (1–8, default 3). Previously this was an environment variable only, which meant the deb, rpm and AppImage builds were stuck at 3 — on a low-powered machine or a slow CIFS share, three large remuxes at once can make the whole machine unusable. If `AMM_EMBED_CONCURRENCY` is set in the environment it still wins and the control shows as read-only, so an operator-managed container stays the source of truth.
+- **Fonts now ship inside the app.** The interface previously pulled Inter and JetBrains Mono from Google's CDN on every page load, which meant a third party saw a request each time you opened the app and the UI rendered in fallback fonts with no internet. Both faces are now bundled, so the app looks identical offline and requests nothing from anyone.
+- **Docker runs the same ffmpeg as the native packages.** The image used Debian's `ffmpeg` package, which drags in 205 packages and ~445 MB of desktop graphics stack that a stream-copy remux never touches. It now builds from the same pinned static binary the deb/rpm/AppImage already bundled, verified by checksum — so all four ways of running this app now use a byte-identical ffmpeg instead of two different builds behaving two different ways.
+- **Docker starts faster after the first run.** The entrypoint reset ownership of everything under `/data` on every single boot, including the thumbnail cache, which grows with use. It now checks first and only recurses when ownership is actually wrong — still repairing a fresh volume, a restored backup, or a changed `PUID`/`PGID`, but no longer spending seconds re-doing correct work each time you restart the container.
+- **Drag performers to reorder them.** On match cards and in the manual editor, drag a performer chip to move it; the ◀ ▶ arrows still work and do exactly the same thing. Only performers are draggable — tags are a set, so their order carries no meaning.
+- **The interface loads faster in general** — text responses are compressed while already-compressed media is left alone, and versioned assets are cached permanently so a repeat visit re-downloads nothing. Thumbnail generation extracts its six frames in parallel rather than one after another.
+
+---
+
 ## What's New in v1.12.14
 
 - **Large files no longer time out mid-embed.** The remux had a wall-clock deadline scaled by file size (5 minutes plus 3 minutes per GB), which quietly assumed every job sustains ~5.7 MB/s. Several parallel remuxes over one NAS share do not: a link that gives a single reader 110 MB/s can drop to 7 MB/s per stream once four are running, so 5–9 GB files that were streaming steadily the whole time were killed minutes from the finish line — `FFmpeg timed out after 1930s`. The deadline is now a **stall** limit instead: FFmpeg is stopped only after five minutes with no progress at all from its own feed, meaning a wedged mount, not a slow one. Slow is normal and is now allowed to finish.
 - **Embeds queue for staging space instead of dying in it.** Each running remux needs room for a full copy of the source in the staging directory, so four parallel jobs need four times the file size. Oversubscribe it — four files totalling 27 GB into a 24 GB RAM disk — and one job used to hit `No space left on device` deep into the rewrite, after its NAS reads had already been spent. Jobs now reserve their space before starting and wait for a free slot, and a file too large for the staging directory *even when idle* says so immediately, with both numbers and the two settings that fix it, instead of failing later.
 - **Both faults left originals untouched**, as before — the failed files kept their NFO sidecars and only lacked embedded container tags. Re-running the embed on them completes the job.
 - **Tuning note for NAS users:** if your storage slows down under parallel readers (common with SMB/CIFS), `AMM_EMBED_CONCURRENCY=1` finishes a batch *sooner* than `4`. The default remains 3.
-
----
-
-## What's New in v1.12.12
-
-- **Live embed progress actually stays live** — three separate faults made a long remux go dark. (1) The status poll pruned its own in-memory job on a 10-minute *creation* timer with no check for whether the job was still running, so any batch that outlived it lost its per-file rows, froze its counter — in memory *and* in the durable mirror — dropped later warnings, and finished "complete" at a stale count with every remaining file mislabelled "state unknown". The timer now starts at completion, so a running job is never evicted. (2) The client dropped from 1-second to 30-second polling on a plain stopwatch; it now counts *unchanged* polls, so a batch that is visibly working stays at 1 second however long it runs, and one that genuinely stalls still backs off. (3) A file whose duration could not be probed — ffprobe timing out on a sleeping NAS mount — reported nothing at all for the whole rewrite; the bar is now driven by ffmpeg's own byte counter instead, capped below 100% so it can never claim a completion the muxer hasn't reported.
-- **The file picker joins the rest of the UI** (Docker and browser only — desktop builds use the OS picker). Entries drop from 40px bordered cards to ~28px hairline rows with monospace names, directories marked by a trailing `/` rather than an emoji. The mode switch is one segmented control, the path breadcrumb truncates from the left so the folder you are in stays visible, and the footer states what you are about to pick — `2 files selected · 3.5 GB` — with the button naming the count.
-- **Toolbar icons sized to 22px**, leaving a clear ring inside each button.
 
 See the [releases page](https://github.com/aiulian25/adult-media-manager/releases) for full notes on every version.
 
@@ -170,10 +175,10 @@ No Docker required. Ships a self-contained Python 3.12 runtime — no system Pyt
 
 ### AppImage (recommended — no root required)
 
-1. Download `Adult.Media.Manager-1.12.14.AppImage`
+1. Download `Adult.Media.Manager-1.12.15.AppImage`
 2. Make it executable:
    ```bash
-   chmod +x Adult.Media.Manager-1.12.14.AppImage
+   chmod +x Adult.Media.Manager-1.12.15.AppImage
    ```
 3. Double-click it (or run it from the terminal)
 
@@ -189,7 +194,7 @@ From that point, launch it from your application menu. The original downloaded f
 ### .deb Package (Debian / Ubuntu / Mint)
 
 ```bash
-sudo apt install ./adult-media-manager_1.12.14_amd64.deb
+sudo apt install ./adult-media-manager_1.12.15_amd64.deb
 ```
 
 Launch **Adult Media Manager** from your application menu, or:
@@ -203,7 +208,7 @@ Launch **Adult Media Manager** from your application menu, or:
 Requires [RPM Fusion](https://rpmfusion.org/) enabled for the `ffmpeg` / `mkvtoolnix` media tools (used as fallback — the package also ships its own bundled copies):
 
 ```bash
-sudo dnf install ./adult-media-manager-1.12.14.x86_64.rpm
+sudo dnf install ./adult-media-manager-1.12.15.x86_64.rpm
 ```
 
 Remove with `sudo dnf remove adult-media-manager`.
@@ -360,10 +365,11 @@ Click **History** to see every action AMM has performed. Each move/copy/hardlink
 | `PGID` | `1000` | Group ID for file ownership |
 | `DATA_DIR` | `/data` | Persistent data directory (history, settings, catalog, cache, embed staging) |
 | `AMM_SCAN_PROBE_DURATION` | `1` | Probe each video's duration at scan time (`ffprobe`) to sharpen match scoring. Set `0` to skip on very large libraries / slow mounts |
+| `AMM_SCAN_WORKERS` | `8` | How many files a scan processes in parallel (clamped 1–16). Scanning is dominated by per-file `ffprobe`/hashing, so this is the main scan-speed knob — measured on 200 files: `1` → 8.1 s, `2` → 4.2 s, `8` → 1.9 s. Lower it to `2`–`4` on a NAS that slows down under parallel access. A rescan reuses durations the catalog already holds, so unchanged files cost no probe at all |
 | `AMM_SCAN_PHASH` | `0` | Compute a perceptual hash (pHash) per scanned video so the Duplicates view can group **re-encodes** of the same scene (not just byte-identical copies). Decodes one frame per file with `ffmpeg` — slower scans, so it is opt-in (`1` to enable) |
 | `AMM_FETCH_POSTERS` | `1` | On an API-matched rename, download the scene poster next to the video as `<name>-poster.jpg` (referenced by the `.nfo`) so Jellyfin/Plex show it. Set `0` for zero-egress deployments (no server-side image fetch). Manually chosen posters are copied locally and unaffected |
 | `AMM_MATCH_CACHE_MAX` | `50000` | Max entries in the persistent match cache (`match_cache.json`). `0` = unlimited. Confirmed matches are never evicted |
-| `AMM_EMBED_CONCURRENCY` | `3` | Parallel metadata embeds (clamped 1–8). Remux is I/O-bound — raise only if your storage isn't saturated at 3. On a NAS whose throughput collapses under parallel readers (common with SMB/CIFS), `1` finishes a batch *sooner* than `4` |
+| `AMM_EMBED_CONCURRENCY` | `3` | Parallel metadata embeds (clamped 1–8). Remux is I/O-bound — raise only if your storage isn't saturated at 3. On a NAS whose throughput collapses under parallel readers (common with SMB/CIFS), `1` finishes a batch *sooner* than `4`. **Also settable in ⚙ Settings → "Files embedded at the same time"**, which is the only route on the deb/rpm/AppImage builds; setting it here pins the value and makes the UI control read-only |
 | `AMM_EMBED_STAGING` | `$DATA_DIR/embed-tmp` | Staging directory for remux work files. Point it at a tmpfs/RAM disk (see the commented block in `docker-compose.yml`) so remuxes write at memory speed; only the final verified copy touches your media storage. Each running embed reserves its file's size here and waits for a free slot when staging is oversubscribed, so size it ≥ largest file × concurrency |
 | `AMM_DATE_TOLERANCE_DAYS` | `7` | How many days apart a file's date and a scene's date may be and still score as a date match |
 | `AMM_HISTORY_MAX` | `10000` | Max entries kept in `history.json`. `0` = unlimited |
