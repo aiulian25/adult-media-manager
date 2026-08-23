@@ -33,6 +33,25 @@ let mainWindow = null;
 // is only the *preferred* value; startPython/waitForServer/loadURL all read PORT.
 let PORT       = 47821;
 
+// How often to re-check whether the backend is up. The backend reaches /api/health
+// in ~0.4 s, so a 300 ms tick spent most of its life waiting on a server that was
+// already listening — pure dead time between "ready" and "window shows the app".
+const SERVER_POLL_MS = 50;
+
+// Shown the instant the window exists, while the backend starts behind it. Static
+// and script-free on purpose: the window carries the preload bridge (update
+// install, native file dialogs), so nothing here should be able to reach it.
+// Colours match the app's own background so the handover is not a visible flash.
+const SPLASH_HTML = `<!doctype html><html><head><meta charset="utf-8">
+<title>Adult Media Manager</title><style>
+html,body{height:100%;margin:0;background:#08080d;color:#e8e6f0;
+  font:15px/1.5 system-ui,-apple-system,sans-serif}
+div{height:100%;display:flex;flex-direction:column;align-items:center;
+  justify-content:center;gap:10px}
+b{font-weight:600;letter-spacing:.3px}
+i{font-style:normal;color:#8b87a0;font-size:13px}
+</style></head><body><div><b>Adult Media Manager</b><i>Starting…</i></div></body></html>`;
+
 // ── Paths ─────────────────────────────────────────────────────────────────────
 const XDG_DATA   = process.env.XDG_DATA_HOME   || path.join(os.homedir(), ".local", "share");
 const XDG_CONFIG = process.env.XDG_CONFIG_HOME  || path.join(os.homedir(), ".config");
@@ -268,7 +287,12 @@ function startPython() {
     // saved via the Settings modal, exactly as docker-compose vars do.
     // If NOT set in the shell the backend falls back to settings.json, which
     // is what the Settings modal writes to.
-    for (const key of ["TPDB_API_KEY", "STASHDB_API_KEY"]) {
+    // AMM_EMBED_CONCURRENCY rides along for the same reason: the backend treats
+    // env as authoritative over the Settings modal, and without this a desktop
+    // user who exported it in their shell would silently get the default while
+    // the UI showed an editable control. With it, the control correctly renders
+    // read-only — same precedence as Docker.
+    for (const key of ["TPDB_API_KEY", "STASHDB_API_KEY", "AMM_EMBED_CONCURRENCY"]) {
         const val = process.env[key];
         if (val && val.trim()) childEnv[key] = val.trim();
     }
@@ -322,7 +346,7 @@ function waitForServer(timeout = 25000) {
                     if (Date.now() >= deadline) {
                         reject(new Error(`AMM server did not start within ${timeout / 1000}s`));
                     } else {
-                        setTimeout(check, 300);
+                        setTimeout(check, SERVER_POLL_MS);
                     }
                 });
         };
@@ -682,19 +706,14 @@ async function startApp() {
     PORT = await findFreePort(PORT);
     console.log(`[main] Resolved backend port: ${PORT}`);
 
-    // Self-register in the desktop for AppImage users
-    installDesktopEntry();
-
-    startPython();
-
-    try {
-        await waitForServer();
-    } catch (err) {
-        console.error(err.message);
-        app.quit();
-        return;
-    }
-
+    // Window FIRST, then everything slow, so the user sees the app immediately
+    // instead of staring at nothing while the backend boots. Two things used to
+    // run before any window existed: the backend start (~0.4 s) and, on a first
+    // AppImage launch, installDesktopEntry() — which copies the whole ~242 MB
+    // AppImage with a SYNCHRONOUS copyFileSync plus two execFileSync calls. That
+    // put multiple seconds of silence between the user's click and any feedback.
+    // The splash paints in the renderer, so it stays visible even while the main
+    // process is blocked in that copy.
     const iconPath = getIconPath();
     const icon     = iconPath ? nativeImage.createFromPath(iconPath) : null;
 
@@ -717,6 +736,32 @@ async function startApp() {
 
     // Redundant setIcon call needed on some Linux compositors
     if (icon && !icon.isEmpty()) mainWindow.setIcon(icon);
+
+    // Paint something immediately. backgroundColor already avoids a white flash;
+    // this adds the "we heard you" feedback a cold start needs.
+    mainWindow.loadURL("data:text/html;charset=utf-8," + encodeURIComponent(SPLASH_HTML));
+
+    // Backend first: it is the long pole and runs in its own process, so it warms
+    // up while the (possibly very slow, first-run-only) desktop registration below
+    // blocks this one.
+    startPython();
+
+    // Self-register in the desktop for AppImage users
+    installDesktopEntry();
+
+    try {
+        await waitForServer();
+    } catch (err) {
+        // Previously this only hit the console and the process vanished — from the
+        // user's side the app simply failed to open, with nothing to report.
+        console.error(err.message);
+        dialog.showErrorBox(
+            "Adult Media Manager could not start",
+            `${err.message}\n\nThe backend did not become ready on port ${PORT}. ` +
+            `Check the terminal output, or relaunch the app.`);
+        app.quit();
+        return;
+    }
 
     // First launch after an update: purge the renderer's HTTP cache. Entries
     // cached under the old heuristic policy (no Cache-Control before v1.13)

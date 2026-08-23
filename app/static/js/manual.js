@@ -382,12 +382,19 @@ function addChipToList(type, text) {
     list.appendChild(chip);
 }
 
+// Move a performer to an arbitrary position; the ◀ ▶ arrows and the drag both
+// route through here (for adjacent positions a move IS the old swap), matching
+// _movePerformerTo on the match cards.
+function _moveManualPerformerTo(from, to) {
+    const n = manualPerformers.length;
+    if (from === to || from < 0 || to < 0 || from >= n || to >= n) return;
+    manualPerformers = arrayMove(manualPerformers, from, to);
+    renderChips('performers', manualPerformers);
+}
+
 function _moveManualPerformer(name, d) {
     const i = manualPerformers.indexOf(name);
-    const j = i + d;
-    if (i < 0 || j < 0 || j >= manualPerformers.length) return;
-    [manualPerformers[i], manualPerformers[j]] = [manualPerformers[j], manualPerformers[i]];
-    renderChips('performers', manualPerformers);
+    _moveManualPerformerTo(i, i + d);
 }
 
 function removeChip(type, text) {
@@ -405,6 +412,13 @@ function renderChips(type, items) {
     const list = document.getElementById(listId);
     list.innerHTML = '';
     items.forEach(item => addChipToList(type, item));
+    // Only PERFORMERS are ordered (the first leads the name and the NFO), so
+    // only that list is draggable — tags are a set. Binding is idempotent and
+    // delegated, so re-rendering the chips above never needs a rebind.
+    if (type === 'performers') {
+        enableChipReorder(list, '.chip', '.chip-arrow, .chip-remove',
+                          _moveManualPerformerTo);
+    }
 }
 
 async function generateThumbnails() {

@@ -280,6 +280,39 @@ class Catalog:
             print(f"WARNING: catalog get_states failed: {e}")
         return out
 
+    def get_durations(self, paths: list[str]) -> dict[str, tuple]:
+        """Return ``{path: (size, duration)}`` for paths whose duration is known.
+
+        Lets a rescan skip the per-file ffprobe when the file's byte size is
+        unchanged — the probe is the single most expensive step in a scan
+        (~40 ms/file, up to its 8 s timeout on a sleeping mount) and it re-asks
+        a question this table already answered.
+
+        Size is the staleness check, matching the convention ``upsert_scanned``
+        already uses to invalidate a stored phash: same bytes ⇒ same duration.
+        Rows with a NULL duration are omitted, so a library scanned with
+        AMM_SCAN_PROBE_DURATION=0 simply yields no hits.
+        """
+        if not self._conn or not paths:
+            return {}
+        out: dict[str, tuple] = {}
+        try:
+            with self._lock:
+                # Chunk to stay well under SQLite's variable limit (999).
+                for i in range(0, len(paths), 500):
+                    chunk = paths[i : i + 500]
+                    q = ",".join("?" for _ in chunk)
+                    cur = self._conn.execute(
+                        f"""SELECT path, size, duration FROM files
+                            WHERE path IN ({q}) AND duration IS NOT NULL""",
+                        chunk,
+                    )
+                    for r in cur.fetchall():
+                        out[r["path"]] = (r["size"], r["duration"])
+        except Exception as e:
+            print(f"WARNING: catalog get_durations failed: {e}")
+        return out
+
     # ── match-time updates ──────────────────────────────────────────────────
     def mark_organized(
         self,

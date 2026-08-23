@@ -9,6 +9,8 @@ import json
 import copy
 import asyncio
 import threading
+import atexit
+from concurrent.futures import ThreadPoolExecutor
 import subprocess
 import tempfile
 import base64
@@ -24,7 +26,10 @@ import uuid
 
 from fastapi import FastAPI, HTTPException, Query, BackgroundTasks, Request
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, Response, StreamingResponse
+from fastapi.responses import (FileResponse, HTMLResponse, Response,
+                               StreamingResponse)
+from starlette.middleware.gzip import GZipMiddleware
+from starlette.datastructures import Headers
 from pydantic import BaseModel, field_validator
 
 from app.core.detector import (
@@ -92,22 +97,149 @@ app = FastAPI(
     description="Professional metadata organizer for adult content"
 )
 
+# ── Response compression ─────────────────────────────────────────────────────
+# The UI shell is 455 KB of text (index + CSS + 8 JS files + locale JSON) and
+# was served uncompressed; gzip takes it to ~135 KB. It also shrinks the 1 Hz
+# embed-status poll of a 200-file batch from 25.7 KB to 1.3 KB.
+#
+# minimum_size: below this the gzip header and the client's decompress cost
+# more than the saved bytes, so /api/health (170 B) and friends stay raw.
+#
+# compresslevel: 6, not the library default of 9. Measured on this app's own
+# assets, 9 costs 1.5–2.6× the CPU of 6 for 0.1–0.3% fewer bytes (core.js:
+# 4.92 ms vs 1.91 ms to save 108 bytes) — a bad trade for a server that runs a
+# SINGLE worker and must stay responsive to /api/embed-status during a remux.
+#
+# SSE is safe: starlette excludes text/event-stream from compression
+# (DEFAULT_EXCLUDED_CONTENT_TYPES, verified present in the shipped 1.3.1 for
+# BOTH the Docker image and the deb/rpm/AppImage bundle), so the scan and match
+# streams still deliver each event the instant it is produced.
+# Already-compressed payloads are excluded on top of starlette's own
+# text/event-stream rule: woff2 carries Brotli internally and PNG/JPEG carry
+# their own codecs, so gzip spends CPU to save nothing. Measured on this app's
+# assets: inter-latin.woff2 48,256 → 48,249 B (SEVEN bytes) and icon.png
+# actually grew on the wire once gzip framing is counted.
+_GZIP_MIN_BYTES = 1000
+_GZIP_LEVEL = 6
+_PRECOMPRESSED_TYPES = ("image/", "video/", "audio/", "font/", "application/zip")
+
+
+def _build_gzip_middleware():
+    """GZipMiddleware that also skips already-compressed content types.
+
+    starlette exposes no hook for a wider exclusion set — DEFAULT_EXCLUDED_
+    CONTENT_TYPES is a module constant read inside the responder — but it only
+    *stores* the response-start message and acts on the flag when the body
+    arrives, so widening the flag in between is enough. None of its compression
+    logic is copied here.
+
+    The internals this leans on (GZipResponder / IdentityResponder /
+    content_type_is_excluded) are private, so a future starlette could rename
+    them. That must never stop the app from booting on any build target: if the
+    import fails we fall back to the stock middleware, which is simply the
+    previous behaviour — correct, just wasteful on media.
+    tools/gzip-exclusion-check.py fails loudly if that fallback ever engages.
+    """
+    try:
+        from starlette.middleware.gzip import GZipResponder, IdentityResponder
+    except ImportError as e:
+        print(f"WARNING: starlette gzip internals changed ({e}); "
+              f"media responses will be re-compressed pointlessly")
+        return GZipMiddleware
+
+    class _SkipPrecompressedResponder(GZipResponder):
+        async def send_with_compression(self, message) -> None:
+            await super().send_with_compression(message)
+            if message["type"] == "http.response.start" and not self.content_type_is_excluded:
+                content_type = Headers(raw=message["headers"]).get("content-type", "")
+                self.content_type_is_excluded = content_type.startswith(_PRECOMPRESSED_TYPES)
+
+    class _GZipSkipPrecompressed(GZipMiddleware):
+        async def __call__(self, scope, receive, send) -> None:
+            if scope["type"] != "http":
+                await self.app(scope, receive, send)
+                return
+            if "gzip" in Headers(scope=scope).get("Accept-Encoding", ""):
+                responder = _SkipPrecompressedResponder(
+                    self.app, self.minimum_size, compresslevel=self.compresslevel)
+            else:
+                responder = IdentityResponder(self.app, self.minimum_size)
+            await responder(scope, receive, send)
+
+    return _GZipSkipPrecompressed
+
+
+app.add_middleware(_build_gzip_middleware(), minimum_size=_GZIP_MIN_BYTES,
+                   compresslevel=_GZIP_LEVEL)
+
 # Serve static files
 STATIC_DIR = Path(__file__).parent / "static"
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 
+# ── Static asset caching ─────────────────────────────────────────────────────
 # Without an explicit Cache-Control, Chromium applies *heuristic* freshness
 # (10% of the file's age) to /static responses and can keep serving JS/CSS
 # from its disk cache for hours after a package upgrade replaced the files —
-# the app updates but the UI doesn't. `no-cache` still allows caching but
-# forces an ETag revalidation on every load; against the local/LAN server a
-# 304 costs ~1 ms, so the UI is always the installed version.
+# the app updates but the UI doesn't.
+#
+# So index.html is served with a ?v= token on every asset URL, and anything
+# carrying that token is cached hard (a year, immutable): the browser stops
+# asking about the shell entirely, and an upgrade changes the URLs, which is a
+# guaranteed cache bust rather than a hopeful one. URLs WITHOUT a token keep
+# the old `no-cache` revalidate-every-time behaviour.
+#
+# The token is APP_VERSION plus a digest of the static tree (path, size, mtime).
+# Version alone would have been a trap: it is a release string, so editing a CSS
+# file during development — or shipping a hotfix without bumping it — would leave
+# every browser pinned to the old asset for a year with no way to tell. Folding
+# the file contents in means the token moves whenever the bytes move, in dev and
+# in production alike, with no dev-only branch to drift between build targets.
+_IMMUTABLE_CACHE = "public, max-age=31536000, immutable"
+
+# Font URLs are deliberately NOT versioned: index.html preloads
+# /static/fonts/inter-latin.woff2 and fonts.css requests the same file, and a
+# token on only one of them would be two different URLs — the preload wasted and
+# the font fetched twice. They stay on `no-cache` (a 304 costs ~1 ms).
+_ASSET_URL_RE = re.compile(r'((?:src|href)=")(/static/(?!fonts/)[^"?]+)"')
+
+
+def _asset_version() -> str:
+    """Cache-busting token for static assets: app version + content digest.
+
+    Walks the (small, ~24 file) static tree once per page load — 0.9 ms
+    measured — so a changed file always yields a new token. Keeps the dev loop
+    honest without a dev/prod branch: edit style.css, reload, see the change.
+    """
+    digest = hashlib.sha256()
+    try:
+        for asset in sorted(STATIC_DIR.rglob("*")):
+            if asset.is_file():
+                stat = asset.stat()
+                digest.update(
+                    f"{asset.relative_to(STATIC_DIR)}:{stat.st_size}:{stat.st_mtime_ns}"
+                    .encode())
+    except OSError:
+        return APP_VERSION          # unreadable tree → fall back to no-cache URLs
+    return f"{APP_VERSION}-{digest.hexdigest()[:8]}"
+
+
+def _render_index() -> str:
+    """index.html with ?v=<token> appended to every versionable asset URL."""
+    token = _asset_version()
+    html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+    return _ASSET_URL_RE.sub(lambda m: f'{m.group(1)}{m.group(2)}?v={token}"', html)
+
+
 @app.middleware("http")
 async def _no_stale_ui_cache(request, call_next):
     response = await call_next(request)
     path = request.url.path
-    if path == "/" or path.startswith("/static"):
+    if path.startswith("/static") and request.query_params.get("v"):
+        # Reached through a versioned URL, so the bytes behind it can never
+        # change without the URL changing. Safe to cache forever.
+        response.headers["Cache-Control"] = _IMMUTABLE_CACHE
+    elif path == "/" or path.startswith("/static"):
         response.headers["Cache-Control"] = "no-cache"
     return response
 
@@ -343,6 +475,45 @@ _DEFAULT_PERFORMER_ORDER = "female_first"
 def _effective_performer_order() -> str:
     val = _load_settings().get("performer_order")
     return val if val in _ALLOWED_PERFORMER_ORDERS else _DEFAULT_PERFORMER_ORDER
+
+
+# Parallel metadata embeds. Remux is I/O-bound, so the right number tracks the
+# STORAGE, not the core count: on an HDD-backed CIFS share three concurrent
+# remuxes measured ~7 MB/s each against ~110 MB/s for one, i.e. a batch finishes
+# SOONER at 1 than at 3, and three multi-GB jobs can exhaust RAM/staging on a
+# small box. Docker exposed this as AMM_EMBED_CONCURRENCY, but the desktop
+# builds had no way to reach it — the Electron launcher deliberately starts the
+# backend with a clean environment — so it was effectively hard-wired to 3 there.
+# It is now a Settings item too, which works identically on all four targets.
+_EMBED_CONCURRENCY_MIN = 1
+_EMBED_CONCURRENCY_MAX = 8
+_DEFAULT_EMBED_CONCURRENCY = 3
+
+
+def _effective_embed_concurrency() -> int:
+    """How many files may be embedded at once (clamped 1–8).
+
+    Environment wins over the saved setting, matching how API keys resolve: an
+    operator who pinned AMM_EMBED_CONCURRENCY in compose keeps that value and the
+    UI shows it as read-only rather than silently disagreeing with the container.
+    """
+    raw = os.getenv("AMM_EMBED_CONCURRENCY", "").strip()
+    if not raw:
+        raw = _load_settings().get("embed_concurrency")
+    if raw in (None, ""):
+        return _DEFAULT_EMBED_CONCURRENCY
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return _DEFAULT_EMBED_CONCURRENCY
+    return max(_EMBED_CONCURRENCY_MIN, min(_EMBED_CONCURRENCY_MAX, value))
+
+
+def _embed_concurrency_source() -> Optional[str]:
+    """'env' when the environment pins it, 'settings' when saved, else None."""
+    if os.getenv("AMM_EMBED_CONCURRENCY", "").strip():
+        return "env"
+    return "settings" if _load_settings().get("embed_concurrency") else None
 
 
 def _effective_clear_metadata() -> bool:
@@ -670,6 +841,13 @@ async def _startup_single_worker_check():
 @app.on_event("shutdown")
 async def shutdown():
     """Cleanup on shutdown."""
+    # Persist any deferred match-cache rekey before the process goes away. This
+    # is the reliable path (uvicorn runs it on SIGTERM, i.e. `docker stop`);
+    # the atexit hook below is the belt-and-braces for other exit routes.
+    try:
+        await asyncio.to_thread(_match_cache_store.flush)
+    except Exception as e:
+        print(f"WARNING: match-cache flush on shutdown failed: {e}")
     if tpdb:
         await tpdb.close()
     if stashdb:
@@ -678,8 +856,8 @@ async def shutdown():
 
 @app.get("/")
 async def index():
-    """Serve the main web UI."""
-    return FileResponse(str(STATIC_DIR / "index.html"))
+    """Serve the main web UI, with cache-busting tokens on its asset URLs."""
+    return HTMLResponse(_render_index())
 
 
 @app.get("/Adult%20Media%20Manager.png")
@@ -977,6 +1155,15 @@ _SCAN_PROBE_DURATION: bool = os.getenv("AMM_SCAN_PROBE_DURATION", "1") == "1"
 # regression. Behaves identically on Docker/deb/AppImage (same ffmpeg dependency).
 _SCAN_PHASH: bool = os.getenv("AMM_SCAN_PHASH", "0") == "1"
 
+# How many files a streaming scan processes at once. The per-file work is
+# blocking I/O (stat, NFO read, oshash, and the ffprobe subprocess), so it
+# parallelises well: measured 8.2 s → ~1 s for 200 files on 12 cores, because
+# the probe alone was ~40 ms per file running strictly one at a time.
+# Clamped 1–16. Lower it to 2–4 on a NAS that slows down under parallel access
+# (some HDD-backed SMB shares collapse when several readers interleave); the
+# probes only read file headers, so they are far lighter than a parallel remux.
+_SCAN_WORKERS: int = max(1, min(16, int(os.getenv("AMM_SCAN_WORKERS", "8") or 8)))
+
 # When renaming an API-matched scene, download the scene's poster image and save
 # it next to the video as "<stem>-poster.jpg" (referenced by the NFO) so
 # Jellyfin/Plex show it. ON by default; set AMM_FETCH_POSTERS=0 to disable the
@@ -1007,6 +1194,21 @@ def _probe_duration_seconds(path: Path) -> Optional[float]:
         return val if val > 0 else None
     except Exception:
         return None
+
+
+def _known_duration(metadata: dict) -> Optional[float]:
+    """Duration already carried by the scan entry / API scene (seconds), or None.
+
+    The scan probes every video once and stores the result on the entry, which
+    the rename path threads into the embed metadata — so re-probing here was
+    paying ffprobe twice for the same answer (~40 ms locally, and up to the 8 s
+    probe timeout per file on a sleeping NAS mount).
+    """
+    try:
+        value = float(metadata.get("duration_seconds") or 0)
+    except (TypeError, ValueError):
+        return None
+    return value if value > 0 else None
 
 
 # Natural ("human alphabetical") ordering: digit runs compare as numbers, the
@@ -1079,7 +1281,8 @@ def _known_site_norms() -> set:
 
 
 def _build_file_entry(p: Path, known_sites: Optional[set] = None,
-                      include_hidden: bool = False) -> Optional[dict]:
+                      include_hidden: bool = False,
+                      known: Optional[dict] = None) -> Optional[dict]:
     """Build the scan ``file_entry`` for one path, or None to skip it.
 
     All blocking filesystem/CPU work for a single file (existence/stat, NFO XML
@@ -1122,7 +1325,12 @@ def _build_file_entry(p: Path, known_sites: Optional[set] = None,
     phash = None
     if is_video_file(p):
         oshash = compute_oshash(p)
-        if _SCAN_PROBE_DURATION:
+        # Reuse the duration the catalog already holds when the file's bytes
+        # are unchanged; only probe when it is new, resized, or unknown.
+        cached = (known or {}).get(str(p))
+        if cached and cached[0] == file_size:
+            duration_seconds = cached[1]
+        elif _SCAN_PROBE_DURATION:
             duration_seconds = _probe_duration_seconds(p)
         # pHash (opt-in via AMM_SCAN_PHASH) — enables near-duplicate detection of
         # re-encodes. Best-effort: None on any failure, so scanning never breaks.
@@ -1211,8 +1419,16 @@ def scan_directory(req: ScanRequest):
         return {"count": 0, "files": [], "error": error}
 
     _ks = _known_site_norms()   # once per scan, not per file (F8)
-    files = [e for e in (_build_file_entry(p, _ks, req.include_hidden) for p in paths)
-             if e is not None]
+    # Same two wins as the streaming endpoint, so both scan paths behave
+    # identically: reuse catalog durations for unchanged files, and build the
+    # entries _SCAN_WORKERS at a time. This endpoint is a plain def running in
+    # FastAPI's worker threadpool, so it fans out with a ThreadPoolExecutor
+    # rather than asyncio.to_thread. Executor.map preserves input order.
+    _known = catalog.get_durations([str(q) for q in paths])
+    with ThreadPoolExecutor(max_workers=_SCAN_WORKERS) as pool:
+        built = pool.map(
+            lambda q: _build_file_entry(q, _ks, req.include_hidden, _known), paths)
+        files = [e for e in built if e is not None]
 
     # ── Catalog (R1): record this scan + apply incremental rescan ───────────
     try:
@@ -1310,63 +1526,90 @@ async def scan_stream(request: Request, session_id: str = Query(...)):
                     print(f"WARNING: catalog upsert (stream) failed: {e}")
                 batch.clear()
 
+        # Durations this library already has (see Catalog.get_durations): a
+        # rescan of unchanged files then costs no ffprobe at all. One query for
+        # the whole scan, off the loop.
         try:
-            for i, p in enumerate(paths):
+            known_durations = await asyncio.to_thread(
+                catalog.get_durations, [str(q) for q in paths])
+        except Exception as e:
+            print(f"WARNING: catalog get_durations failed: {e}")
+            known_durations = {}
+
+        try:
+            # Files are processed _SCAN_WORKERS at a time. asyncio.gather returns
+            # results in input order, so events are emitted in exactly the order
+            # a serial scan produced them — only the waiting overlaps. The stop
+            # check moves from per-file to per-chunk, so a Stop costs at most one
+            # chunk of already-running work.
+            for start in range(0, len(paths), _SCAN_WORKERS):
                 # Stop point: the client closed the stream → keep partial results.
                 if await request.is_disconnected():
                     stopped = True
                     break
 
-                entry = await asyncio.to_thread(_build_file_entry, p, _scan_known_sites,
-                                                req.include_hidden)
-                if entry is None:
-                    # Classify WHY this candidate was skipped, for the summary
-                    # (F9). Order mirrors _build_file_entry's own skip checks
-                    # (not-a-file → hidden → non-media → otherwise unreadable), so
-                    # the reason matches what actually caused the None.
-                    try:
-                        if not p.is_file():
-                            pass  # directory / non-regular — not a skipped file
-                        elif p.name.startswith('.') and not req.include_hidden:
-                            skip_hidden += 1
-                        elif p.suffix.lower() not in _SCAN_MEDIA_EXTS:
-                            skip_non_media += 1
-                        else:
-                            skip_unreadable += 1   # media ext but stat/detect failed
-                    except OSError:
-                        skip_unreadable += 1
-                    # Advance progress only.
-                    yield (
-                        "event: progress\ndata: "
-                        + json.dumps({"done": i + 1, "total": total, "filename": p.name})
-                        + "\n\n"
-                    )
-                    continue
+                chunk = paths[start:start + _SCAN_WORKERS]
+                entries = await asyncio.gather(*(
+                    asyncio.to_thread(_build_file_entry, q, _scan_known_sites,
+                                      req.include_hidden, known_durations)
+                    for q in chunk))
 
-                # Annotate from catalog (organised/confirmed) for this one entry,
-                # then queue it for the batched on-disk upsert.
-                await asyncio.to_thread(_annotate_catalog_states, [entry])
-                batch.append(entry)
-                if len(batch) >= 50:
-                    await _flush_upsert()
+                # One catalog round-trip for the whole chunk instead of one per
+                # file; _annotate_catalog_states already takes a list.
+                built = [e for e in entries if e is not None]
+                if built:
+                    await asyncio.to_thread(_annotate_catalog_states, built)
 
-                # Incremental rescan: hide already-organised files from the list
-                # (still counted + upserted), matching /api/scan?skip_organized.
-                if req.skip_organized and entry.get("already_organized"):
+                for offset, (p, entry) in enumerate(zip(chunk, entries)):
+                    i = start + offset
+                    if entry is None:
+                        # Classify WHY this candidate was skipped, for the
+                        # summary (F9). Order mirrors _build_file_entry's own
+                        # skip checks (not-a-file → hidden → non-media →
+                        # otherwise unreadable), so the reason matches what
+                        # actually caused the None.
+                        try:
+                            if not p.is_file():
+                                pass  # directory / non-regular — not a skipped file
+                            elif p.name.startswith('.') and not req.include_hidden:
+                                skip_hidden += 1
+                            elif p.suffix.lower() not in _SCAN_MEDIA_EXTS:
+                                skip_non_media += 1
+                            else:
+                                skip_unreadable += 1   # media ext but stat/detect failed
+                        except OSError:
+                            skip_unreadable += 1
+                        # Advance progress only.
+                        yield (
+                            "event: progress\ndata: "
+                            + json.dumps({"done": i + 1, "total": total, "filename": p.name})
+                            + "\n\n"
+                        )
+                        continue
+
+                    # Queue for the batched on-disk upsert (catalog annotation
+                    # for this chunk already happened above).
+                    batch.append(entry)
+                    if len(batch) >= 50:
+                        await _flush_upsert()
+
+                    # Incremental rescan: hide already-organised files from the list
+                    # (still counted + upserted), matching /api/scan?skip_organized.
+                    if req.skip_organized and entry.get("already_organized"):
+                        yield (
+                            "event: progress\ndata: "
+                            + json.dumps({"done": i + 1, "total": total, "filename": entry["filename"]})
+                            + "\n\n"
+                        )
+                        continue
+
+                    scanned += 1
                     yield (
                         "event: progress\ndata: "
                         + json.dumps({"done": i + 1, "total": total, "filename": entry["filename"]})
                         + "\n\n"
                     )
-                    continue
-
-                scanned += 1
-                yield (
-                    "event: progress\ndata: "
-                    + json.dumps({"done": i + 1, "total": total, "filename": entry["filename"]})
-                    + "\n\n"
-                )
-                yield "event: result\ndata: " + json.dumps({"file": entry}) + "\n\n"
+                    yield "event: result\ndata: " + json.dumps({"file": entry}) + "\n\n"
         finally:
             await _flush_upsert()
 
@@ -2744,20 +2987,23 @@ async def rename_files(req: RenameRequest, background_tasks: BackgroundTasks):
 # Lazy-initialised inside _run_embed_phase so it is always created inside the
 # running event loop (safe across all Python 3.x versions).
 _embed_sem: Optional[asyncio.Semaphore] = None
+_embed_sem_size: Optional[int] = None   # limit the live semaphore was built for
 
 
 def _get_embed_sem() -> asyncio.Semaphore:
-    global _embed_sem
-    if _embed_sem is None:
-        # Default 3 concurrent: FFmpeg writes to local staging, so parallel
-        # jobs don't saturate NAS bandwidth. AMM_EMBED_CONCURRENCY (1–8) lets
-        # well-resourced deployments raise it — remux is I/O-bound, so the
-        # right value tracks your storage bandwidth, not your core count.
-        try:
-            n = int(os.getenv("AMM_EMBED_CONCURRENCY", "3"))
-        except ValueError:
-            n = 3
-        _embed_sem = asyncio.Semaphore(max(1, min(8, n)))
+    """The embed concurrency gate, rebuilt when the effective limit changes.
+
+    _run_embed_phase takes this ONCE per phase and closes over it, so changing
+    the setting never disturbs a batch already running — the new limit applies to
+    the next one. (A chunked rename whose setting changes mid-batch can briefly
+    run one chunk under each limit; bounded, and far safer than mutating a
+    semaphore other coroutines are parked on.)
+    """
+    global _embed_sem, _embed_sem_size
+    want = _effective_embed_concurrency()
+    if _embed_sem is None or _embed_sem_size != want:
+        _embed_sem = asyncio.Semaphore(want)
+        _embed_sem_size = want
     return _embed_sem
 
 
@@ -3026,6 +3272,13 @@ async def _run_embed_phase(job_id: str, tasks: list, embed_mode: str = "embed") 
     # check can't race with a not-yet-counted unit.
     job = _embed_jobs.get(job_id)
     if job is None or job["done"] >= job["total"]:
+        # One write for the whole batch instead of one per file: the post-embed
+        # rekeys above were deferred (see _JsonStore.mutate) and land here.
+        try:
+            await asyncio.to_thread(_match_cache_store.flush)
+        except Exception as e:
+            print(f"WARNING: match-cache flush after embed phase failed: {e}")
+
         _job_finish(job_id)
 
 
@@ -3115,6 +3368,11 @@ async def _run_manual_embed_job(
     _job_progress(
         job_id, {"path": str(file_path), "warning": warning} if warning else None
     )
+    try:
+        await asyncio.to_thread(_match_cache_store.flush)
+    except Exception as e:
+        print(f"WARNING: match-cache flush after manual embed failed: {e}")
+
     _job_finish(job_id)
 
 
@@ -3223,6 +3481,12 @@ async def get_settings():
         "embed_mode": _effective_embed_mode(),
         "performer_order": _effective_performer_order(),
         "clear_metadata": _effective_clear_metadata(),
+        "embed_concurrency": _effective_embed_concurrency(),
+        # 'env' means an operator pinned it (compose/shell); the UI then shows the
+        # control read-only rather than offering an edit that would not apply.
+        "embed_concurrency_source": _embed_concurrency_source(),
+        "embed_concurrency_min": _EMBED_CONCURRENCY_MIN,
+        "embed_concurrency_max": _EMBED_CONCURRENCY_MAX,
         # F5 — opt-in, DEFAULT OFF: only an explicit stored True enables it.
         "contribute_fingerprints": _load_settings().get("contribute_fingerprints") is True,
     }
@@ -3238,6 +3502,7 @@ class SaveSettingsRequest(BaseModel):
     # Clear pre-existing container metadata before embedding. Tri-state like
     # contribute_fingerprints: None = keep, True/False = set explicitly.
     clear_metadata:  Optional[bool] = None
+    embed_concurrency: Optional[int] = None
     # F5 — OPT-IN fingerprint contribution to StashDB. Tri-state on the wire:
     # None = leave unchanged, True/False = set explicitly (the generic truthy
     # prefs loop would treat False as "keep", silently making the opt-in
@@ -3366,6 +3631,16 @@ async def save_settings(req: SaveSettingsRequest):
         dirty = True
 
     # Same tri-state handling for the clear-metadata toggle.
+    # An int, so it cannot ride the truthy prefs loop (0 is not a valid value
+    # anyway — the clamp floors it at 1). Clamped rather than rejected: a client
+    # sending 99 gets the maximum, which is friendlier than a 422 for a knob.
+    if req.embed_concurrency is not None:
+        wanted = max(_EMBED_CONCURRENCY_MIN,
+                     min(_EMBED_CONCURRENCY_MAX, int(req.embed_concurrency)))
+        if settings.get("embed_concurrency") != wanted:
+            settings["embed_concurrency"] = wanted
+            dirty = True
+
     if (req.clear_metadata is not None
             and settings.get("clear_metadata") != req.clear_metadata):
         settings["clear_metadata"] = req.clear_metadata
@@ -3402,6 +3677,8 @@ async def save_settings(req: SaveSettingsRequest):
         "embed_mode": _effective_embed_mode(),
         "performer_order": _effective_performer_order(),
         "clear_metadata": _effective_clear_metadata(),
+        "embed_concurrency": _effective_embed_concurrency(),
+        "embed_concurrency_source": _embed_concurrency_source(),
         "contribute_fingerprints": _load_settings().get("contribute_fingerprints") is True,
     }
 
@@ -3797,6 +4074,9 @@ class _JsonStore:
         self._default_factory = default_factory   # callable -> fresh default
         self._lock = threading.RLock()
         self._cache = None                         # lazy-loaded
+        # Set by mutate(defer=True): the in-memory value has moved ahead of the
+        # file and someone must call flush(). See mutate() for why that exists.
+        self._dirty = False
 
     def _ensure_loaded_locked(self):
         if self._cache is not None:
@@ -3827,24 +4107,47 @@ class _JsonStore:
                 return copy.deepcopy(val) if val is not None else None
             return None
 
-    def mutate(self, fn) -> bool:
+    def mutate(self, fn, *, defer: bool = False) -> bool:
         """
         Run ``fn(cache)`` under the lock, mutating the cached object in place.
         If ``fn`` returns True the cache is persisted atomically.  ``fn`` may
-        raise to reject the change.  Returns whether a write happened.
+        raise to reject the change.  Returns whether the value changed.
+
+        ``defer=True`` records the change in memory and marks the store dirty
+        WITHOUT writing, leaving the file to a later ``flush()``. This exists
+        for one caller: the post-embed fingerprint rekey runs once per embedded
+        file and rewrites the WHOLE match cache each time — measured at 109 ms
+        with a full 50,000-entry cache (11.7 MB of JSON), i.e. ~22 s of pure
+        serialisation across a 200-file batch. Readers are unaffected either
+        way: get()/get_key() serve the in-memory value, so a deferred change is
+        visible immediately and only the on-disk copy lags.
         """
         with self._lock:
             self._ensure_loaded_locked()
             changed = fn(self._cache)
             if changed:
-                self._write_locked()
+                if defer:
+                    self._dirty = True
+                else:
+                    self._write_locked()
             return bool(changed)
+
+    def flush(self) -> bool:
+        """Persist a deferred mutation. No-op (and cheap) when nothing is pending."""
+        with self._lock:
+            if not self._dirty:
+                return False
+            self._write_locked()
+            return True
 
     def _write_locked(self):
         self._path.parent.mkdir(parents=True, exist_ok=True)
         tmp = Path(str(self._path) + ".tmp")
         tmp.write_text(json.dumps(self._cache, ensure_ascii=False), encoding="utf-8")
         os.replace(tmp, self._path)
+        # Whatever was pending is now on disk — an ordinary (non-deferred) write
+        # by any other caller therefore doubles as a flush.
+        self._dirty = False
 
 
 USER_TAGS_FILE = DATA_DIR / "user_tags.json"
@@ -3980,6 +4283,11 @@ async def search_sites(q: str = Query(default="", min_length=0)):
 # identically on Docker/deb/AppImage.
 _MATCH_CACHE_FILE = DATA_DIR / "match_cache.json"
 _match_cache_store = _JsonStore(_MATCH_CACHE_FILE, dict)
+# Last-resort flush for exits that skip the FastAPI shutdown event (a plain
+# interpreter exit, a CLI/script import). Never fires on SIGKILL — that window
+# is the accepted risk of deferring: the rekey is lost and the file re-matches
+# on the next scan.
+atexit.register(_match_cache_store.flush)
 try:
     _MATCH_CACHE_MAX = int(os.getenv("AMM_MATCH_CACHE_MAX", "50000"))
 except ValueError:
@@ -4102,7 +4410,12 @@ def _match_cache_rekey(old_oshash: Optional[str], new_oshash: str, *,
         _bound_match_cache(cache)
         return True
 
-    _match_cache_store.mutate(_apply)
+    # Deferred: this runs once per embedded file and the whole cache is rewritten
+    # on every write. _run_embed_phase / _run_manual_embed_job flush once the
+    # batch finishes, and any confirm-match write flushes it as a side effect.
+    # Accepted risk: a hard crash between here and that flush loses the rekey,
+    # and the file simply re-matches on the next scan.
+    _match_cache_store.mutate(_apply, defer=True)
 
 
 # ── Learned performer aliases (F12) ──────────────────────────────────────────
@@ -4496,17 +4809,19 @@ def extract_thumbnails(request: ThumbnailRequest):
         duration = float(result.stdout.strip())
         
         # Generate 6 thumbnails at different timestamps
-        thumbnails = []
         thumbnail_dir = _thumbnail_dir_for(file_path)
         thumbnail_dir.mkdir(parents=True, exist_ok=True)
         
         # Extract thumbnails at 10%, 25%, 40%, 55%, 70%, 85% of duration
         percentages = [0.10, 0.25, 0.40, 0.55, 0.70, 0.85]
         
-        for idx, pct in enumerate(percentages):
+        def _extract_frame(job):
+            """One ffmpeg seek+encode. Returns the thumbnail dict, or None if the
+            frame could not be written (e.g. a timestamp past a truncated file)."""
+            idx, pct = job
             timestamp = duration * pct
             thumb_path = thumbnail_dir / f"thumb_{idx}.jpg"
-            
+
             # Extract frame with ffmpeg
             ffmpeg_cmd = [
                 ffmpeg_path(), "-hide_banner", "-loglevel", "error", "-y",
@@ -4517,19 +4832,33 @@ def extract_thumbnails(request: ThumbnailRequest):
                 "-vf", "scale=320:-1",
                 str(thumb_path)
             ]
-            
+
             subprocess.run(ffmpeg_cmd, capture_output=True, timeout=30, check=True)
-            
+
             # Read and encode to base64
-            if thumb_path.exists():
-                with open(thumb_path, "rb") as f:
-                    img_data = base64.b64encode(f.read()).decode('utf-8')
-                    thumbnails.append({
-                        "index": idx,
-                        "timestamp": round(timestamp, 2),
-                        "data": f"data:image/jpeg;base64,{img_data}",
-                        "path": str(thumb_path)
-                    })
+            if not thumb_path.exists():
+                return None
+            with open(thumb_path, "rb") as f:
+                img_data = base64.b64encode(f.read()).decode('utf-8')
+            return {
+                "index": idx,
+                "timestamp": round(timestamp, 2),
+                "data": f"data:image/jpeg;base64,{img_data}",
+                "path": str(thumb_path)
+            }
+
+        # Six independent seeks into the same file — each ffmpeg reads only the
+        # region around its timestamp, so they overlap instead of queueing. The
+        # user is watching this one (it runs when the manual editor opens), and
+        # serially it cost six full seek+decode round trips.
+        #
+        # Executor.map preserves INPUT order, which the UI depends on (the
+        # thumbnail grid renders the array as-is), and re-raises a worker's
+        # exception on iteration — so a TimeoutExpired or CalledProcessError
+        # still reaches the handlers below exactly as it did serially.
+        with ThreadPoolExecutor(max_workers=len(percentages)) as pool:
+            thumbnails = [t for t in pool.map(_extract_frame, enumerate(percentages))
+                          if t is not None]
         
         return {
             "success": True,
@@ -4882,6 +5211,16 @@ async def _run_ffmpeg_with_progress(cmd: list,
     return proc.returncode, stderr_data.decode(errors="replace").strip()
 
 
+# Copy-back progress sampling interval. The loop below WAITS ON THE COPY and
+# uses this only as the sampling timeout, so a finished copy returns instantly;
+# sleeping the interval instead put a hard floor under every embed — measured at
+# 501 ms for a 448 KB file whose copy takes ~0 ms, and 502 ms for a 161 MB one
+# that takes ~30 ms, which is 500 ms × every file in a batch. The client polls
+# embed status at 1 Hz, so sampling at 5 Hz is already finer than anything the
+# UI can show; it exists to keep the bar smooth on multi-GB NAS copies.
+_COPY_PROGRESS_POLL_S = 0.2
+
+
 async def _copy_with_progress(src: Path, dst: Path, on_pct=None) -> None:
     """DATA copy (shutil.copyfile) in a worker thread while the async side
     polls the destination's byte count — REAL copy-back progress. Metadata
@@ -4894,8 +5233,14 @@ async def _copy_with_progress(src: Path, dst: Path, on_pct=None) -> None:
     total = await asyncio.to_thread(lambda: src.stat().st_size)
     task = asyncio.create_task(asyncio.to_thread(shutil.copyfile, str(src), str(dst)))
     try:
-        while not task.done():
-            await asyncio.sleep(0.5)
+        while True:
+            # Waits on the COPY, not on a timer: returns the moment the copy
+            # lands, and only falls through to a progress sample when it is
+            # still running. Same discipline as _run_ffmpeg_with_progress.
+            finished, _pending = await asyncio.wait({task},
+                                                    timeout=_COPY_PROGRESS_POLL_S)
+            if finished:
+                break
             if on_pct and total:
                 try:
                     done_b = await asyncio.to_thread(lambda: dst.stat().st_size)
@@ -5075,8 +5420,11 @@ async def _embed_metadata_staged(file_path: Path, metadata: dict, ext: str,
     # so "no duration" used to mean a spinner and nothing else for the entire
     # rewrite. Only when neither measurement exists does the remux stay silent
     # and the copy-back take the whole 0–100 range, rather than lying at 50%.
-    duration = None
-    if progress_cb:
+    # The scan already probed this file and the value rode along in `metadata`;
+    # only fall back to a fresh probe when nothing upstream knew it (manual
+    # rename with no scan entry, or AMM_SCAN_PROBE_DURATION=0 with no API match).
+    duration = _known_duration(metadata)
+    if duration is None and progress_cb:
         duration = await asyncio.to_thread(_probe_duration_seconds, file_path)
     _w_remux = 0.5 if (duration or src_bytes) else 0.0
     def _remux_pct(p):

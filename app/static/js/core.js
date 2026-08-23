@@ -269,6 +269,31 @@ function _performerLimit() {
 }
 
 /** Pick a representative operation for the preview, or null when no data yet. */
+// Keys the preview endpoints actually read out of `file_data` — the complete
+// set consulted by extract_template_vars (app/core/formatter.py), which is the
+// only thing /api/preview-names and /api/preview-paths pass it to. Everything
+// else on a scan entry (oshash, phash, tokens, nfo_metadata, size, …) is dead
+// weight over the wire: a whole entry is ~1.3 KB, so a 200-file preview shipped
+// 385 KB on EVERY template keystroke.
+//
+// Keep this list in step with extract_template_vars — a key missing here is a
+// template variable that silently renders empty in the preview while the real
+// rename (which still sends the full entry) fills it in.
+const PREVIEW_FILE_DATA_KEYS = [
+    'performers', 'scene_title', 'site', 'clean_name', 'release_date',
+    'quality', 'video_format', 'source', 'group', 'duration_seconds',
+];
+
+/** Copy of `fileData` carrying only what a preview request needs. */
+function previewFileData(fileData) {
+    const out = {};
+    if (!fileData) return out;
+    for (const key of PREVIEW_FILE_DATA_KEYS) {
+        if (fileData[key] !== undefined) out[key] = fileData[key];
+    }
+    return out;
+}
+
 function _samplePreviewOp() {
     // Prefer a real matched result (has scene_data → most accurate preview).
     const matched = matchedResults.find(r => r && r.match && r.original && r.original.path);
@@ -328,7 +353,7 @@ function updateTemplatePreview() {
         operations: [{
             old_path: op.old_path,
             scene_data: op.scene_data,
-            file_data: op.file_data,
+            file_data: previewFileData(op.file_data),
             template: template.value,
             flat: flatRename.checked,
         }],
@@ -873,6 +898,17 @@ async function openSettingsModal() {
             if (themeSel && data.theme)  themeSel.value = data.theme;
             if (embedSel && data.embed_mode) embedSel.value = data.embed_mode;
             if (orderSel && data.performer_order) orderSel.value = data.performer_order;
+            // Embed concurrency. When the environment pins it the control goes
+            // read-only: an operator's compose value always wins server-side, so
+            // offering an edit here would be a lie.
+            const concSel = document.getElementById('settings-embed-concurrency');
+            if (concSel && data.embed_concurrency) {
+                concSel.value = String(data.embed_concurrency);
+                const pinned = data.embed_concurrency_source === 'env';
+                concSel.disabled = pinned;
+                const note = document.getElementById('settings-embed-concurrency-env');
+                if (note) note.hidden = !pinned;
+            }
             const fpCb = document.getElementById('settings-contribute-fp');
             if (fpCb) fpCb.checked = data.contribute_fingerprints === true;
             const clearCb = document.getElementById('settings-clear-metadata');
@@ -1225,6 +1261,7 @@ async function saveSettings() {
     const themeVal   = document.getElementById('settings-theme')?.value  || 'default';
     const embedVal   = document.getElementById('settings-embed-mode')?.value || 'embed';
     const orderVal   = document.getElementById('settings-performer-order')?.value || 'female_first';
+    const concSel    = document.getElementById('settings-embed-concurrency');
 
     try {
         const resp = await fetch('/api/settings', {
@@ -1237,6 +1274,11 @@ async function saveSettings() {
                 theme:           themeVal,
                 embed_mode:      embedVal,
                 performer_order: orderVal,
+                // Omitted when the environment pins it: the server would ignore
+                // it anyway, and saving a value that never applies is worse than
+                // not saving one.
+                ...(concSel && !concSel.disabled
+                    ? { embed_concurrency: parseInt(concSel.value, 10) } : {}),
                 // Explicit true/false — the server treats null as "keep".
                 clear_metadata:
                     document.getElementById('settings-clear-metadata')?.checked === true,
@@ -1710,3 +1752,115 @@ function _clearEmbedBanner() {
 }
 
 
+
+// ─── Pointer-drag list reordering ────────────────────────────────────────────
+// Shared by the match cards and the manual editor so performers can be ordered
+// by dragging as well as with the ◀ ▶ arrows (which stay: they are the
+// keyboard-reachable path, and the only one that works without a pointer).
+//
+// Deliberately NOT the HTML5 drag-and-drop API. Two reasons, both about
+// behaving identically everywhere AMM ships:
+//   • HTML5 DnD has no touch support at all — `draggable` does nothing on a
+//     tablet, so the browser/Docker deployment would show a dead feature.
+//   • On Linux, Chromium hands a `draggable` element to an OS-level drag
+//     session — the same platform path electron/main.js already pins to
+//     XWayland because native-Wayland DnD breaks on hybrid GPUs. Reordering
+//     would then depend on the user's compositor, which is exactly the kind of
+//     divergence between Docker and the deb/rpm/AppImage shell we don't ship.
+// Pointer events are renderer-only: one code path for mouse, touch and pen,
+// and no contact with the global file-drop handler above.
+const REORDER_THRESHOLD_PX = 5;   // movement before a press becomes a drag
+
+// Move one element of an array, returning a NEW array (callers swap the model
+// reference so a re-render always sees fresh data).
+function arrayMove(list, from, to) {
+    const out = list.slice();
+    out.splice(to, 0, out.splice(from, 1)[0]);
+    return out;
+}
+
+// Which sibling should the dragged chip be inserted BEFORE, or null to append?
+// Chips wrap (flex-wrap), so a row below the pointer wins outright and only
+// within the pointer's own row does the horizontal midpoint decide.
+function _reorderTargetAt(items, dragged, x, y) {
+    for (const el of items) {
+        if (el === dragged) continue;
+        const r = el.getBoundingClientRect();
+        if (y < r.top) return el;
+        if (y > r.bottom) continue;
+        if (x < r.left + r.width / 2) return el;
+    }
+    return null;
+}
+
+/**
+ * Make the children of `container` reorderable by dragging.
+ *
+ * Listens on the container (delegation), so callers may rebuild their chips
+ * as often as they like without rebinding — and calling this again on the same
+ * container is a no-op. The dragged node is moved in the DOM live, so the drop
+ * index is simply where it ended up; the caller's `onReorder(from, to)` then
+ * mutates the model and re-renders, which replaces the preview with the truth.
+ * A press that never passes the threshold stays a click, and a cancelled drag
+ * puts the node back without telling the caller anything happened.
+ *
+ * @param {Element}  container      element whose children reorder
+ * @param {string}   itemSelector   selector matching one draggable child
+ * @param {string}   ignoreSelector selector for controls that must stay clickable
+ * @param {Function} onReorder      (fromIndex, toIndex) => void, on a real move
+ */
+function enableChipReorder(container, itemSelector, ignoreSelector, onReorder) {
+    if (!container || container.dataset.reorderable === '1') return;
+    container.dataset.reorderable = '1';
+
+    let item = null, from = -1, startX = 0, startY = 0, dragging = false;
+    const items = () => [...container.querySelectorAll(itemSelector)];
+
+    // Put a node back at `index` — used when a drag is cancelled, so the DOM
+    // preview never outlives the interaction that created it.
+    const restore = (el, index) => {
+        const rest = items().filter(n => n !== el);
+        container.insertBefore(el, rest[index] || null);
+    };
+
+    container.addEventListener('pointerdown', (e) => {
+        if (!e.isPrimary || (e.pointerType === 'mouse' && e.button !== 0)) return;
+        if (ignoreSelector && e.target.closest(ignoreSelector)) return;
+        const el = e.target.closest(itemSelector);
+        if (!el || !container.contains(el)) return;
+        item = el;
+        from = items().indexOf(el);
+        startX = e.clientX;
+        startY = e.clientY;
+        dragging = false;
+    });
+
+    container.addEventListener('pointermove', (e) => {
+        if (!item) return;
+        if (!dragging) {
+            if (Math.abs(e.clientX - startX) < REORDER_THRESHOLD_PX &&
+                Math.abs(e.clientY - startY) < REORDER_THRESHOLD_PX) return;
+            dragging = true;
+            item.classList.add('is-dragging');
+            // Capture so the drag survives the pointer leaving the chip; the
+            // events still bubble to the container, which is what we listen on.
+            try { item.setPointerCapture(e.pointerId); } catch (_) { /* not fatal */ }
+        }
+        const before = _reorderTargetAt(items(), item, e.clientX, e.clientY);
+        container.insertBefore(item, before);   // null ⇒ append
+    });
+
+    const finish = (commit) => {
+        if (!item) return;
+        const el = item, wasDragging = dragging, to = items().indexOf(item);
+        el.classList.remove('is-dragging');
+        item = null;
+        dragging = false;
+        if (!wasDragging) return;               // a click, not a drag
+        if (commit && to >= 0 && to !== from) onReorder(from, to);
+        else restore(el, from);
+    };
+
+    container.addEventListener('pointerup', () => finish(true));
+    container.addEventListener('pointercancel', () => finish(false));
+}

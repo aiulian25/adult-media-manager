@@ -2880,3 +2880,21 @@ details[open] > .sf-head .sf-when-open   { display: inline; }
     font-family: var(--mono); font-size: 0.72rem;
     background: var(--accent-soft); border-radius: 5px; padding: 1px 6px;
 }
+
+/* ── Pointer-drag reordering (performers only) ─────────────────────────────── */
+/* touch-action:none is required, not cosmetic: without it a touch drag scrolls
+   the page instead of moving the chip. The ◀ ▶ arrows and the × keep their own
+   cursor so they still read as buttons inside a draggable chip. */
+.perf-chip,
+#manual-performers-list .chip {
+    cursor: grab;
+    touch-action: none;
+}
+.perf-chip.is-dragging,
+#manual-performers-list .chip.is-dragging {
+    cursor: grabbing;
+    opacity: 0.6;
+    border-color: var(--accent);
+}
+#manual-performers-list .chip-arrow,
+#manual-performers-list .chip-remove { cursor: pointer; }

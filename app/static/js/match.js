@@ -615,7 +615,7 @@ async function _fetchNamePreviews() {
                 operations: rows.map(({ r }) => ({
                     old_path: r.original.path,
                     scene_data: r.match,
-                    file_data: r.original,
+                    file_data: previewFileData(r.original),
                 })),
                 template: template.value,
                 flat: flatRename.checked,
@@ -724,6 +724,12 @@ function _renderPerformerStrip(el, noteEl, result, index) {
         });
         el.appendChild(chip);
     });
+    // Drag to reorder — the same edit as the arrows (see enableChipReorder in
+    // core.js for why this is not the HTML5 drag API). The arrows are excluded
+    // so they stay clickable.
+    enableChipReorder(el, '.perf-chip', '.perf-arrow',
+                      (from, to) => _movePerformerTo(index, from, to));
+
     // The moved chip flashes once after the re-render, then settles.
     if (result._flash_performer) {
         result._flash_performer = null;
@@ -773,22 +779,27 @@ function _renderOrderNote(noteEl, result, index) {
     noteEl.hidden = false;
 }
 
-function _movePerformer(index, i, d) {
+// Move a performer to an arbitrary position. The ◀ ▶ arrows and the drag both
+// route through here, so an arrow press and a one-step drag are the same edit
+// (for adjacent positions a move IS the old swap). The gender array rides
+// along in lockstep — letting the two drift would relabel the ♀/♂ glyphs.
+function _movePerformerTo(index, from, to) {
     const r = matchedResults[index];
     const m = r && r.match;
     if (!m || !Array.isArray(m.performers)) return;
-    const j = i + d;
-    if (j < 0 || j >= m.performers.length) return;
-    m.performers = m.performers.slice();
-    [m.performers[i], m.performers[j]] = [m.performers[j], m.performers[i]];
+    const n = m.performers.length;
+    if (from === to || from < 0 || to < 0 || from >= n || to >= n) return;
+    m.performers = arrayMove(m.performers, from, to);
     if (Array.isArray(m.performer_genders)) {
-        m.performer_genders = m.performer_genders.slice();
-        [m.performer_genders[i], m.performer_genders[j]] =
-            [m.performer_genders[j], m.performer_genders[i]];
+        m.performer_genders = arrayMove(m.performer_genders, from, to);
     }
     r.performer_order_manual = true;
-    r._flash_performer = m.performers[j];   // the moved name, now at position j
+    r._flash_performer = m.performers[to];   // the moved name, now at position `to`
     displayMatches(false);   // Output chips refresh via updateTemplatePreview
+}
+
+function _movePerformer(index, i, d) {
+    _movePerformerTo(index, i, i + d);
 }
 
 function _resetPerformerOrder(index) {

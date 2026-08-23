@@ -4,10 +4,15 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AMM — Adult Media Manager</title>
-    <link rel="icon" type="image/png" href="/static/icon.png">
+    <link rel="icon" type="image/png" href="/static/icon-64.png">
+    <!-- Self-hosted fonts (see static/fonts.css): same families and weights as
+         the Google Fonts link this replaced, but nothing leaves the origin, so
+         first paint never waits on the internet and the desktop builds render
+         the same typography offline. Loaded BEFORE style.css so the @font-face
+         rules are known when the first styled text is laid out. -->
+    <link rel="preload" as="font" type="font/woff2" crossorigin href="/static/fonts/inter-latin.woff2">
+    <link rel="stylesheet" href="/static/fonts.css">
     <link rel="stylesheet" href="/static/style.css">
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 </head>
 <body>
     <!-- Background (retired in the flat revamp; hidden via CSS, markup kept harmless) -->
@@ -31,7 +36,7 @@
         <section class="glass-panel controls-card fusion-bar">
             <div class="fusion-row">
                 <button class="topbar-title" id="btn-home" title="New scan / Reset">
-                    <img src="/static/icon.png" alt="" class="logo-icon" width="30" height="30" style="border-radius:50%;" onerror="this.style.display='none'">
+                    <img src="/static/icon-64.png" alt="" class="logo-icon" width="30" height="30" style="border-radius:50%;" onerror="this.style.display='none'">
                     <span class="fusion-brand-name">AMM</span>
                     <span class="reset-hint" data-i18n="nav.new_scan">new scan</span>
                 </button>
@@ -249,6 +254,26 @@
                             <option value="female_first" data-i18n="settings.performer_order_female">Female performers first (recommended)</option>
                             <option value="source" data-i18n="settings.performer_order_source">Keep the source's order</option>
                         </select>
+                    </span>
+                </div>
+
+                <div class="set-row">
+                    <span class="set-main">
+                        <label class="set-label" for="settings-embed-concurrency" data-i18n="settings.embed_concurrency">Files embedded at the same time</label>
+                        <span class="set-hint" data-i18n="settings.embed_concurrency_hint">Metadata embedding is limited by your storage, not your CPU. On a network share or a slow disk, several large files at once make every one of them slower and can exhaust memory — try 1 or 2. Raise it only if your disk is not already saturated. Takes effect on the next batch.</span>
+                    </span>
+                    <span class="set-ctl">
+                        <select id="settings-embed-concurrency" class="glass-input settings-select">
+                            <option value="1">1</option>
+                            <option value="2">2</option>
+                            <option value="3">3</option>
+                            <option value="4">4</option>
+                            <option value="5">5</option>
+                            <option value="6">6</option>
+                            <option value="7">7</option>
+                            <option value="8">8</option>
+                        </select>
+                        <span class="set-hint" id="settings-embed-concurrency-env" hidden data-i18n="settings.embed_concurrency_env">Set by AMM_EMBED_CONCURRENCY in this deployment's environment — change it there.</span>
                     </span>
                 </div>
 
@@ -611,7 +636,7 @@
             <div class="match-checkbox-wrap">
                 <input type="checkbox" class="match-cb" checked>
             </div>
-            <div class="match-thumbnail" data-thumb hidden><img alt=""></div>
+            <div class="match-thumbnail" data-thumb hidden><img alt="" loading="lazy" decoding="async"></div>
             <div class="match-info">
                 <div class="scene-title"><span data-title></span><span class="manual-tag" data-manual hidden></span></div>
                 <div class="scene-meta">

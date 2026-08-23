@@ -52,7 +52,13 @@ async function renameFiles() {
         const pvRes = await fetch('/api/preview-paths', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({ operations: operations.slice(0, 5) })
+            // Trimmed copies — `operations` itself still carries the full
+            // file_data for the /api/rename call further down, which needs it.
+            body: JSON.stringify({
+                operations: operations.slice(0, 5).map(op => ({
+                    ...op, file_data: previewFileData(op.file_data),
+                })),
+            })
         });
         if (pvRes.ok) {
             const pvData = await pvRes.json();
@@ -794,7 +800,6 @@ async function _pollEmbedStatus(jobId, total) {
     // durably, so once it's back the next poll re-attaches. Only give up after
     // several consecutive failures so a brief hiccup doesn't silently abort.
     const MAX_NET_FAILS = 8;  // ~16 s of unreachable server before giving up
-    let polls = 0;
     let netFails = 0;
     let slowNotified = false;  // one-time "still embedding" notice on escalation
     // F2: consecutive polls whose payload was byte-identical to the previous
@@ -811,7 +816,6 @@ async function _pollEmbedStatus(jobId, total) {
     try { localStorage.setItem(EMBED_JOB_KEY, JSON.stringify({ jobId, total })); } catch {}
 
     async function tick() {
-        polls++;
         try {
             const res = await fetch(`/api/embed-status/${encodeURIComponent(jobId)}`);
             if (!res.ok) {
@@ -876,7 +880,13 @@ async function _pollEmbedStatus(jobId, total) {
         }
     }
 
-    setTimeout(tick, EMBED_POLL_INTERVAL_MS);
+    // Fire the FIRST poll now, not an interval from now. The queue panel can
+    // only render once a payload with `files` has arrived, so waiting here made
+    // every batch stare at an empty banner for a second — and with R1 a batch of
+    // small files can be finished before that first poll ever ran. Safe against
+    // a 404 race: /api/rename and /api/save-manual-metadata both register the
+    // job (_job_create) BEFORE they return the id we are polling with.
+    tick();
 }
 
 /**
