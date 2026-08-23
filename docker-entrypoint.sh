@@ -23,8 +23,31 @@ if ! getent passwd amm > /dev/null 2>&1; then
     useradd -u "${PUID}" -g amm -s /bin/bash -m amm
 fi
 
-# Ensure correct ownership of app data
-chown -R amm:amm /data /app
+# Ensure correct ownership of app data.
+#
+# Recurse ONLY when ownership is actually wrong. /data accumulates a thumbnails/
+# directory (six JPEGs per manually-edited file), so chowning it unconditionally
+# spent seconds of every startup re-setting ownership that was already correct.
+#
+# The test is O(top-level entries), not O(files): -maxdepth 1 covers the mount
+# point itself AND its immediate children, and -quit stops at the first
+# mismatch. That keeps both cases the recursion existed for:
+#   • first run    — a fresh volume is root-owned, so the mount point mismatches;
+#   • PUID change  — everything is owned by the previous uid, same result;
+# and it also catches a backup restored as root, which lands exactly there
+# (settings.json, catalog.db, thumbnails/ …).
+#
+# Not detected: a mismatch DEEPER than one level (a file inside thumbnails/ owned
+# by root while thumbnails/ itself is not). Nothing in normal operation creates
+# that — the app writes as amm, and this runs before privileges are dropped — and
+# `docker exec <container> chown -R amm:amm /data` repairs it by hand.
+for _dir in /data /app; do
+    [ -d "$_dir" ] || continue
+    if [ -n "$(find "$_dir" -maxdepth 1 \( ! -user amm -o ! -group amm \) -print -quit 2>/dev/null)" ]; then
+        echo "Fixing ownership of $_dir (first run, restored data, or PUID/PGID change)…"
+        chown -R amm:amm "$_dir"
+    fi
+done
 
 # Grant the container user write access to the media volume.
 # When the host directory is owned by root (or a different uid), rename

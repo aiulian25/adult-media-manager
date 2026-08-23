@@ -34,12 +34,24 @@ services:
       #
       # ── Performance tuning (optional, for well-resourced hosts) ────────────
       # Remux is I/O-bound (-codec copy, no transcoding) — tune to your STORAGE,
-      # not your CPU cores. Two knobs, both also honored by deb/rpm/AppImage:
+      # not your CPU cores. Three knobs, all also honored by deb/rpm/AppImage:
       #
       # 1) Parallel embeds (default 3, clamped 1–8). Raise only if your NAS/disk
       #    bandwidth isn't already saturated at 3 — more parallelism on a
-      #    saturated link just makes every file slower:
+      #    saturated link just makes every file slower. Also available in the UI
+      #    (⚙ Settings → "Files embedded at the same time"); setting it HERE wins
+      #    and renders that control read-only, so the container stays the source
+      #    of truth for an operator-managed deployment:
       # - AMM_EMBED_CONCURRENCY=${AMM_EMBED_CONCURRENCY:-3}
+      #
+      # 1b) Parallel SCAN workers (default 8, clamped 1–16). Different knob from
+      #    the one above: scanning reads file headers (ffprobe/oshash), it does
+      #    not move gigabytes, so it parallelises much further than embedding.
+      #    Measured on 200 files: 1 → 8.1 s, 2 → 4.2 s, 8 → 1.9 s. Lower it to
+      #    2–4 on an HDD-backed SMB share that slows under parallel access.
+      #    A rescan reuses durations already in the catalog, so unchanged files
+      #    cost no ffprobe at all (200 files: ~0.5 s).
+      # - AMM_SCAN_WORKERS=${AMM_SCAN_WORKERS:-8}
       #
       # 2) RAM-disk staging: remux writes go to memory instead of disk; only the
       #    final verified copy-back touches the NAS. On a 62 GB host a 24 GB
