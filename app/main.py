@@ -313,6 +313,35 @@ _embed_jobs: dict[str, dict] = {}
 EMBED_JOB_TTL = 600  # 10 minutes
 _job_store = JobStore(DATA_DIR / "jobs.db")
 
+# ─── Per-file embed stages ──────────────────────────────────────────────
+#
+# One status value, "embedding", covers five structurally different pieces of
+# work, and only the first of them reports a number. Three of the others are
+# slow enough to dominate a file's wall time — the re-hash re-reads every byte,
+# the copy-back crosses the network, the poster fetch waits on a CDN — so a
+# single spinner for all of them tells the user nothing about why a file has sat
+# still for four minutes.
+#
+# `stage` names the step the file is actually in. It NEVER guesses: each value
+# is written at the code point that starts that work, by the layer that knows it
+# is doing it (staging admission reports its own wait; the remux reports mux vs
+# copy-back; the caller reports the tail it runs itself). A file whose stage is
+# None is simply one nobody has claimed yet — the UI falls back to the spinner
+# rather than inventing a label.
+#
+# These strings are a contract with the client: it renders `embed.stage_<value>`
+# from the locale files, so adding one here means adding a key to all six.
+_STAGE_WAITING = "waiting"      # queued on staging space (up to _STAGING_WAIT_MAX)
+_STAGE_MUXING = "muxing"        # FFmpeg remux into staging (reports progress)
+_STAGE_COPYING = "copying"      # verified copy-back to the destination volume
+_STAGE_TAGGING = "tagging"      # fast in-place tag edit (mkvpropedit/AtomicParsley)
+_STAGE_REHASHING = "rehashing"  # post-embed fingerprint — re-reads the WHOLE file
+_STAGE_POSTER = "poster"        # poster download (network, 10 s timeout)
+_STAGE_NFO = "nfo"              # NFO sidecar + catalog write
+
+_EMBED_STAGES = (_STAGE_WAITING, _STAGE_MUXING, _STAGE_COPYING, _STAGE_TAGGING,
+                 _STAGE_REHASHING, _STAGE_POSTER, _STAGE_NFO)
+
 
 def _job_create(job_id: str, total: int, kind: str = "embed") -> dict:
     """Register a background embed job in memory AND in the durable store."""
@@ -326,10 +355,12 @@ def _job_create(job_id: str, total: int, kind: str = "embed") -> dict:
         # never reaches _job_finish, so it must stamp its own.
         "finished": _now if complete else None,
         # Per-file live states for the embed queue panel: [{name, status,
-        # detail}] in processing (natural) order. status: pending | embedding |
-        # done | warning | error. Memory-only — after a server restart the
-        # durable store restores totals but not per-file detail (acceptable:
-        # the queue panel simply doesn't render for resumed jobs).
+        # detail, size, progress, stage}] in processing (natural) order.
+        # status: pending | embedding | done | warning | error; `stage` refines
+        # the "embedding" span into the real step (see _EMBED_STAGES). Both are
+        # memory-only — after a server restart the durable store restores totals
+        # but not per-file detail (acceptable: the queue panel simply doesn't
+        # render for resumed jobs).
         "files": [],
     }
     _embed_jobs[job_id] = job
@@ -412,6 +443,7 @@ def _job_finish(job_id: str) -> None:
                 e["detail"] = ("Embed state unknown — the job ended before "
                                "this file reported its outcome")
             e["progress"] = None
+            e["stage"] = None
         if stranded:
             # Permanent diagnostic: in normal operation this NEVER fires, so a
             # line here means a file's outcome went missing — grep the logs for
@@ -3130,7 +3162,8 @@ async def _run_embed_phase(job_id: str, tasks: list, embed_mode: str = "embed") 
             except OSError:
                 size = None
             out.append({"name": t[0].new_path.name, "status": "pending",
-                        "detail": None, "size": size, "progress": None})
+                        "detail": None, "size": size, "progress": None,
+                        "stage": None})
         return out
     entries = await asyncio.to_thread(_build_entries)
     job.setdefault("files", []).extend(entries)
@@ -3165,8 +3198,26 @@ async def _run_embed_phase(job_id: str, tasks: list, embed_mode: str = "embed") 
                     # Live per-file progress for the queue-panel underline bar.
                     _pcb = ((lambda p, _e=entry: _e.__setitem__("progress", round(p * 100, 1)))
                             if entry is not None else None)
+                    # …and the stage name beside it. The embed chain reports its
+                    # own steps (staging wait, remux, copy-back); the tail below
+                    # is set directly, since this function runs it.
+                    _scb = ((lambda s, _e=entry: _e.__setitem__("stage", s))
+                            if entry is not None else None)
                     ok, err = await _embed_for_mode(result.new_path, meta, embed_mode,
-                                                    progress_cb=_pcb)
+                                                    progress_cb=_pcb, stage_cb=_scb)
+                    # The container write is the ONLY step that reports a number.
+                    # Everything still to come for this file — the fingerprint
+                    # re-hash below, the poster fetch and the NFO write — measures
+                    # nothing, and none of them is quick: the re-hash re-reads the
+                    # whole file and the poster fetch has a 10 s network timeout.
+                    # Leaving the last reported value in place parked the queue bar
+                    # at a full 100% beside a live spinner for all of it, which
+                    # reads as "stuck at 100%" precisely when nothing is being
+                    # measured. None removes the bar instead — the renderer only
+                    # draws one while Number.isFinite(progress) — so those stages
+                    # show a spinner and no bar, which is the truth.
+                    if entry is not None:
+                        entry["progress"] = None
                     if not ok:
                         warning = f"Metadata embedding warning: {err}"
                         embed_failed = True
@@ -3176,6 +3227,11 @@ async def _run_embed_phase(job_id: str, tasks: list, embed_mode: str = "embed") 
                         # F6: the write changed the file's bytes — re-key the match
                         # cache + catalog to the post-embed hash so the confirmation
                         # made in Phase 1 survives the very embed that follows it.
+                        # This re-reads the WHOLE file, so it gets its own stage:
+                        # on a multi-GB file over NAS it is minutes of apparent
+                        # silence otherwise.
+                        if entry is not None:
+                            entry["stage"] = _STAGE_REHASHING
                         new_oshash = await _refresh_fingerprint_after_embed(
                             result.new_path,
                             cat.get("oshash") if cat else None,
@@ -3187,9 +3243,13 @@ async def _run_embed_phase(job_id: str, tasks: list, embed_mode: str = "embed") 
                     entry["status"] = "embedding"   # nfo_only path: mark active here
                 # Poster (F3): only meaningful alongside the NFO that references it.
                 if _FETCH_POSTERS and meta.get("poster_url"):
+                    if entry is not None:
+                        entry["stage"] = _STAGE_POSTER
                     poster_dest = result.new_path.with_name(result.new_path.stem + "-poster.jpg")
                     if await _download_poster(meta["poster_url"], poster_dest):
                         meta = {**meta, "poster_path": poster_dest.name}
+                if entry is not None:
+                    entry["stage"] = _STAGE_NFO
                 try:
                     # F1: XML serialise + file write — off the loop (see the
                     # _refresh_fingerprint_after_embed note above).
@@ -3236,6 +3296,10 @@ async def _run_embed_phase(job_id: str, tasks: list, embed_mode: str = "embed") 
                    else "warning" if warning else "done")
         if entry is not None:
             entry["status"] = _status
+            # A terminal row is not in any stage. Cleared rather than left at
+            # the last one so the payload never describes a finished file as
+            # mid-step, however the client chooses to render it.
+            entry["stage"] = None
         # F3: durable audit row — the in-memory job (and this status) is gone
         # after EMBED_JOB_TTL, so persist mode/outcome/reason/bytes/duration.
         # Off the loop (F1 discipline) and best-effort: catalog.log_embed
@@ -3322,7 +3386,8 @@ async def _run_manual_embed_job(
         # queued behind three other remuxes showed a spinner for work that had
         # not started.
         entry = {"name": file_path.name, "status": "pending",
-                 "detail": None, "size": _msize, "progress": None}
+                 "detail": None, "size": _msize, "progress": None,
+                 "stage": None}
         _mjob.setdefault("files", []).append(entry)
 
     embed_failed = False
@@ -3332,8 +3397,15 @@ async def _run_manual_embed_job(
                 entry["status"] = "embedding"
             _pcb = ((lambda p, _e=entry: _e.__setitem__("progress", round(p * 100, 1)))
                     if entry is not None else None)
+            _scb = ((lambda s, _e=entry: _e.__setitem__("stage", s))
+                    if entry is not None else None)
             ok, err = await _embed_for_mode(file_path, metadata, embed_mode,
-                                            progress_cb=_pcb)
+                                            progress_cb=_pcb, stage_cb=_scb)
+            # Same reason as the batch path in _run_embed_phase: nothing after the
+            # container write reports a number, so the bar has to go rather than
+            # sit at 100% through the re-hash that follows.
+            if entry is not None:
+                entry["progress"] = None
             if not ok:
                 warning = f"Metadata embedding warning: {err}"
                 embed_failed = True
@@ -3344,6 +3416,8 @@ async def _run_manual_embed_job(
                 # the request handler stored under the pre-embed hash. Old key
                 # kept: an in-place edit has no action context, and an unknown
                 # hardlink/copy elsewhere may still carry the old bytes.
+                if entry is not None:
+                    entry["stage"] = _STAGE_REHASHING
                 await _refresh_fingerprint_after_embed(
                     file_path, old_oshash, delete_old=False)
     except Exception as e:  # never let a background crash leave the job stuck
@@ -3356,6 +3430,7 @@ async def _run_manual_embed_job(
                else "warning" if warning else "done")
     if entry is not None:
         entry["status"] = _status
+        entry["stage"] = None   # terminal rows carry no stage (see batch path)
     # F3: manual saves are embeds too — log them on the SAME audit trail as the
     # batch path, or "did this file get remuxed?" would have a blind spot for
     # every file organised through Manual Edit.
@@ -3376,7 +3451,82 @@ async def _run_manual_embed_job(
     _job_finish(job_id)
 
 
-# ─── Embed-status Endpoint ─────────────────────────────────────────────
+# ─── Embed-status Endpoints ────────────────────────────────────────────
+
+def _prune_embed_jobs() -> None:
+    """Drop completed jobs past their TTL. Shared by both job endpoints.
+
+    F1 — a RUNNING job is never evicted, however long its batch takes; the TTL
+    clock starts at COMPLETION (see the long note in embed_status). Extracted so
+    the two endpoints cannot drift apart on that rule: a listing that pruned on
+    creation time would delete the very long-running job it exists to report.
+    """
+    now = _time.monotonic()
+    stale = [
+        k for k, v in _embed_jobs.items()
+        if v.get("complete")
+        and now - (v.get("finished") or v.get("created", now)) > EMBED_JOB_TTL
+    ]
+    for k in stale:
+        _embed_jobs.pop(k, None)
+
+
+@app.get("/api/jobs/active")
+async def list_active_jobs():
+    """Jobs worth showing right now, so a returning client can find its work.
+
+    Until this existed, a job could only be found by a client that already held
+    its id in localStorage. Anyone else — a second device, a private window,
+    cleared storage, or the same browser mid-chunked-batch before the id was
+    persisted — got an idle-looking app sitting on top of a live embed. That is
+    the "app launches clean over running work" problem, and no amount of client
+    state fixes it: the answer has to come from the server.
+
+    "Active" means still in ``_embed_jobs``, which is exactly running jobs plus
+    ones that finished recently enough to still be worth reporting (the TTL is
+    already the definition of "recent"). Both matter: the first lets the client
+    re-attach and keep polling, the second is how someone who stepped away is
+    told the batch finished, and whether it finished cleanly.
+
+    Deliberately summary-only — no ``warnings`` (which carry full filesystem
+    paths) and no per-file rows. A client that wants those asks
+    /api/embed-status/{job_id} for the one job it cares about, which keeps this
+    response small whatever the batch size. This is payload hygiene, not an
+    access boundary: the ids handed out here unlock that endpoint, and the API
+    has no authentication of its own on any route.
+    """
+    _prune_embed_jobs()
+
+    jobs = [
+        {
+            "job_id":   job_id,
+            "total":    job["total"],
+            "done":     job["done"],
+            "complete": job["complete"],
+            "warnings": len(job["warnings"]),   # count only — see the note above
+            "status":   "complete" if job["complete"] else "running",
+            "elapsed":  round((job.get("finished") or _time.monotonic())
+                              - job["created"], 1),
+        }
+        for job_id, job in _embed_jobs.items()
+    ]
+    # Longest-running first: with several in flight the oldest is the one a
+    # returning user is most likely waiting on.
+    jobs.sort(key=lambda j: j["elapsed"], reverse=True)
+
+    # Durable cross-check. With a single worker every row the store still calls
+    # "running" must have a live counterpart here; one that does not means a job
+    # died without its bookkeeping running. Reported rather than served around,
+    # because silently omitting it is how that bug would stay invisible.
+    live = set(_embed_jobs)
+    orphaned = [r["job_id"] for r in _job_store.list_running()
+                if r["job_id"] not in live]
+    if orphaned:
+        print(f"WARNING: job store lists {len(orphaned)} running job(s) with no "
+              f"in-memory counterpart: {orphaned}")
+
+    return {"jobs": jobs, "orphaned": orphaned}
+
 
 @app.get("/api/embed-status/{job_id}")
 async def embed_status(job_id: str):
@@ -3412,14 +3562,7 @@ async def embed_status(job_id: str):
     # mislabelled "Embed state unknown". Reproduced with EMBED_JOB_TTL=1: two
     # further completions left done at 1/5, and finish reported complete=true,
     # done=1/5.
-    now = _time.monotonic()
-    stale = [
-        k for k, v in _embed_jobs.items()
-        if v.get("complete")
-        and now - (v.get("finished") or v.get("created", now)) > EMBED_JOB_TTL
-    ]
-    for k in stale:
-        _embed_jobs.pop(k, None)
+    _prune_embed_jobs()
 
     # Live, in-process job is authoritative while the process is alive.
     job = _embed_jobs.get(job_id)
@@ -5285,7 +5428,8 @@ def _staging_free_bytes() -> Optional[int]:
         return None
 
 
-async def _claim_staging_space(needed_bytes: Optional[int]) -> Optional[str]:
+async def _claim_staging_space(needed_bytes: Optional[int],
+                               stage_cb=None) -> Optional[str]:
     """Reserve staging room for one remux. Returns None once claimed, else why not.
 
     Waits while other in-flight remuxes drain, because a full staging dir is
@@ -5323,6 +5467,11 @@ async def _claim_staging_space(needed_bytes: Optional[int]) -> Optional[str]:
                     f"{claim / _BYTES_PER_GB:.1f} GB, {_EMBED_STAGING_DIR} has "
                     f"{free / _BYTES_PER_GB:.1f} GB free — lower "
                     f"AMM_EMBED_CONCURRENCY or enlarge staging")
+        # Only now is this a WAIT. Reported here rather than on entry because
+        # the common case claims on the first pass and never queues at all —
+        # flagging "waiting" up front would show a queue that does not exist.
+        if stage_cb:
+            stage_cb(_STAGE_WAITING)
         await asyncio.sleep(_STAGING_WAIT_POLL)
         waited += _STAGING_WAIT_POLL
 
@@ -5337,7 +5486,7 @@ def _release_staging_space(needed_bytes: Optional[int]) -> None:
 
 
 async def embed_metadata(file_path: Path, metadata: dict,
-                         progress_cb=None) -> tuple[bool, str]:
+                         progress_cb=None, stage_cb=None) -> tuple[bool, str]:
     """
     Embed metadata into a video file using FFmpeg -codec copy (fast, no re-encode).
     Uses a temp file to avoid corrupting the original on failure.
@@ -5374,19 +5523,20 @@ async def embed_metadata(file_path: Path, metadata: dict,
             return None
     src_bytes = await asyncio.to_thread(_src_size)
 
-    admission_error = await _claim_staging_space(src_bytes)
+    admission_error = await _claim_staging_space(src_bytes, stage_cb)
     if admission_error:
         return False, admission_error
     try:
         return await _embed_metadata_staged(file_path, metadata, ext,
-                                            src_bytes, progress_cb)
+                                            src_bytes, progress_cb, stage_cb)
     finally:
         _release_staging_space(src_bytes)
 
 
 async def _embed_metadata_staged(file_path: Path, metadata: dict, ext: str,
                                  src_bytes: Optional[int],
-                                 progress_cb=None) -> tuple[bool, str]:
+                                 progress_cb=None,
+                                 stage_cb=None) -> tuple[bool, str]:
     """The remux itself, with staging space already claimed for ``src_bytes``.
 
     Three-phase commit: remux into local staging → copy to a NAS-side temp in
@@ -5435,6 +5585,10 @@ async def _embed_metadata_staged(file_path: Path, metadata: dict, ext: str,
             progress_cb(_w_remux + p * (1.0 - _w_remux))
 
     try:
+        # Staging is claimed and the probe is done — the remux starts here. This
+        # also ends any _STAGE_WAITING the admission step reported.
+        if stage_cb:
+            stage_cb(_STAGE_MUXING)
         cmd = [
             ffmpeg_path(), "-hide_banner", "-loglevel", "error", "-y",
             "-progress", "pipe:1", "-nostats",
@@ -5518,6 +5672,12 @@ async def _embed_metadata_staged(file_path: Path, metadata: dict, ext: str,
         # Phase 2: copy local staging temp → NAS staging temp.
         # The .amm_ prefix means the scan filter already ignores it.
         # Same-dir placement ensures Phase 3 is an intra-filesystem rename.
+        #
+        # Reported before the try so the fallback direct-overwrite path below is
+        # covered too: from here on every route crosses the network, which on a
+        # slow share is the half of the bar that appears to stall.
+        if stage_cb:
+            stage_cb(_STAGE_COPYING)
         nas_tmp: Optional[Path] = None
         try:
             try:
@@ -5692,14 +5852,20 @@ async def embed_metadata_mp4(file_path: Path, metadata: dict) -> tuple[bool, str
 _EMBED_EXECUTORS = {
     # Only the remux reports progress — the in-place editors finish in
     # milliseconds and keep the spinner-only treatment in the queue panel.
-    "mkvpropedit":   lambda fp, md, cb=None: embed_metadata_mkv(fp, md),
-    "atomicparsley": lambda fp, md, cb=None: embed_metadata_mp4(fp, md),
-    "remux":         lambda fp, md, cb=None: embed_metadata(fp, md, progress_cb=cb),
+    "mkvpropedit":   lambda fp, md, cb=None, scb=None: embed_metadata_mkv(fp, md),
+    "atomicparsley": lambda fp, md, cb=None, scb=None: embed_metadata_mp4(fp, md),
+    "remux":         lambda fp, md, cb=None, scb=None: embed_metadata(
+        fp, md, progress_cb=cb, stage_cb=scb),
 }
+
+# Strategies that report their own stages as they go. Everything else is a fast
+# in-place tag edit with no internal phases worth naming, so the dispatcher
+# reports one _STAGE_TAGGING on its behalf rather than leaving the row blank.
+_SELF_STAGING_STRATEGIES = frozenset({"remux"})
 
 
 async def _embed_for_mode(file_path: Path, metadata: dict, embed_mode: str,
-                          progress_cb=None) -> tuple[bool, str]:
+                          progress_cb=None, stage_cb=None) -> tuple[bool, str]:
     """
     Write embedded metadata according to embed_mode (never called for nfo_only).
 
@@ -5723,7 +5889,10 @@ async def _embed_for_mode(file_path: Path, metadata: dict, embed_mode: str,
 
     errors: list[str] = []
     for strategy in plan:
-        ok, err = await _EMBED_EXECUTORS[strategy](file_path, metadata, progress_cb)
+        if stage_cb and strategy not in _SELF_STAGING_STRATEGIES:
+            stage_cb(_STAGE_TAGGING)
+        ok, err = await _EMBED_EXECUTORS[strategy](file_path, metadata,
+                                                   progress_cb, stage_cb)
         if ok:
             return True, ""
         errors.append(f"{strategy}: {err}")

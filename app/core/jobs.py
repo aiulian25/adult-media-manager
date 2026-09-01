@@ -161,6 +161,46 @@ class JobStore:
             "complete": r["status"] in _TERMINAL,
         }
 
+    def list_running(self) -> list:
+        """Every job still marked ``running``, oldest first.
+
+        Deliberately narrow, and worth being honest about what it is for. While
+        the process lives the in-memory dict is the authority: a running job is
+        never evicted from it (only completed ones age out), so this returns the
+        same set with less detail. And nothing survives a restart as ``running``
+        — ``interrupt_running`` flips those at startup — so this is never a
+        resume mechanism either.
+
+        It earns its place as the DURABLE CROSS-CHECK for an invariant the app
+        otherwise only assumes: with one worker (review item P7), a row here must
+        have a live counterpart in memory. A row without one means a job died
+        without its bookkeeping running, which is a real bug the caller should
+        surface rather than quietly serve around.
+        """
+        if not self._conn:
+            return []
+        try:
+            with self._lock:
+                rows = self._conn.execute(
+                    "SELECT id, kind, total, done, status, created_at, updated_at "
+                    "FROM jobs WHERE status='running' ORDER BY created_at ASC"
+                ).fetchall()
+        except Exception as e:
+            print(f"WARNING: job store list_running failed: {e}")
+            return []
+        return [
+            {
+                "job_id": r["id"],
+                "kind": r["kind"],
+                "total": r["total"],
+                "done": r["done"],
+                "status": r["status"],
+                "created_at": r["created_at"],
+                "updated_at": r["updated_at"],
+            }
+            for r in rows
+        ]
+
     def interrupt_running(self) -> int:
         """Flip any ``running`` job to ``interrupted`` (call once at startup).
 
