@@ -71,6 +71,18 @@ Clean, flat interface with a live naming-template preview and three built-in the
 
 ---
 
+## What's New in v1.12.16
+
+- **The progress bar stopped lying about being finished.** Embedding a file is five separate steps, but only the first one — the FFmpeg remux — reports a number. The bar was left at whatever that step last said, so for the whole rest of the file it sat at a full 100% next to a spinning spinner, which reads as "stuck". The three steps it was covering are not quick: the fingerprint re-hash re-reads the entire file, the poster fetch waits up to ten seconds on a CDN, and the NFO write follows. The bar now disappears when the measurement does.
+- **The queue says which step each file is actually in.** Rows now read `muxing 47%`, `copying`, `re-hashing`, `fetching poster` or `writing NFO` instead of one undifferentiated spinner. Nothing is guessed: each label is written by the part of the app doing that work, and a file whose step is unknown still shows a bare spinner rather than an invented label.
+- **"Waiting for space" is finally visible.** When the staging directory is full, a file queues for room — for up to ten minutes — and that wait was indistinguishable from active work. It now says so, in amber, with the elapsed hold. If you have ever watched a batch appear to freeze on a large file, this is what it was doing.
+- **A refresh mid-batch no longer loses the job.** Batches over 20 files are submitted in chunks by the browser, and the embed job's id was only saved after the *last* chunk. Reloading at chunk 3 of 20 left the server embedding away with nothing able to find it: no banner, no queue panel. The id is now recorded the moment the server creates the job.
+- **A second job can no longer switch off the first one's progress.** Saving a manual edit while a batch was running started a second status poller against the same single banner, title and progress panel. Whichever job finished first tore all of it down — dismissing the batch's banner and deleting the handle that pointed at it, while it was still writing files. One job owns the progress display at a time now, and only that job may clear it.
+- **Resume no longer offers to run a rename on top of a running one.** After an interrupted batch the app offers to resume the queue, and that offer was built *before* the app re-attached to any job still in progress — so returning mid-batch produced a prominent button that re-submitted every queued file over work already underway. The offer now waits for the running job, says so, and re-enables itself the moment that job ends.
+- **New:** `GET /api/jobs/active` lists running and just-finished jobs, so the app can find work it has no local record of.
+
+---
+
 ## What's New in v1.12.15
 
 - **The desktop app opens straight away.** Two slow things used to run *before* any window existed: starting the backend, and — on a first AppImage launch — registering the app in your desktop menu, which copies the whole ~242 MB AppImage with a blocking file copy. From your side the app simply did nothing for several seconds after you clicked it. The window and a splash now paint first and everything slow happens behind them, so a cold start gives immediate feedback instead of silence.
@@ -81,15 +93,6 @@ Clean, flat interface with a live naming-template preview and three built-in the
 - **Docker starts faster after the first run.** The entrypoint reset ownership of everything under `/data` on every single boot, including the thumbnail cache, which grows with use. It now checks first and only recurses when ownership is actually wrong — still repairing a fresh volume, a restored backup, or a changed `PUID`/`PGID`, but no longer spending seconds re-doing correct work each time you restart the container.
 - **Drag performers to reorder them.** On match cards and in the manual editor, drag a performer chip to move it; the ◀ ▶ arrows still work and do exactly the same thing. Only performers are draggable — tags are a set, so their order carries no meaning.
 - **The interface loads faster in general** — text responses are compressed while already-compressed media is left alone, and versioned assets are cached permanently so a repeat visit re-downloads nothing. Thumbnail generation extracts its six frames in parallel rather than one after another.
-
----
-
-## What's New in v1.12.14
-
-- **Large files no longer time out mid-embed.** The remux had a wall-clock deadline scaled by file size (5 minutes plus 3 minutes per GB), which quietly assumed every job sustains ~5.7 MB/s. Several parallel remuxes over one NAS share do not: a link that gives a single reader 110 MB/s can drop to 7 MB/s per stream once four are running, so 5–9 GB files that were streaming steadily the whole time were killed minutes from the finish line — `FFmpeg timed out after 1930s`. The deadline is now a **stall** limit instead: FFmpeg is stopped only after five minutes with no progress at all from its own feed, meaning a wedged mount, not a slow one. Slow is normal and is now allowed to finish.
-- **Embeds queue for staging space instead of dying in it.** Each running remux needs room for a full copy of the source in the staging directory, so four parallel jobs need four times the file size. Oversubscribe it — four files totalling 27 GB into a 24 GB RAM disk — and one job used to hit `No space left on device` deep into the rewrite, after its NAS reads had already been spent. Jobs now reserve their space before starting and wait for a free slot, and a file too large for the staging directory *even when idle* says so immediately, with both numbers and the two settings that fix it, instead of failing later.
-- **Both faults left originals untouched**, as before — the failed files kept their NFO sidecars and only lacked embedded container tags. Re-running the embed on them completes the job.
-- **Tuning note for NAS users:** if your storage slows down under parallel readers (common with SMB/CIFS), `AMM_EMBED_CONCURRENCY=1` finishes a batch *sooner* than `4`. The default remains 3.
 
 See the [releases page](https://github.com/aiulian25/adult-media-manager/releases) for full notes on every version.
 
@@ -175,10 +178,10 @@ No Docker required. Ships a self-contained Python 3.12 runtime — no system Pyt
 
 ### AppImage (recommended — no root required)
 
-1. Download `Adult.Media.Manager-1.12.15.AppImage`
+1. Download `Adult.Media.Manager-1.12.16.AppImage`
 2. Make it executable:
    ```bash
-   chmod +x Adult.Media.Manager-1.12.15.AppImage
+   chmod +x Adult.Media.Manager-1.12.16.AppImage
    ```
 3. Double-click it (or run it from the terminal)
 
@@ -194,7 +197,7 @@ From that point, launch it from your application menu. The original downloaded f
 ### .deb Package (Debian / Ubuntu / Mint)
 
 ```bash
-sudo apt install ./adult-media-manager_1.12.15_amd64.deb
+sudo apt install ./adult-media-manager_1.12.16_amd64.deb
 ```
 
 Launch **Adult Media Manager** from your application menu, or:
@@ -208,7 +211,7 @@ Launch **Adult Media Manager** from your application menu, or:
 Requires [RPM Fusion](https://rpmfusion.org/) enabled for the `ffmpeg` / `mkvtoolnix` media tools (used as fallback — the package also ships its own bundled copies):
 
 ```bash
-sudo dnf install ./adult-media-manager-1.12.15.x86_64.rpm
+sudo dnf install ./adult-media-manager-1.12.16.x86_64.rpm
 ```
 
 Remove with `sudo dnf remove adult-media-manager`.
