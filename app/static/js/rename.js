@@ -290,6 +290,24 @@ const LARGE_BATCH      = 20;
 const EMBED_JOB_KEY    = 'amm_embed_job';
 
 /**
+ * Remember which embed job to re-attach to after a refresh.
+ *
+ * One definition of the stored shape, because it is now written from two
+ * places: the chunked rename loop records the job the moment the server hands
+ * one back, and the poller re-records it when it starts. `total` is only a
+ * seed for the first banner paint — the first poll carries the authoritative
+ * count and replaces it — so an approximate value here is fine, an absent job
+ * id is not.
+ * @param {string} jobId
+ * @param {number} total - files expected, for the pre-first-poll banner only
+ */
+function _saveEmbedJob(jobId, total) {
+    try {
+        localStorage.setItem(EMBED_JOB_KEY, JSON.stringify({ jobId, total }));
+    } catch {}
+}
+
+/**
  * Persist the remaining operations to localStorage so the user can resume
  * after a page refresh.  Cleared automatically when the queue drains.
  * @param {Array}  remaining  - operations not yet attempted
@@ -390,7 +408,23 @@ async function _doRename(operations, actionType, embedMode = 'embed') {
         try {
             const data = await _sendChunk(chunk, actionType, embedMode, embedJobId);
             allResults = allResults.concat(data.results);
-            if (data.embed_job_id) embedJobId = data.embed_job_id;
+            if (data.embed_job_id && data.embed_job_id !== embedJobId) {
+                embedJobId = data.embed_job_id;
+                // Record it NOW, not after the last chunk. The server starts
+                // embedding chunk 1 immediately (it is a BackgroundTask), so
+                // from this instant there is live work on disk. Persisting only
+                // once the loop finished meant a reload at chunk 3 of 20 left
+                // that work running with nothing anywhere able to find it —
+                // no banner, no queue panel, and /api/jobs/active unreachable
+                // because the id existed solely in this closure.
+                //
+                // Keyed on "changed", not "first seen": the server starts a
+                // FRESH job when the id it is handed is unknown or expired (a
+                // restart mid-batch), so later chunks can legitimately return a
+                // different one. Pinning the first would persist a dead id and
+                // strand the job that is actually running.
+                _saveEmbedJob(embedJobId, total);
+            }
 
             // Prune the persisted queue after each successful chunk
             const remaining = operations.slice(processed + chunk.length);
@@ -646,6 +680,16 @@ function _eqBuildRow(f) {
         fn.textContent = f.name;
         row.appendChild(fn);
     }
+    // Which step this file is actually in. Only ever rendered from a stage the
+    // server reported — a row with no stage keeps the spinner alone rather than
+    // being labelled with a guess.
+    if (f.status === 'embedding' && f.stage) {
+        const stage = document.createElement('span');
+        stage.className = 'eq-stage';
+        stage.textContent = t('embed.stage_' + f.stage);
+        row.dataset.stage = f.stage;
+        row.appendChild(stage);
+    }
     if (Number.isFinite(f.size)) {
         const sz = document.createElement('span');
         sz.className = 'eq-size';
@@ -699,7 +743,12 @@ function _renderEmbedQueue(job) {
             ordered.forEach((f, i) => {
                 const row = rows[i];
                 const barState = Number.isFinite(f.progress) && f.status === 'embedding' ? '1' : '';
+                // A changed stage needs the same rebuild as a changed status:
+                // without it the row keeps the label of the step it has already
+                // left, which is worse than showing none.
+                const stageState = f.status === 'embedding' && f.stage ? f.stage : '';
                 if (row.dataset.status !== f.status ||
+                        (row.dataset.stage || '') !== stageState ||
                         (row.dataset.hasbar || '') !== barState) {
                     const nr = _eqBuildRow(f);
                     // finishing flash: embedding → terminal state
@@ -794,7 +843,58 @@ function _eqUpdateHead(panel, job, issues) {
     head.appendChild(fold);
 }
 
+// ── Which job currently owns the shared embed UI ──────────────────────────
+//
+// The banner, document.title, the status bar, the single #embed-queue-panel,
+// _eqLastJob, the beforeunload guard and the localStorage resume handle are all
+// GLOBAL — there is exactly one of each. Nothing stopped a second call to
+// _pollEmbedStatus from starting a second tick loop against the same set, and
+// the damage was not cosmetic: both loops wrote the banner and title, and
+// whichever job finished first ran _finishEmbedPolling, which cleared the guard
+// and DELETED the resume handle for the other one too. The still-running job
+// then had no banner, no panel and no stored id.
+//
+// A generation token settles ownership. Every start claims the next one; a tick
+// or a finish from an older generation exits without touching anything.
+let _embedPollJobId = null;   // job whose poller currently owns the shared UI
+let _embedPollGen = 0;        // bumped on every claim
+
+/**
+ * Is an embed job being watched right now?
+ *
+ * The one question other views need to ask before starting work of their own,
+ * exposed as a function so nothing has to reach into the ownership state above.
+ * It answers for THIS browser: the poller is attached, so files are being
+ * written. A job running with no poller attached here (another device, cleared
+ * storage) is a different question, and /api/jobs/active is what answers it.
+ * @returns {boolean}
+ */
+function _embedJobActive() {
+    return _embedPollJobId !== null;
+}
+
 async function _pollEmbedStatus(jobId, total) {
+    // Already watching this exact job — re-attaching would only start a second
+    // loop against the same state. Reached legitimately: the chunked loop and
+    // the refresh re-attach in core.js can both aim at one job.
+    if (jobId && jobId === _embedPollJobId) return;
+
+    // A DIFFERENT job supersedes: the user's most recent action is what they
+    // are looking at. The superseded job is not lost — it keeps running, and
+    // since B3 it stays discoverable via /api/jobs/active even though its
+    // localStorage handle is about to be overwritten. Logged because with new
+    // work blocked during a job (requirement 4) this should become unreachable;
+    // if it still fires, that block has a hole.
+    if (_embedPollJobId && jobId !== _embedPollJobId) {
+        console.warn(`[embed] job ${jobId} supersedes ${_embedPollJobId} in the `
+            + `progress UI; the superseded job keeps running and stays listed `
+            + `by /api/jobs/active`);
+    }
+    _embedPollJobId = jobId;
+    const gen = ++_embedPollGen;
+    // True once another call has claimed ownership — this loop must then stop
+    // and, critically, must not clear shared state it no longer owns.
+    const stale = () => gen !== _embedPollGen;
     // Tolerate transient connection failures (e.g. the server restarting
     // mid-embed → ERR_CONNECTION_REFUSED). The backend persists the job
     // durably, so once it's back the next poll re-attaches. Only give up after
@@ -813,18 +913,25 @@ async function _pollEmbedStatus(jobId, total) {
     _setEmbedBanner(t('embed.banner', { done: 0, total }));
     document.title = `⏳ ${t('embed.title_progress', { done: 0, total })}`;
     // Persist so a refresh can re-attach (R2). Cleared in _finishEmbedPolling.
-    try { localStorage.setItem(EMBED_JOB_KEY, JSON.stringify({ jobId, total })); } catch {}
+    // Usually already stored by the chunked loop; harmless to re-record, and
+    // the single-request path has no earlier moment to do it.
+    _saveEmbedJob(jobId, total);
 
     async function tick() {
+        if (stale()) return;
         try {
             const res = await fetch(`/api/embed-status/${encodeURIComponent(jobId)}`);
+            // Each await is a window in which another job can claim ownership,
+            // so re-check after every one rather than only on entry.
+            if (stale()) return;
             if (!res.ok) {
                 // 404 = job expired or invalid; stop silently
-                _finishEmbedPolling(null);
+                _finishEmbedPolling(null, gen);
                 return;
             }
             netFails = 0;  // reachable again — reset the failure streak
             const job = await res.json();
+            if (stale()) return;
             // F2: did anything the user can see actually move since last poll?
             const sig = _embedProgressSig(job);
             quietPolls = (sig === lastSig) ? quietPolls + 1 : 0;
@@ -848,7 +955,7 @@ async function _pollEmbedStatus(jobId, total) {
                 if (job.status === 'interrupted') {
                     showToast(t('embed.interrupted_title'), t('embed.interrupted'), 'info', 6000);
                 }
-                _finishEmbedPolling(job.warnings);
+                _finishEmbedPolling(job.warnings, gen);
             } else {
                 // F13/F2: degrade to the slow poll only once the job has gone
                 // QUIET for the whole window — never abandon a live job, and
@@ -871,8 +978,9 @@ async function _pollEmbedStatus(jobId, total) {
             // stay at the FAST interval even in slow mode — re-attaching
             // quickly matters more than politeness when the server just came back.
             netFails++;
+            if (stale()) return;
             if (netFails >= MAX_NET_FAILS) {
-                _finishEmbedPolling(null);
+                _finishEmbedPolling(null, gen);
             } else {
                 _setEmbedBanner(t('embed.reconnecting'));
                 setTimeout(tick, EMBED_POLL_INTERVAL_MS);
@@ -895,7 +1003,18 @@ async function _pollEmbedStatus(jobId, total) {
  *
  * @param {Array|null} warnings  - Array of {path, warning} or null
  */
-function _finishEmbedPolling(warnings) {
+function _finishEmbedPolling(warnings, gen) {
+    // Only the poller that currently owns the shared UI may tear it down. This
+    // is the guard that matters: every line below clears something GLOBAL — the
+    // banner, the beforeunload flag, the status bar, and the localStorage resume
+    // handle — so a superseded poller reaching here would wipe the state of the
+    // job that replaced it, and delete the handle pointing at work still in
+    // flight. `gen` is undefined only if some future caller forgets to pass it;
+    // treat that as "owner" so the old behaviour is preserved rather than
+    // silently skipping the teardown.
+    if (gen !== undefined && gen !== _embedPollGen) return;
+    _embedPollJobId = null;   // nothing owns the UI now; a later call may claim it
+
     // F6: polling stops here — this is the LAST chance to repaint. Force one
     // final render marked complete so no row is left spinning, including on the
     // paths that never saw a completed job (404/expired, network give-up).
@@ -913,6 +1032,12 @@ function _finishEmbedPolling(warnings) {
 
     // Surface unmatched files at the top so user sees them without scrolling
     _showUnmatchedPanel();
+
+    // The job is over, so a rename queue left from an interrupted batch can be
+    // offered again. Without this the banner drawn at load would stay disabled
+    // until the user reloaded the page — which is exactly the "the app forgot
+    // what it was doing" behaviour this work exists to remove.
+    if (typeof _showResumeBanner === 'function') _showResumeBanner();
 
     if (!warnings || warnings.length === 0) return;
 

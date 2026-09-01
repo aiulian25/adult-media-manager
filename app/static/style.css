@@ -2611,6 +2611,23 @@ html.is-native .fusion-bar {
     white-space: nowrap;
 }
 
+/* Embed queue: which step this file is in right now. Sits between the name and
+   the size, so a row reads "name — what it is doing — how big it is". Only
+   rendered when the server reported a stage; a row without one shows the
+   spinner alone rather than a guessed label. */
+.eq-stage {
+    flex: none;
+    font-size: 0.68rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    color: var(--accent-light);
+    white-space: nowrap;
+}
+
+/* Waiting on staging space is not progress — it is a hold that can last ten
+   minutes, so it is coloured like the warning it is rather than like work. */
+.eq-row[data-stage="waiting"] .eq-stage { color: var(--warning); }
+
 /* Embed queue: per-file underline progress bar (option A). Token-driven —
    --primary/--accent-soft re-resolve under all three themes. */
 .eq-fnwrap { flex: 1; min-width: 0; }

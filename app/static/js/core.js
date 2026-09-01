@@ -683,65 +683,112 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
     });
 
-    // §4.4 — Resume banner: if a rename was interrupted (page refresh / crash)
-    // show a dismissible notification so the user knows work was in progress.
-    const savedQueue = _loadRenameQueue();
-    if (savedQueue && savedQueue.operations && savedQueue.operations.length > 0) {
-        const banner = document.createElement('div');
-        banner.style.cssText =
-            'position:fixed;bottom:1rem;right:1rem;z-index:9999;' +
-            'background:rgba(30,30,40,.95);border:1px solid var(--accent,#7f5af0);' +
-            'border-radius:12px;padding:1rem 1.2rem;max-width:340px;font-size:.85rem;' +
-            'box-shadow:0 4px 20px rgba(0,0,0,.5);color:var(--text,#fff)';
-
-        const count = savedQueue.operations.length;
-        const msg = document.createElement('p');
-        msg.style.cssText = 'margin:0 0 .7rem';
-        msg.textContent =
-            t('resume.banner_msg', {
-                count: count,
-                plural: count !== 1 ? 's' : '',
-                action: savedQueue.actionType,
-            });
-
-        const btnRow = document.createElement('div');
-        btnRow.style.cssText = 'display:flex;gap:.5rem';
-
-        const btnResume = document.createElement('button');
-        btnResume.className = 'btn btn-primary';
-        btnResume.style.cssText = 'font-size:.8rem;padding:.35rem .8rem';
-        btnResume.textContent = t('resume.btn_resume');
-        btnResume.addEventListener('click', () => {
-            banner.remove();
-            _doRename(savedQueue.operations, savedQueue.actionType, savedQueue.embedMode || 'embed');
-        });
-
-        const btnDiscard = document.createElement('button');
-        btnDiscard.className = 'btn btn-secondary';
-        btnDiscard.style.cssText = 'font-size:.8rem;padding:.35rem .8rem';
-        btnDiscard.textContent = t('resume.btn_discard');
-        btnDiscard.addEventListener('click', () => {
-            _saveRenameQueue([], '');
-            banner.remove();
-        });
-
-        btnRow.appendChild(btnResume);
-        btnRow.appendChild(btnDiscard);
-        banner.appendChild(msg);
-        banner.appendChild(btnRow);
-        document.body.appendChild(banner);
-    }
-
-    // R2 — Resume embed progress: if a metadata-embedding job was running when the
-    // page was refreshed (or the server restarted), re-attach to it. The backend
-    // persists job state, so polling resumes the banner/progress; a finished or
-    // interrupted job ends immediately, and an expired one (404) clears silently.
+    // R2 — Resume embed progress FIRST: if a metadata-embedding job was running
+    // when the page was refreshed (or the server restarted), re-attach to it.
+    // The backend persists job state, so polling resumes the banner/progress; a
+    // finished or interrupted job ends immediately, and an expired one (404)
+    // clears silently.
+    //
+    // Order matters, and it used to be the other way round. The resume banner
+    // below offers to re-submit the rename queue, and it was built BEFORE this
+    // ran — so it appeared over a live job and offered a button that started a
+    // SECOND batch on top of the one still writing files. Re-attaching first
+    // means _embedJobActive() already knows the truth by the time the banner
+    // decides what to offer.
     let savedEmbed = null;
     try { savedEmbed = JSON.parse(localStorage.getItem(EMBED_JOB_KEY)); } catch {}
     if (savedEmbed && savedEmbed.jobId) {
         _pollEmbedStatus(savedEmbed.jobId, savedEmbed.total || 0);
     }
+
+    // §4.4 — Resume banner: if a rename was interrupted (page refresh / crash)
+    // show a dismissible notification so the user knows work was in progress.
+    _showResumeBanner();
 });
+
+/**
+ * (Re)build the "a previous rename was interrupted" banner.
+ *
+ * Idempotent and safe to call repeatedly: it removes any banner it drew before,
+ * so it doubles as the refresh hook. _finishEmbedPolling calls it when a job
+ * ends, which is what turns a waiting Resume back into an offer without the
+ * user having to reload.
+ *
+ * Resume re-submits the queued operations, so it must never run while files are
+ * already being written. Rather than hiding the banner in that case — which
+ * would leave the user with no idea the queue still exists — the offer is shown
+ * disabled and says what it is waiting for.
+ */
+function _showResumeBanner() {
+    document.getElementById('resume-banner')?.remove();
+
+    const savedQueue = _loadRenameQueue();
+    if (!savedQueue || !savedQueue.operations || savedQueue.operations.length === 0) return;
+
+    const banner = document.createElement('div');
+    banner.id = 'resume-banner';
+    banner.style.cssText =
+        'position:fixed;bottom:1rem;right:1rem;z-index:9999;' +
+        'background:rgba(30,30,40,.95);border:1px solid var(--accent,#7f5af0);' +
+        'border-radius:12px;padding:1rem 1.2rem;max-width:340px;font-size:.85rem;' +
+        'box-shadow:0 4px 20px rgba(0,0,0,.5);color:var(--text,#fff)';
+
+    const count = savedQueue.operations.length;
+    const msg = document.createElement('p');
+    msg.style.cssText = 'margin:0 0 .7rem';
+    msg.textContent =
+        t('resume.banner_msg', {
+            count: count,
+            plural: count !== 1 ? 's' : '',
+            action: savedQueue.actionType,
+        });
+
+    const btnRow = document.createElement('div');
+    btnRow.style.cssText = 'display:flex;gap:.5rem';
+
+    // Live embed => resuming would start a second batch over files already
+    // being written. Ask the poller rather than assuming: after a refresh it
+    // has already re-attached by the time this runs.
+    const busy = typeof _embedJobActive === 'function' && _embedJobActive();
+
+    const btnResume = document.createElement('button');
+    btnResume.className = 'btn btn-primary';
+    btnResume.style.cssText = 'font-size:.8rem;padding:.35rem .8rem';
+    btnResume.textContent = t('resume.btn_resume');
+    btnResume.disabled = busy;
+    if (busy) {
+        btnResume.style.opacity = '.5';
+        btnResume.style.cursor = 'not-allowed';
+        btnResume.title = t('resume.waiting_for_job');
+        const wait = document.createElement('p');
+        wait.style.cssText = 'margin:.6rem 0 0;font-size:.78rem;opacity:.85';
+        wait.textContent = t('resume.waiting_for_job');
+        banner.appendChild(wait);
+    }
+    btnResume.addEventListener('click', () => {
+        // Re-checked at click time, not only at build time: a job can start
+        // after this banner was drawn (a manual save, another tab), and the
+        // disabled attribute alone is a UI state, not a guarantee.
+        if (typeof _embedJobActive === 'function' && _embedJobActive()) return;
+        banner.remove();
+        _doRename(savedQueue.operations, savedQueue.actionType, savedQueue.embedMode || 'embed');
+    });
+
+    const btnDiscard = document.createElement('button');
+    btnDiscard.className = 'btn btn-secondary';
+    btnDiscard.style.cssText = 'font-size:.8rem;padding:.35rem .8rem';
+    btnDiscard.textContent = t('resume.btn_discard');
+    btnDiscard.addEventListener('click', () => {
+        _saveRenameQueue([], '');
+        banner.remove();
+    });
+
+    btnRow.appendChild(btnResume);
+    btnRow.appendChild(btnDiscard);
+    banner.insertBefore(msg, banner.firstChild);
+    banner.appendChild(btnRow);
+    document.body.appendChild(banner);
+}
 
 // ═══ Settings (language + theme + API keys) ═══
 
